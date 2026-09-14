@@ -24,7 +24,7 @@ AppSettings::AppSettings(QObject *parent)
         settings.value(QLatin1StringView(kNavigationPaneWidth), 232.0).toDouble(),
         208.0, 320.0);
     m_menuHotkey = std::clamp(
-        settings.value(QLatin1StringView(kMenuHotkey), 0xDE).toInt(), 8, 254);
+        settings.value(QLatin1StringView(kMenuHotkey), 0xDE).toInt(), 0, 254);
     m_guiScaleIndex = std::clamp(
         settings.value(QLatin1StringView(kGuiScaleIndex), 1).toInt(), 0, 3);
     m_processAutoRefresh = settings.value(
@@ -58,7 +58,7 @@ void AppSettings::setNavigationPaneWidth(const double width)
 
 void AppSettings::setMenuHotkey(const int virtualKey)
 {
-    if (virtualKey < 8 || virtualKey > 254 || virtualKey == m_menuHotkey)
+    if ((virtualKey != 0 && virtualKey < 8) || virtualKey > 254 || virtualKey == m_menuHotkey)
         return;
     m_menuHotkey = virtualKey;
     store(kMenuHotkey, virtualKey);

@@ -21,6 +21,7 @@ FocusScope {
 
     function keyLabel(key) {
         const names = {
+            0: "None",
             8: "Backspace", 9: "Tab", 13: "Enter", 16: "Shift",
             17: "Ctrl", 18: "Alt", 19: "Pause", 20: "Caps Lock",
             27: "Escape", 32: "Space", 33: "Page Up", 34: "Page Down",

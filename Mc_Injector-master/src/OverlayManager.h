@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 class QLocalSocket;
@@ -81,17 +82,26 @@ public:
     Q_PROPERTY(bool longJumpEnabled READ longJumpEnabled WRITE setLongJumpEnabled NOTIFY featureSettingsChanged)
     Q_PROPERTY(int longJumpSpeedPercent READ longJumpSpeedPercent WRITE setLongJumpSpeedPercent NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool aimAssistEnabled READ aimAssistEnabled WRITE setAimAssistEnabled NOTIFY featureSettingsChanged)
-    Q_PROPERTY(bool aimSlowdownMode READ aimSlowdownMode WRITE setAimSlowdownMode NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool aimLockOnMode READ aimLockOnMode WRITE setAimLockOnMode NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool aimSilentLock READ aimSilentLock WRITE setAimSilentLock NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool aimScannerEnabled READ aimScannerEnabled WRITE setAimScannerEnabled NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool aimAttackViability READ aimAttackViability WRITE setAimAttackViability NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool silentControlAdaptation READ silentControlAdaptation WRITE setSilentControlAdaptation NOTIFY featureSettingsChanged)
     Q_PROPERTY(int aimSlowdownPercent READ aimSlowdownPercent WRITE setAimSlowdownPercent NOTIFY featureSettingsChanged)
     Q_PROPERTY(int aimSpeedPercent READ aimSpeedPercent WRITE setAimSpeedPercent NOTIFY featureSettingsChanged)
     Q_PROPERTY(int aimMinimumDistance READ aimMinimumDistance WRITE setAimMinimumDistance NOTIFY featureSettingsChanged)
     Q_PROPERTY(int aimMaximumDistance READ aimMaximumDistance WRITE setAimMaximumDistance NOTIFY featureSettingsChanged)
     Q_PROPERTY(int aimFovDegrees READ aimFovDegrees WRITE setAimFovDegrees NOTIFY featureSettingsChanged)
+    Q_PROPERTY(int aimAttackCps READ aimAttackCps WRITE setAimAttackCps NOTIFY featureSettingsChanged)
     Q_PROPERTY(int clickGuiWidthPercent READ clickGuiWidthPercent WRITE setClickGuiWidthPercent NOTIFY featureSettingsChanged)
     Q_PROPERTY(int clickGuiHeightPercent READ clickGuiHeightPercent WRITE setClickGuiHeightPercent NOTIFY featureSettingsChanged)
     Q_PROPERTY(int clickGuiOpacity READ clickGuiOpacity WRITE setClickGuiOpacity NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool textGuiEnabled READ textGuiEnabled WRITE setTextGuiEnabled NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool textGuiShowModes READ textGuiShowModes WRITE setTextGuiShowModes NOTIFY featureSettingsChanged)
     Q_PROPERTY(QString textGuiColor READ textGuiColor WRITE setTextGuiColor NOTIFY featureSettingsChanged)
+    Q_PROPERTY(QStringList textGuiModules READ textGuiModules NOTIFY featureSettingsChanged)
+    Q_PROPERTY(int textGuiAlignment READ textGuiAlignment NOTIFY featureSettingsChanged)
+    Q_PROPERTY(bool textGuiVerticalLine READ textGuiVerticalLine NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool allowHypixelMovement READ allowHypixelMovement WRITE setAllowHypixelMovement NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool bedDefenseHoldToShow READ bedDefenseHoldToShow WRITE setBedDefenseHoldToShow NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool bedDefensePerspectiveScale READ bedDefensePerspectiveScale WRITE setBedDefensePerspectiveScale NOTIFY featureSettingsChanged)
@@ -105,6 +115,10 @@ public:
     Q_PROPERTY(int menuHotkey READ menuHotkey WRITE setMenuHotkey NOTIFY menuHotkeyChanged)
     Q_PROPERTY(int guiScaleIndex READ guiScaleIndex WRITE setGuiScaleIndex
                    NOTIFY guiScaleIndexChanged)
+    Q_PROPERTY(bool configAutoSave READ configAutoSave WRITE setConfigAutoSave
+                   NOTIFY configStateChanged)
+    Q_PROPERTY(QStringList configNames READ configNames NOTIFY configStateChanged)
+    Q_PROPERTY(QString activeConfig READ activeConfig NOTIFY configStateChanged)
     Q_PROPERTY(quint32 targetPid READ targetPid NOTIFY targetChanged)
     Q_PROPERTY(QString targetTitle READ targetTitle NOTIFY targetChanged)
     Q_PROPERTY(QString renderer READ renderer NOTIFY rendererChanged)
@@ -184,17 +198,27 @@ public:
     [[nodiscard]] bool longJumpEnabled() const noexcept { return m_longJumpEnabled; }
     [[nodiscard]] int longJumpSpeedPercent() const noexcept { return m_longJumpSpeedPercent; }
     [[nodiscard]] bool aimAssistEnabled() const noexcept { return m_aimAssistEnabled; }
-    [[nodiscard]] bool aimSlowdownMode() const noexcept { return m_aimSlowdownMode; }
+    [[nodiscard]] bool aimLockOnMode() const noexcept { return m_aimLockOnMode; }
+    [[nodiscard]] bool aimSilentLock() const noexcept { return m_aimSilentLock; }
+    [[nodiscard]] bool aimScannerEnabled() const noexcept { return m_aimScannerEnabled; }
+    [[nodiscard]] bool aimAttackViability() const noexcept { return m_aimAttackViability; }
+    [[nodiscard]] bool silentControlAdaptation() const noexcept { return m_silentControlAdaptation; }
+    [[nodiscard]] bool bedBreakerEnabled() const noexcept { return m_bedBreakerEnabled; }
     [[nodiscard]] int aimSlowdownPercent() const noexcept { return m_aimSlowdownPercent; }
     [[nodiscard]] int aimSpeedPercent() const noexcept { return m_aimSpeedPercent; }
     [[nodiscard]] int aimMinimumDistance() const noexcept { return m_aimMinimumDistance; }
     [[nodiscard]] int aimMaximumDistance() const noexcept { return m_aimMaximumDistance; }
     [[nodiscard]] int aimFovDegrees() const noexcept { return m_aimFovDegrees; }
+    [[nodiscard]] int aimAttackCps() const noexcept { return m_aimAttackCps; }
     [[nodiscard]] int clickGuiWidthPercent() const noexcept { return m_clickGuiWidthPercent; }
     [[nodiscard]] int clickGuiHeightPercent() const noexcept { return m_clickGuiHeightPercent; }
     [[nodiscard]] int clickGuiOpacity() const noexcept { return m_clickGuiOpacity; }
     [[nodiscard]] bool textGuiEnabled() const noexcept { return m_textGuiEnabled; }
+    [[nodiscard]] bool textGuiShowModes() const noexcept { return m_textGuiShowModes; }
     [[nodiscard]] QString textGuiColor() const { return m_textGuiColor; }
+    [[nodiscard]] QStringList textGuiModules() const;
+    [[nodiscard]] int textGuiAlignment() const { return m_textGuiAlignment; }
+    [[nodiscard]] bool textGuiVerticalLine() const { return (m_featureExtraBits & 0x02U)!=0; }
     [[nodiscard]] bool allowHypixelMovement() const noexcept { return m_allowHypixelMovement; }
     [[nodiscard]] bool bedDefenseHoldToShow() const noexcept { return m_bedDefenseHoldToShow; }
     [[nodiscard]] bool bedDefensePerspectiveScale() const noexcept { return m_bedDefensePerspectiveScale; }
@@ -207,6 +231,9 @@ public:
     [[nodiscard]] QString bedDefensePanelColor() const { return m_bedDefensePanelColor; }
     [[nodiscard]] int menuHotkey() const noexcept { return m_menuHotkey; }
     [[nodiscard]] int guiScaleIndex() const noexcept { return m_guiScaleIndex; }
+    [[nodiscard]] bool configAutoSave() const noexcept { return m_configAutoSave; }
+    [[nodiscard]] QStringList configNames() const { return m_configNames; }
+    [[nodiscard]] QString activeConfig() const { return m_activeConfig; }
     [[nodiscard]] quint32 targetPid() const noexcept { return m_targetPid; }
     [[nodiscard]] QString targetTitle() const { return m_targetTitle; }
     [[nodiscard]] QString renderer() const { return m_renderer; }
@@ -237,6 +264,9 @@ public:
     Q_INVOKABLE bool attachToProcess(quint32 pid);
     Q_INVOKABLE void detach();
     Q_INVOKABLE void refreshBedCache();
+    Q_INVOKABLE bool saveConfig(const QString &name);
+    Q_INVOKABLE bool applyConfig(const QString &name);
+    Q_INVOKABLE bool removeConfig(const QString &name);
 
 public slots:
     void setOverlayEnabled(bool enabled);
@@ -282,16 +312,22 @@ public slots:
     void setLongJumpEnabled(bool enabled);
     void setLongJumpSpeedPercent(int speed);
     void setAimAssistEnabled(bool enabled);
-    void setAimSlowdownMode(bool enabled);
+    void setAimLockOnMode(bool enabled);
+    void setAimSilentLock(bool enabled);
+    void setAimScannerEnabled(bool enabled);
+    void setAimAttackViability(bool enabled);
+    void setSilentControlAdaptation(bool enabled);
     void setAimSlowdownPercent(int coefficient);
     void setAimSpeedPercent(int speed);
     void setAimMinimumDistance(int distance);
     void setAimMaximumDistance(int distance);
     void setAimFovDegrees(int degrees);
+    void setAimAttackCps(int cps);
     void setClickGuiWidthPercent(int percent);
     void setClickGuiHeightPercent(int percent);
     void setClickGuiOpacity(int opacity);
     void setTextGuiEnabled(bool enabled);
+    void setTextGuiShowModes(bool enabled);
     void setTextGuiColor(const QString &color);
     void setAllowHypixelMovement(bool enabled);
     void setBedDefenseHoldToShow(bool enabled);
@@ -305,6 +341,7 @@ public slots:
     void setBedDefensePanelColor(const QString &color);
     void setMenuHotkey(int virtualKey);
     void setGuiScaleIndex(int index);
+    void setConfigAutoSave(bool enabled);
     void sendBlacklistCommand(const QByteArray &command);
     void publishHypixelResult(int state, const QString &uuid, const QString &displayName,
                               qint64 wins, qint64 losses, qint64 finalKills,
@@ -315,6 +352,11 @@ public slots:
                             qint64 wins, qint64 finalKills, qint64 bedsBroken,
                             int winStreak, int level);
     void publishPlayerStatsError(const QString &playerName, const QString &reason);
+    void publishMediaState(bool available, bool playing, const QString &title,
+                           const QString &artist, const QString &source,
+                           const QString &coverPath, qint64 positionMs,
+                           qint64 durationMs);
+    void publishMediaSpectrum(const QByteArray &bands);
 
 signals:
     void stateChanged();
@@ -335,12 +377,16 @@ signals:
     void blacklistLayoutChanged(int x, int y, int width, int height);
     void blacklistSettingsChanged(bool panelEnabled, bool matchAlertsEnabled,
                                   bool allowIdOnlyNicks, bool showWithClickGui,
-                                  bool collapsed, int opacity,
+                                  bool collapsed, int opacity, int contentScale,
                                   const QString &color);
     void matchStateChanged(bool active);
     void playerStatusChanged();
     void menuHotkeyChanged();
     void guiScaleIndexChanged();
+    void configStateChanged();
+    void mediaPreviousRequested();
+    void mediaNextRequested();
+    void mediaToggleRequested();
     void agentSessionReady();
     void targetChanged();
     void rendererChanged();
@@ -350,6 +396,7 @@ signals:
     void targetExited(quint32 pid);
 
 private:
+    friend struct ControllerResponsivenessTests;
     enum class LoaderKind {
         None,
         JvmAttach,
@@ -383,6 +430,8 @@ private:
     [[nodiscard]] bool targetProcessIsRunning(quint32 pid) const;
     [[nodiscard]] bool targetHasLoadedJvm(quint32 pid) const;
     [[nodiscard]] bool targetHasLoadedOverlayAgent(quint32 pid) const;
+    [[nodiscard]] static bool isRecoverableJvmAttachFailure(
+        int exitCode, const QByteArray &standardError) noexcept;
     [[nodiscard]] bool startNativeLoaderFallback();
 
     // Authenticated Agent -> Controller telemetry protocol (v1):
@@ -400,9 +449,10 @@ private:
     void sendFeatureSnapshot();
     void sendBindSnapshot();
     void sendGuiScaleSnapshot();
+    void sendMediaSettings();
     void loadFeatureSettings();
     void storeFeatureSettings();
-    void flushFeatureSettings() const;
+    void flushFeatureSettings();
     void writeAgentCommand(const QByteArray &command);
     // Closes IPC and asks a still-running helper to terminate. This function
     // is deliberately non-blocking; QProcess::finished completes any queued
@@ -431,6 +481,7 @@ private:
     QTimer m_featureSettingsStoreTimer;
     QElapsedTimer m_gameStateReceiptClock;
     QByteArray m_agentReadBuffer;
+    bool m_agentReadScheduled = false;
     QByteArray m_helperStandardOutput;
     QByteArray m_helperStandardError;
     QString m_jvmAttachFallbackReason;
@@ -497,18 +548,30 @@ private:
     int m_bhopAirSpeedPercent = 100;
     quint64 m_featureHotkeysPackedA = 0U;
     quint64 m_featureHotkeysPackedB = 0U;
+    // v39 extension: byte 0 mirrors Velocity, byte 1 is the FreeLook hold
+    // binding, and bit 16 stores the FreeLook enabled state.
+    quint32 m_featureHotkeysPackedC = 0xA400U;
     bool m_fireballEspEnabled = false;
     bool m_fireballEspFilled = true;
     QString m_fireballEspColor = QStringLiteral("#FF9D3D");
     bool m_longJumpEnabled = false;
     int m_longJumpSpeedPercent = 100;
     bool m_aimAssistEnabled = false;
-    bool m_aimSlowdownMode = true;
+    bool m_aimLockOnMode = false;
+    bool m_aimSilentLock = false;
+    bool m_silentFileDebug = false;
+    bool m_silentChatDebug = false;
+    bool m_aimScannerEnabled = true;
+    bool m_aimAttackViability = true;
+    bool m_silentControlAdaptation = false;
+    bool m_aimSequentialTargets = false;
+    bool m_bedBreakerEnabled = false;
     int m_aimSlowdownPercent = 45;
     int m_aimSpeedPercent = 35;
     int m_aimMinimumDistance = 0;
     int m_aimMaximumDistance = 16;
     int m_aimFovDegrees = 90;
+    int m_aimAttackCps = 10;
     int m_clickGuiWidthPercent = 100;
     int m_clickGuiHeightPercent = 100;
     int m_clickGuiOpacity = 96;
@@ -517,7 +580,11 @@ private:
     int m_localMobReach = 4;
     int m_localAttackDelayMs = 500;
     int m_localVelocityPercent = 100;
+    int m_localVelocityProbability = 100;
+    int m_localVelocityVerticalPercent = 100;
+    int m_velocityHotkey = 0;
     bool m_textGuiEnabled = false;
+    bool m_textGuiShowModes = false;
     QString m_textGuiColor = QStringLiteral("#7EE7FF");
     int m_textGuiX = -1;
     int m_textGuiY = -1;
@@ -533,6 +600,9 @@ private:
     QString m_bedDefensePanelColor = QStringLiteral("#191621");
     int m_menuHotkey = 0xDE; // VK_OEM_7 / apostrophe
     int m_guiScaleIndex = 1; // S/M/L/XL -> 0..3
+    bool m_configAutoSave = false;
+    QStringList m_configNames;
+    QString m_activeConfig;
     bool m_authenticated = false;
     bool m_closingTransport = false;
     bool m_nativeFallbackAttempted = false;

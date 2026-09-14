@@ -105,6 +105,15 @@ struct MappingDictionary final {
     // even when its input mappings are unavailable.
     std::string gameSettingsName;
     std::string gameSettingsSignature;
+    // Optional camera-only FreeLook capability. EntityRenderer is kept out of
+    // the core profile so older external mapping packs remain valid.
+    std::string entityRendererName;
+    std::string entityRendererSignature;
+    // Optional RenderGlobal terrain-culling hook. FreeLook uses the same free
+    // yaw/pitch here so turning behind the player does not leave the terrain
+    // visibility graph anchored to the real network rotation.
+    std::string renderGlobalName;
+    std::string renderGlobalSignature;
     std::string keyBindingName;
     std::string keyBindingSignature;
     // Optional movement/server capability. Keeping these outside the core
@@ -120,6 +129,43 @@ struct MappingDictionary final {
     std::string enumFacingSignature;
     std::string vec3Name;
     std::string vec3Signature;
+    std::string rayHitName;
+    std::string rayHitSignature;
+    std::string movementPacketName;
+    std::string movementPacketSignature;
+    std::string packetBufferSignature;
+    std::string networkPacketName;
+    std::string networkPacketSignature;
+    std::string positionPacketName;
+    std::string lookPacketName;
+    std::string positionLookPacketName;
+    std::string rayTraceBlocks;
+    std::string getEntityById;
+    std::string getItemUseDuration;
+    std::string isUsingItem;
+    std::string getEyeHeight;
+    std::string hitVectorField;
+    std::string clickMouse;
+    // Authoritative logical-input hooks.  These names are optional so a
+    // render-only mapping pack can still load, but Silent Lock is exposed only
+    // when all of them resolve together.
+    std::string sendClickBlock;
+    std::string moveFlying;
+    std::string isSprinting;
+    std::string setSprinting;
+    std::string swingItem;
+    std::string rayBlockPosField;
+    std::string raySideHitField;
+    std::array<std::string, 3U> blockPosCoordinateMethods{};
+    std::string facingIndexMethod;
+    std::string writeMovementPacket;
+    std::string addToSendQueue;
+    std::string packetYawField;
+    std::string packetPitchField;
+    std::string packetRotatingField;
+    std::array<std::string, 3U> packetPositionFields{};
+    std::string packetOnGroundField;
+    std::array<std::string, 3U> vectorFields{};
     std::string chatComponentName;
     std::string chatComponentSignature;
     std::string chatTextName;
@@ -176,6 +222,7 @@ struct MappingDictionary final {
     std::string minecraftInstanceField;
     std::string playerField;
     std::string getHealth;
+    std::string hurtTimeField;
     std::string getMaxHealth;
     std::string getEntityId;
     std::string getBounds;
@@ -215,6 +262,15 @@ struct MappingDictionary final {
     std::string timerField;
     std::string renderPartialTicksField;
     std::string gameSettingsField;
+    std::string thirdPersonViewField;
+    std::string updateCameraAndRender;
+    std::string orientCamera;
+    std::string setAngles;
+    std::string setupTerrain;
+    std::string setupTerrainDescriptor;
+    std::string currentScreenField;
+    std::string guiScreenSignature;
+    std::string getCollidingBoundingBoxes;
     std::string keyBindSneakField;
     std::array<std::string, 5U> movementKeyFields;
     std::string getKeyCode;
@@ -222,6 +278,12 @@ struct MappingDictionary final {
     std::string mouseSensitivityField;
     std::string rotationYawField;
     std::string rotationPitchField;
+    std::string previousRotationYawField;
+    std::string previousRotationPitchField;
+    // EntityLivingBase action-state axes after updateEntityActionState().
+    // Jump executes before moveFlying in 1.8.9, so these are the only current
+    // physics-tick inputs available to the jump hook.
+    std::array<std::string, 2U> movementInputFields{}; // strafe, forward
     std::array<std::string, 3U> motionFields;
     std::string onGroundField;
     std::string jump;
@@ -236,6 +298,12 @@ struct MappingDictionary final {
     std::string getIdFromBlock;
     std::string getFacingByIndex;
     std::string onPlayerRightClick;
+    // Optional, fail-closed local-world block interaction capability.
+    std::string clickBlock;
+    std::string onPlayerDamageBlock;
+    std::string resetBlockRemoving;
+    std::string getBlockReachDistance;
+    std::string getStrVsBlock;
     std::array<std::string, 6U> aabbFields;
 
     std::string getScoreboard;

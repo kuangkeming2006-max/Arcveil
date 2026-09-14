@@ -14,7 +14,8 @@ Item {
     property real modelYaw: 25
     property real cameraDistance: 66
 
-    Flickable {
+    WheelPage {
+        pageWheelEnabled: !skinMouse.containsMouse
         anchors.fill: parent
         contentWidth: width
         contentHeight: content.implicitHeight + 68
@@ -80,58 +81,12 @@ Item {
                         DirectionalLight { eulerRotation.x: -28; eulerRotation.y: -35; brightness: 1.25; castsShadow: true }
                         DirectionalLight { eulerRotation.x: 25; eulerRotation.y: 145; brightness: 0.55; color: "#D0BCFF" }
 
-                        Texture {
-                            id: skinTexture
-                            source: SkinProfile.skinUrl
-                            generateMipmaps: false
-                            minFilter: Texture.Nearest
-                            magFilter: Texture.Nearest
-                            tilingModeHorizontal: Texture.ClampToEdge
-                            tilingModeVertical: Texture.ClampToEdge
-                            flipV: false
-                        }
-                        PrincipledMaterial {
-                            id: skinMaterial
-                            baseColorMap: skinTexture
-                            roughness: 0.82
-                            metalness: 0
-                            cullMode: Material.NoCulling
-                        }
-
-                        Node {
+                        SkinAvatar {
                             id: playerModel
-                            visible: SkinProfile.skinUrl.length > 0
+                            textureSource: SkinProfile.skinUrl
+                            slim: SkinProfile.slim
+                            visible: textureSource.toString().length > 0
                             eulerRotation: Qt.vector3d(-7, root.modelYaw, 0)
-                            Model {
-                                position: Qt.vector3d(0, 28, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.Head }
-                                materials: [skinMaterial]
-                            }
-                            Model {
-                                position: Qt.vector3d(0, 18, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.Body }
-                                materials: [skinMaterial]
-                            }
-                            Model {
-                                position: Qt.vector3d(-6, 18, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.RightArm }
-                                materials: [skinMaterial]
-                            }
-                            Model {
-                                position: Qt.vector3d(6, 18, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.LeftArm }
-                                materials: [skinMaterial]
-                            }
-                            Model {
-                                position: Qt.vector3d(-2, 6, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.RightLeg }
-                                materials: [skinMaterial]
-                            }
-                            Model {
-                                position: Qt.vector3d(2, 6, 0)
-                                geometry: SkinCuboidGeometry { part: SkinCuboidGeometry.LeftLeg }
-                                materials: [skinMaterial]
-                            }
                         }
 
                         // Increment the current angle instead of restarting a
@@ -169,6 +124,8 @@ Item {
 
                     MouseArea {
                         id: skinMouse
+                        hoverEnabled: true
+                        preventStealing: true
                         anchors.fill: parent
                         property real previousX: 0
                         property bool dragging: pressed

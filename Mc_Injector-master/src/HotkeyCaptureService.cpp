@@ -92,7 +92,8 @@ bool HotkeyCaptureService::eventFilter(QObject *watched, QEvent *event)
     event->accept();
     if (keyEvent->isAutoRepeat()) return true;
     if (keyEvent->key() == Qt::Key_Escape) {
-        cancelCapture();
+        setCapturing(false);
+        emit keyCaptured(0);
         return true;
     }
     int virtualKey = static_cast<int>(keyEvent->nativeVirtualKey());
@@ -127,7 +128,8 @@ bool HotkeyCaptureService::nativeEventFilter(const QByteArray &eventType,
 
     const int virtualKey = static_cast<int>(nativeMessage->wParam & 0xFFU);
     if (virtualKey == VK_ESCAPE) {
-        cancelCapture();
+        setCapturing(false);
+        emit keyCaptured(0);
         return true;
     }
     if (virtualKey >= 8 && virtualKey <= 254 &&

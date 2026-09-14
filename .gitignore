@@ -1,13 +1,30 @@
-# Local build and packaged output
+# Build, package and generated visual-regression output
 /build-*/
 /dist-*/
-/*.zip
-
-# Local investigation/cache data
-/.research/
-
-# IDE and generated state
+/render-*/
+*.zip
 *.user
 *.autosave
 .vs/
 .vscode/
+
+# Local investigation, handoff and one-off conversion material
+/.research/
+/handoff.md
+/WindowsMediaBridge_VS_v3/
+/download_blocks.py
+/parse_srg.py
+/script.py
+/mdk/
+
+# Generated screenshots kept locally during UI review
+/*.png
+/Mc_Injector-master/*.png
+
+# Historical implementation notes and mechanical repair scripts are not part
+# of the public source distribution.
+/Mc_Injector-master/AUTHORITATIVE_LOGICAL_STATE.md
+/Mc_Injector-master/RELEASE_NOTES_v*.md
+/Mc_Injector-master/WORK_IN_PROGRESS_*.md
+/Mc_Injector-master/patch*.py
+/Mc_Injector-master/Mc_Injector Bed Wars *.md

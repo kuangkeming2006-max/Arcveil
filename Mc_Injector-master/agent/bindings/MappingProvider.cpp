@@ -229,6 +229,10 @@ private:
     mapping.timerSignature = "Lnet/minecraft/util/Timer;";
     mapping.gameSettingsName = "net.minecraft.client.settings.GameSettings";
     mapping.gameSettingsSignature = "Lnet/minecraft/client/settings/GameSettings;";
+    mapping.entityRendererName = "net.minecraft.client.renderer.EntityRenderer";
+    mapping.entityRendererSignature = "Lnet/minecraft/client/renderer/EntityRenderer;";
+    mapping.renderGlobalName = "net.minecraft.client.renderer.RenderGlobal";
+    mapping.renderGlobalSignature = "Lnet/minecraft/client/renderer/RenderGlobal;";
     mapping.keyBindingName = "net.minecraft.client.settings.KeyBinding";
     mapping.keyBindingSignature = "Lnet/minecraft/client/settings/KeyBinding;";
     mapping.playerControllerName = "net.minecraft.client.multiplayer.PlayerControllerMP";
@@ -241,6 +245,14 @@ private:
     mapping.enumFacingSignature = "Lnet/minecraft/util/EnumFacing;";
     mapping.vec3Name = "net.minecraft.util.Vec3";
     mapping.vec3Signature = "Lnet/minecraft/util/Vec3;";
+    mapping.movementPacketName = "net.minecraft.network.play.client.C03PacketPlayer";
+    mapping.movementPacketSignature = "Lnet/minecraft/network/play/client/C03PacketPlayer;";
+    mapping.packetBufferSignature = "Lnet/minecraft/network/PacketBuffer;";
+    mapping.networkPacketName = "net.minecraft.network.Packet";
+    mapping.networkPacketSignature = "Lnet/minecraft/network/Packet;";
+    mapping.positionPacketName = "net.minecraft.network.play.client.C03PacketPlayer$C04PacketPlayerPosition";
+    mapping.lookPacketName = "net.minecraft.network.play.client.C03PacketPlayer$C05PacketPlayerLook";
+    mapping.positionLookPacketName = "net.minecraft.network.play.client.C03PacketPlayer$C06PacketPlayerPosLook";
     mapping.chatComponentName = "net.minecraft.util.IChatComponent";
     mapping.chatComponentSignature = "Lnet/minecraft/util/IChatComponent;";
     mapping.chatTextName = "net.minecraft.util.ChatComponentText";
@@ -250,6 +262,7 @@ private:
     mapping.getMinecraft = "func_71410_x";
     mapping.playerField = "field_71439_g";
     mapping.getHealth = "func_110143_aJ";
+    mapping.hurtTimeField = "field_70737_aN";
     mapping.getMaxHealth = "func_110138_aP";
     mapping.getEntityId = "func_145782_y";
     mapping.getBounds = "func_174813_aQ";
@@ -284,6 +297,16 @@ private:
     mapping.timerField = "field_71428_T";
     mapping.renderPartialTicksField = "field_74281_c";
     mapping.gameSettingsField = "field_71474_y";
+    mapping.thirdPersonViewField = "field_74320_O";
+    mapping.updateCameraAndRender = "func_181560_a";
+    mapping.orientCamera = "func_78467_g";
+    mapping.setAngles = "func_70082_c";
+    mapping.setupTerrain = "func_174970_a";
+    mapping.setupTerrainDescriptor =
+        "(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V";
+    mapping.currentScreenField = "field_71462_r";
+    mapping.guiScreenSignature = "Lnet/minecraft/client/gui/GuiScreen;";
+    mapping.getCollidingBoundingBoxes = "func_72945_a";
     mapping.keyBindSneakField = "field_74311_E";
     mapping.movementKeyFields = {"field_74351_w", "field_74368_y",
                                  "field_74370_x", "field_74366_z",
@@ -293,6 +316,36 @@ private:
     mapping.mouseSensitivityField = "field_74341_c";
     mapping.rotationYawField = "field_70177_z";
     mapping.rotationPitchField = "field_70125_A";
+    mapping.previousRotationYawField = "field_70126_B";
+    mapping.previousRotationPitchField = "field_70127_C";
+    mapping.movementInputFields = {"field_70702_br", "field_70701_bs"};
+    mapping.rayHitName = "net.minecraft.util.MovingObjectPosition";
+    mapping.rayHitSignature = "Lnet/minecraft/util/MovingObjectPosition;";
+    mapping.rayTraceBlocks = "func_147447_a";
+    mapping.getEntityById = "func_73045_a";
+    mapping.getItemUseDuration = "func_71057_bx";
+    mapping.isUsingItem = "func_71039_bw";
+    mapping.getEyeHeight = "func_70047_e";
+    mapping.hitVectorField = "field_72307_f";
+    mapping.clickMouse = "func_147116_af";
+    mapping.sendClickBlock = "func_147115_a";
+    mapping.moveFlying = "func_70060_a";
+    mapping.isSprinting = "func_70051_ag";
+    mapping.setSprinting = "func_70031_b";
+    mapping.swingItem = "func_71038_i";
+    mapping.rayBlockPosField = "field_178783_e";
+    mapping.raySideHitField = "field_178784_b";
+    mapping.blockPosCoordinateMethods = {"func_177958_n", "func_177956_o",
+                                         "func_177952_p"};
+    mapping.facingIndexMethod = "func_176745_a";
+    mapping.writeMovementPacket = "func_148840_b";
+    mapping.addToSendQueue = "func_147297_a";
+    mapping.packetYawField = "field_149476_e";
+    mapping.packetPitchField = "field_149473_f";
+    mapping.packetRotatingField = "field_149481_i";
+    mapping.packetPositionFields = {"field_149479_a", "field_149477_b", "field_149478_c"};
+    mapping.packetOnGroundField = "field_149474_g";
+    mapping.vectorFields = {"field_72450_a", "field_72448_b", "field_72449_c"};
     mapping.motionFields = {"field_70159_w", "field_70181_x", "field_70179_y"};
     mapping.onGroundField = "field_70122_E";
     mapping.jump = "func_70664_aZ";
@@ -307,6 +360,11 @@ private:
     mapping.getIdFromBlock = "func_149682_b";
     mapping.getFacingByIndex = "func_82600_a";
     mapping.onPlayerRightClick = "func_178890_a";
+    mapping.clickBlock = "func_180511_b";
+    mapping.onPlayerDamageBlock = "func_180512_c";
+    mapping.resetBlockRemoving = "func_78767_c";
+    mapping.getBlockReachDistance = "func_78757_d";
+    mapping.getStrVsBlock = "func_150997_a";
     mapping.aabbFields = {"field_72340_a", "field_72338_b", "field_72339_c",
                           "field_72336_d", "field_72337_e", "field_72334_f"};
 
@@ -430,6 +488,14 @@ private:
     mapping.enumFacingSignature = "Lcq;";
     mapping.vec3Name = "aui";
     mapping.vec3Signature = "Laui;";
+    mapping.movementPacketName = "ip";
+    mapping.movementPacketSignature = "Lip;";
+    mapping.packetBufferSignature = "Lem;";
+    mapping.networkPacketName = "ff";
+    mapping.networkPacketSignature = "Lff;";
+    mapping.positionPacketName = "ip$a";
+    mapping.lookPacketName = "ip$c";
+    mapping.positionLookPacketName = "ip$b";
     mapping.chatComponentName = "eu";
     mapping.chatComponentSignature = "Leu;";
     mapping.chatTextName = "fa";
@@ -439,6 +505,7 @@ private:
     mapping.getMinecraft = "A";
     mapping.playerField = "h";
     mapping.getHealth = "bn";
+    mapping.hurtTimeField = "au"; // MCP 1.8.9 joined.srg: pr/au.
     mapping.getMaxHealth = "bu";
     mapping.getEntityId = "F";
     mapping.getBounds = "aR";
@@ -473,6 +540,19 @@ private:
     mapping.timerField = "Y";
     mapping.renderPartialTicksField = "c";
     mapping.gameSettingsField = "t";
+    mapping.entityRendererName = "bfk";
+    mapping.entityRendererSignature = "Lbfk;";
+    mapping.renderGlobalName = "bfr";
+    mapping.renderGlobalSignature = "Lbfr;";
+    mapping.thirdPersonViewField = "aB";
+    mapping.updateCameraAndRender = "a";
+    mapping.orientCamera = "f";
+    mapping.setAngles = "c";
+    mapping.setupTerrain = "a";
+    mapping.setupTerrainDescriptor = "(Lpk;DLbia;IZ)V";
+    mapping.currentScreenField = "m";
+    mapping.guiScreenSignature = "Laxu;";
+    mapping.getCollidingBoundingBoxes = "a";
     mapping.keyBindSneakField = "ad";
     mapping.movementKeyFields = {"Y", "aa", "Z", "ab", "ac"};
     mapping.getKeyCode = "i";
@@ -480,6 +560,35 @@ private:
     mapping.mouseSensitivityField = "a";
     mapping.rotationYawField = "y";
     mapping.rotationPitchField = "z";
+    mapping.previousRotationYawField = "A";
+    mapping.previousRotationPitchField = "B";
+    mapping.movementInputFields = {"aZ", "ba"};
+    mapping.rayHitName = "auh";
+    mapping.rayHitSignature = "Lauh;";
+    mapping.rayTraceBlocks = "a";
+    mapping.getEntityById = "a";
+    mapping.getItemUseDuration = "bT";
+    mapping.isUsingItem = "bS";
+    mapping.getEyeHeight = "aS";
+    mapping.hitVectorField = "c";
+    mapping.clickMouse = "aw";
+    mapping.sendClickBlock = "b";
+    mapping.moveFlying = "a";
+    mapping.isSprinting = "aw";
+    mapping.setSprinting = "d";
+    mapping.swingItem = "bw";
+    mapping.rayBlockPosField = "e";
+    mapping.raySideHitField = "b";
+    mapping.blockPosCoordinateMethods = {"n", "o", "p"};
+    mapping.facingIndexMethod = "a";
+    mapping.writeMovementPacket = "b";
+    mapping.addToSendQueue = "a";
+    mapping.packetYawField = "d";
+    mapping.packetPitchField = "e";
+    mapping.packetRotatingField = "h";
+    mapping.packetPositionFields = {"a", "b", "c"};
+    mapping.packetOnGroundField = "f";
+    mapping.vectorFields = {"a", "b", "c"};
     mapping.motionFields = {"v", "w", "x"};
     mapping.onGroundField = "C";
     mapping.jump = "bF";
@@ -494,6 +603,11 @@ private:
     mapping.getIdFromBlock = "a";
     mapping.getFacingByIndex = "a";
     mapping.onPlayerRightClick = "a";
+    mapping.clickBlock = "b";
+    mapping.onPlayerDamageBlock = "c";
+    mapping.resetBlockRemoving = "c";
+    mapping.getBlockReachDistance = "d";
+    mapping.getStrVsBlock = "a";
     mapping.aabbFields = {"a", "b", "c", "d", "e", "f"};
 
     mapping.scoreboardName = "auo";
@@ -606,6 +720,7 @@ private:
     mapping.minecraftInstanceField = "theMinecraft";
     mapping.playerField = "thePlayer";
     mapping.getHealth = "getHealth";
+    mapping.hurtTimeField = "hurtTime";
     mapping.getMaxHealth = "getMaxHealth";
     mapping.getEntityId = "getEntityId";
     mapping.getBounds = "getEntityBoundingBox";
@@ -643,15 +758,53 @@ private:
     mapping.timerField = "timer";
     mapping.renderPartialTicksField = "renderPartialTicks";
     mapping.gameSettingsField = "gameSettings";
+    mapping.entityRendererName = "net.minecraft.client.renderer.EntityRenderer";
+    mapping.entityRendererSignature = "Lnet/minecraft/client/renderer/EntityRenderer;";
+    mapping.thirdPersonViewField = "thirdPersonView";
+    mapping.updateCameraAndRender = "updateCameraAndRender";
+    mapping.orientCamera = "orientCamera";
+    mapping.setAngles = "setAngles";
+    mapping.setupTerrain = "setupTerrain";
+    mapping.currentScreenField = "currentScreen";
+    mapping.guiScreenSignature = "Lnet/minecraft/client/gui/GuiScreen;";
+    mapping.getCollidingBoundingBoxes = "getCollidingBoundingBoxes";
     mapping.keyBindSneakField = "keyBindSneak";
     mapping.movementKeyFields = {"keyBindForward", "keyBindBack",
                                  "keyBindLeft", "keyBindRight",
                                  "keyBindJump"};
     mapping.getKeyCode = "getKeyCode";
     mapping.setKeyBindState = "setKeyBindState";
+    mapping.attackEntity = "attackEntity";
     mapping.mouseSensitivityField = "mouseSensitivity";
     mapping.rotationYawField = "rotationYaw";
     mapping.rotationPitchField = "rotationPitch";
+    mapping.previousRotationYawField = "prevRotationYaw";
+    mapping.previousRotationPitchField = "prevRotationPitch";
+    mapping.movementInputFields = {"moveStrafing", "moveForward"};
+    mapping.rayTraceBlocks = "rayTraceBlocks";
+    mapping.getEntityById = "getEntityByID";
+    mapping.getItemUseDuration = "getItemInUseDuration";
+    mapping.isUsingItem = "isUsingItem";
+    mapping.getEyeHeight = "getEyeHeight";
+    mapping.hitVectorField = "hitVec";
+    mapping.clickMouse = "clickMouse";
+    mapping.sendClickBlock = "sendClickBlockToController";
+    mapping.moveFlying = "moveFlying";
+    mapping.isSprinting = "isSprinting";
+    mapping.setSprinting = "setSprinting";
+    mapping.swingItem = "swingItem";
+    mapping.rayBlockPosField = "blockPos";
+    mapping.raySideHitField = "sideHit";
+    mapping.blockPosCoordinateMethods = {"getX", "getY", "getZ"};
+    mapping.facingIndexMethod = "getIndex";
+    mapping.writeMovementPacket = "writePacketData";
+    mapping.addToSendQueue = "addToSendQueue";
+    mapping.packetYawField = "yaw";
+    mapping.packetPitchField = "pitch";
+    mapping.packetRotatingField = "rotating";
+    mapping.packetPositionFields = {"x", "y", "z"};
+    mapping.packetOnGroundField = "onGround";
+    mapping.vectorFields = {"xCoord", "yCoord", "zCoord"};
     mapping.motionFields = {"motionX", "motionY", "motionZ"};
     mapping.onGroundField = "onGround";
     mapping.jump = "jump";
@@ -665,6 +818,11 @@ private:
     mapping.getIdFromBlock = "getIdFromBlock";
     mapping.getFacingByIndex = "getFront";
     mapping.onPlayerRightClick = "onPlayerRightClick";
+    mapping.clickBlock = "clickBlock";
+    mapping.onPlayerDamageBlock = "onPlayerDamageBlock";
+    mapping.resetBlockRemoving = "resetBlockRemoving";
+    mapping.getBlockReachDistance = "getBlockReachDistance";
+    mapping.getStrVsBlock = "getStrVsBlock";
     mapping.aabbFields = {"minX", "minY", "minZ", "maxX", "maxY", "maxZ"};
 
     mapping.getScoreboard = "getScoreboard";
@@ -793,7 +951,9 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         }
     }
 
-    const std::array<std::pair<std::string_view, std::string_view>, 25U> featureClasses{{
+    const std::array<std::pair<std::string_view, std::string_view>, 29U> featureClasses{{
+        {rayHitName, rayHitSignature},
+        {movementPacketName, movementPacketSignature},
         {hostileName, hostileSignature},
         {scoreboardName, scoreboardSignature}, {scoreObjectiveName, scoreObjectiveSignature},
         {scoreName, scoreSignature}, {scorePlayerTeamName, scorePlayerTeamSignature},
@@ -809,6 +969,8 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         {textureManagerName, textureManagerSignature},
         {textureObjectName, textureObjectSignature},
         {gameSettingsName, gameSettingsSignature},
+        {entityRendererName, entityRendererSignature},
+        {renderGlobalName, renderGlobalSignature},
         {keyBindingName, keyBindingSignature},
         {playerControllerName, playerControllerSignature},
         {serverDataName, serverDataSignature},
@@ -834,6 +996,11 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
          teamSignature.back() != ';')) {
         return reject("invalid Team JNI signature");
     }
+    if (!packetBufferSignature.empty() &&
+        (packetBufferSignature.size() < 3U || packetBufferSignature.front() != 'L' ||
+         packetBufferSignature.back() != ';')) {
+        return reject("invalid PacketBuffer JNI signature");
+    }
     if (entityPlayerSignature.size() < 3U ||
         entityPlayerSignature.front() != 'L' ||
         entityPlayerSignature.back() != ';') {
@@ -848,8 +1015,19 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         (!getLoadedEntities.empty() && !loadedEntitiesField.empty())) {
         return reject("mapping must define exactly one loaded-entity accessor");
     }
-    const std::array<std::string_view, 77U> members{{
-        playerField, getHealth, getMaxHealth, getEntityId,
+    if (!guiScreenSignature.empty() && (guiScreenSignature.size() < 3U ||
+        guiScreenSignature.front() != 'L' || guiScreenSignature.back() != ';'))
+        return reject("invalid GuiScreen JNI signature");
+    const auto members = std::to_array<std::string_view>({
+        clickMouse,
+        sendClickBlock, moveFlying, isSprinting, setSprinting, swingItem,
+        rayBlockPosField, raySideHitField,
+        blockPosCoordinateMethods[0], blockPosCoordinateMethods[1],
+        blockPosCoordinateMethods[2], facingIndexMethod,
+        rayTraceBlocks, getEntityById, getItemUseDuration, isUsingItem,
+        getEyeHeight, hitVectorField,
+        vectorFields[0], vectorFields[1], vectorFields[2],
+        playerField, getHealth, hurtTimeField, getMaxHealth, getEntityId,
         getBounds, isMainThread, isSingleplayer, worldField, getLoadedEntities,
         playerEntitiesField, getName, isInvisible, getDisplayName, getFormattedText,
         addChatMessage, parseChatJson,
@@ -865,12 +1043,18 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         getItem, hasColor, getColor, getEnchantmentLevel,
         getEquipmentInSlot, getIdFromItem, stackSizeField, getItemDamage,
         getUniqueId, getLocationSkin, getTextureManager, getTexture,
-        getGlTextureId, gameSettingsField, keyBindSneakField, getKeyCode,
+        getGlTextureId, gameSettingsField, thirdPersonViewField,
+        updateCameraAndRender, orientCamera, setAngles, setupTerrain,
+        keyBindSneakField, getKeyCode,
         setKeyBindState, mouseSensitivityField, rotationYawField,
-        rotationPitchField, onGroundField, jump, isAirBlock,
+        rotationPitchField, previousRotationYawField, previousRotationPitchField,
+        writeMovementPacket, packetYawField, packetPitchField,
+        packetRotatingField,
+        onGroundField, jump, isAirBlock,
+        currentScreenField, getCollidingBoundingBoxes,
         getCurrentServerData, serverIpField, playerControllerField, attackEntity,
         currentItemField, mainInventoryField, getBlockFromItem,
-        getIdFromBlock, getFacingByIndex, onPlayerRightClick}};
+        getIdFromBlock, getFacingByIndex, onPlayerRightClick});
     for (const std::string_view member : members) {
         if (!member.empty() && !validMemberName(member))
             return reject("invalid method or field name");
@@ -880,6 +1064,14 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
     }
     for (const std::string& member : previousPositionFields) {
         if (!validMemberName(member)) return reject("invalid previous-position field name");
+    }
+    if(!setupTerrainDescriptor.empty()&&
+       (setupTerrainDescriptor.front()!='('||
+        setupTerrainDescriptor.find(')')==std::string::npos))
+        return reject("invalid setupTerrain descriptor");
+    for (const std::string& member : movementInputFields) {
+        if (!member.empty() && !validMemberName(member))
+            return reject("invalid movement-input field name");
     }
     for (const std::string& member : chunkCoordinateFields) {
         if (!validMemberName(member)) return reject("invalid chunk coordinate field name");

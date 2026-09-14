@@ -57,6 +57,8 @@ private:
     void queueHypixelQuery(const std::array<char, 17U>& playerId) noexcept;
     void queueMenuHotkeyChanged(unsigned virtualKey) noexcept;
     void queueGuiScaleChanged(int index) noexcept;
+    void queueMediaSettingsChanged(const MediaOverlaySettings& settings) noexcept;
+    void queueMediaAction(MediaAction action) noexcept;
     void queueBlacklistAction(const BlacklistAction& action) noexcept;
     void queueRendererReady() noexcept;
     static void frameEntry(void* context, HDC deviceContext) noexcept;
@@ -89,7 +91,8 @@ private:
     std::atomic<bool> m_startSucceeded{false};
     std::atomic<bool> m_visible{false};
     std::atomic<bool> m_interactive{false};
-    std::atomic<std::uint32_t> m_featureBits{0x286FBC7FU};
+    std::atomic<std::uint32_t> m_featureBits{0x086FBC7FU};
+    aim::RenderClock m_entityRenderClock;
     std::atomic<int> m_bedDefenseRadius{6};
     std::atomic<int> m_bedThreatRadius{8};
     std::atomic<int> m_bedDefenseHotkey{VK_LMENU};
@@ -115,6 +118,7 @@ private:
     std::atomic<int> m_bhopAirSpeedPercent{100};
     std::atomic<std::uint64_t> m_featureHotkeysPackedA{0U};
     std::atomic<std::uint64_t> m_featureHotkeysPackedB{0U};
+    std::atomic<std::uint32_t> m_featureHotkeysPackedC{0xA400U};
     std::atomic<bool> m_fireballEspEnabled{false};
     std::atomic<bool> m_fireballEspFilled{true};
     std::atomic<bool> m_longJumpEnabled{false};
@@ -125,6 +129,7 @@ private:
     std::atomic<int> m_aimMinimumDistance{0};
     std::atomic<int> m_aimMaximumDistance{16};
     std::atomic<int> m_aimFovDegrees{90};
+    std::atomic<int> m_aimAttackCps{10};
     std::atomic<int> m_clickGuiWidthPercent{100};
     std::atomic<int> m_clickGuiHeightPercent{100};
     std::atomic<int> m_clickGuiOpacity{96};
@@ -132,6 +137,8 @@ private:
     // 32-bit feature mask. Bits: nearest, text line, knockback, bow,
     // local-hostile aura, local incoming-velocity scaling.
     std::atomic<std::uint32_t> m_featureExtraBits{0x43U};
+    std::atomic<unsigned> m_aimOptions{412810U};
+    std::atomic<unsigned> m_featureChangedAimOptions{412810U};
     std::atomic<int> m_textGuiAlignment{2};
     std::atomic<int> m_localMobReach{4};
     std::atomic<int> m_localAttackDelayMs{500};
@@ -227,6 +234,7 @@ private:
     std::atomic<int> m_featureChangedBhopAirSpeedPercent{100};
     std::atomic<std::uint64_t> m_featureChangedHotkeysPackedA{0U};
     std::atomic<std::uint64_t> m_featureChangedHotkeysPackedB{0U};
+    std::atomic<std::uint32_t> m_featureChangedHotkeysPackedC{0xA400U};
     std::atomic<bool> m_featureChangedFireballEspEnabled{false};
     std::atomic<bool> m_featureChangedFireballEspFilled{true};
     std::atomic<bool> m_featureChangedLongJumpEnabled{false};
@@ -237,6 +245,7 @@ private:
     std::atomic<int> m_featureChangedAimMinimumDistance{0};
     std::atomic<int> m_featureChangedAimMaximumDistance{16};
     std::atomic<int> m_featureChangedAimFovDegrees{90};
+    std::atomic<int> m_featureChangedAimAttackCps{10};
     std::atomic<int> m_featureChangedClickGuiWidthPercent{100};
     std::atomic<int> m_featureChangedClickGuiHeightPercent{100};
     std::atomic<int> m_featureChangedClickGuiOpacity{96};
@@ -260,6 +269,21 @@ private:
     std::uint64_t m_telemetrySequence = 0U; // render-thread owned
     SRWLOCK m_hypixelLock = SRWLOCK_INIT;
     HypixelOverlaySnapshot m_hypixelSnapshot{};
+    SRWLOCK m_mediaLock = SRWLOCK_INIT;
+    MediaPlaybackSnapshot m_mediaSnapshot{};
+    MediaOverlaySettings m_mediaSettings{};
+    std::atomic<std::uint32_t> m_mediaSettingsChangedRevision{0U};
+    std::atomic<std::uint32_t> m_mediaSettingsChangedBits{0U};
+    std::atomic<int> m_mediaSettingsChangedPrevious{VK_MEDIA_PREV_TRACK};
+    std::atomic<int> m_mediaSettingsChangedToggle{VK_MEDIA_PLAY_PAUSE};
+    std::atomic<int> m_mediaSettingsChangedNext{VK_MEDIA_NEXT_TRACK};
+    std::atomic<std::uint32_t> m_mediaSettingsChangedColor{0x857F82U};
+    std::atomic<int> m_mediaSettingsChangedX{-1};
+    std::atomic<int> m_mediaSettingsChangedY{-1};
+    std::atomic<int> m_mediaSettingsChangedSpectrum{100};
+    std::atomic<int> m_mediaSettingsChangedScale{52};
+    std::atomic<std::uint32_t> m_mediaActionRevision{0U};
+    std::atomic<std::uint8_t> m_mediaAction{0U};
     SRWLOCK m_playerStatsLock = SRWLOCK_INIT;
     std::unordered_map<std::string, PlayerStatsEntry> m_playerStats;
     SRWLOCK m_blacklistLock = SRWLOCK_INIT;

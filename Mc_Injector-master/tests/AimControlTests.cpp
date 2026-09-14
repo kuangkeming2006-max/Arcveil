@@ -1,0 +1,673 @@
+#include "../agent/bindings/AimControl.h"
+#include "../agent/bindings/SilentLockCoordinator.h"
+#include <cstdio>
+#include <cmath>
+
+int main()
+{
+    using namespace mcoverlay::aim;
+    int checks=0, failed=0;
+    auto check=[&](bool ok,const char* message) {
+        ++checks; if(!ok) { ++failed; std::printf("FAIL %s\n",message); }
+    };
+    {
+        using mcoverlay::silent::RuntimeCapabilities;
+        constexpr RuntimeCapabilities noOptionalHooks{true,true,false,false};
+        static_assert(noOptionalHooks.logicalOutputReady());
+        static_assert(noOptionalHooks.attackSchedulerReady());
+        static_assert(!noOptionalHooks.heldArbitrationReady());
+        static_assert(!noOptionalHooks.ownershipArbitrationReady());
+        check(noOptionalHooks.logicalOutputReady()&&
+              noOptionalHooks.attackSchedulerReady(),
+              "optional Java call-site hooks cannot disable core Silent Lock");
+        constexpr RuntimeCapabilities missingAttackBindings{true,false,true,true};
+        check(missingAttackBindings.logicalOutputReady()&&
+              !missingAttackBindings.attackSchedulerReady(),
+              "packet rotation remains available when attack bindings are absent");
+    }
+    check(!mcoverlay::silent::isConfirmedCombatTeammate(
+              false,true,'a','a')&&
+          !mcoverlay::silent::isConfirmedCombatTeammate(
+              true,false,'a','a')&&
+          mcoverlay::silent::isConfirmedCombatTeammate(
+              true,true,'a','a'),
+          "team-colour exclusion is scoped to confirmed Hypixel matches");
+    RenderClock clock;
+    check(std::abs(clock.update(1,1,0.95F)-0.95)<1e-5,"initial render phase");
+    check(std::abs(clock.update(1,1,0.05F)-1.05)<1e-5,"stale sample advances across partial-tick wrap");
+    check(std::abs(clock.update(2,1,0.10F)-0.10)<1e-5,"new sample resets missing phase");
+    check(std::abs(clock.update(2,2,0.05F)-0.05)<1e-5,"world change clears extrapolation");
+    auto exact=ExactLockOutput::apply({179,0},{-179,20});
+    check(exact.yaw==181 && exact.pitch==20,"exact lock wraps yaw without a 358-degree turn");
+    {
+        using namespace mcoverlay::silent;
+        const Vec3 ray=RayTraceCoordinator::direction({0,0});
+        check(std::abs(ray.x)<1e-9 && std::abs(ray.y)<1e-9 &&
+              std::abs(ray.z-1.0)<1e-9,"logical ray follows yaw/pitch");
+        const double hit=RayTraceCoordinator::intersect(
+            {0,1.5,0},ray,{-0.3,0,2.0,0.3,1.8,2.6},3.0);
+        check(std::abs(hit-2.0)<1e-9,"logical ray selects nearest AABB face");
+        const RayTraceCoordinator::EntityHit verified{7,2.0,2.0};
+        check(RayTraceCoordinator::attackTarget(7,verified,{true,-1.0,{}},true)==7,
+              "vanilla attack accepts first unobstructed logical hit");
+        check(RayTraceCoordinator::attackTarget(8,verified,{true,-1.0,{}},true)<0 &&
+              RayTraceCoordinator::attackTarget(7,{7,3.01,3.01},{true,-1.0,{}},true)<0 &&
+              RayTraceCoordinator::attackTarget(7,verified,{true,1.5,{}},true)<0,
+              "vanilla attack rejects wrong target, excess reach and blocks");
+        InteractionCoordinator interaction;
+        interaction.updateRay(7,7,7,{});
+        const auto attack=interaction.click(10);
+        check(attack.kind==InteractionCommandKind::AttackEntity &&
+              attack.entityId==7 && interaction.attackTarget()==7 &&
+              interaction.event()==InteractionEvent::Attack,
+              "interaction uses the verified ray target");
+        interaction.reset();
+        const BlockTarget block{1,2,3,4,true};
+        interaction.updateRay(-1,-1,-1,block);
+        check(interaction.click(20).kind==InteractionCommandKind::None,
+              "combat ray block cannot implicitly start digging");
+        check(interaction.held(true,20).kind==InteractionCommandKind::None,
+              "one logical tick cannot emit click and held actions together");
+        check(interaction.held(true,21).kind==InteractionCommandKind::None,
+              "held combat input cannot damage a logical-ray block");
+        interaction.blockFinished(21);
+        check(interaction.event()==InteractionEvent::FinishedDigging &&
+              interaction.mode()==InteractionMode::None,
+              "completed block damage closes the same interaction lifecycle");
+        MovementCoordinator movement;
+        const auto state=movement.coordinate({true,false,true,false},{0,0},{0,0},
+            {0.0,0.0,0.2},false,true);
+        check(state.forward>0.70 && state.strafe>0.70 &&
+              state.intendedVelocity.x>0.0 && state.intendedVelocity.z>0.0,
+              "logical movement preserves Minecraft left-strafe sign");
+        const auto remapped=movement.coordinate(
+            {true,false,false,false},{0,0},{90,0},{0.0,0.0,0.2},false,true);
+        const double radians=remapped.worldIntent.active ? 90.0*3.14159265358979323846/180.0 : 0.0;
+        const double appliedX=-std::sin(radians)*remapped.forward+
+                               std::cos(radians)*remapped.strafe;
+        const double appliedZ= std::cos(radians)*remapped.forward+
+                               std::sin(radians)*remapped.strafe;
+        check(appliedZ>0.9 && std::abs(appliedX)<0.1,
+              "cardinal remap follows camera/WASD intent");
+        for(double yaw=-720.0;yaw<=720.0;yaw+=2.5) {
+            for(double modifier:{1.0,0.98,0.294,0.196}) {
+                const auto chosen=movement.coordinateAxes(modifier,0,{19,0},{yaw,0},{0,.1,.2},false,false);
+                check((chosen.forward==0 || std::abs(chosen.forward)==modifier) &&
+                      (chosen.strafe==0 || std::abs(chosen.strafe)==modifier),
+                      "only vanilla axes and inherited sneak/item-use modifier reach movement");
+                const double r=yaw*3.14159265358979323846/180.0;
+                const double x=-std::sin(r)*chosen.forward+std::cos(r)*chosen.strafe;
+                const double z=std::cos(r)*chosen.forward+std::sin(r)*chosen.strafe;
+                const double similarity=(x*chosen.worldIntent.x+z*chosen.worldIntent.z)/
+                    (std::hypot(x,z)*chosen.worldIntent.magnitude);
+                check(similarity>=std::cos(22.5001*3.14159265358979323846/180.0),
+                      "keyboard approximation chooses nearest expressible direction");
+                check(!chosen.sprinting && !chosen.onGround,"native sprint state is not rewritten");
+            }
+        }
+        constexpr std::array<std::array<int,2>,8> expectedDirections{{
+            {{1,0}},{{1,1}},{{0,1}},{{-1,1}},
+            {{-1,0}},{{-1,-1}},{{0,-1}},{{1,-1}}}};
+        for(std::size_t sector=0;sector<expectedDirections.size();++sector) {
+            const double yaw=static_cast<double>(sector)*45.0;
+            const auto sprint=movement.coordinateAxes(1.0,0.0,{0,0},{yaw,0},
+                {0,.1,.2},true,false,sector);
+            check(sprint.forward==expectedDirections[sector][0]&&
+                  sprint.strafe==expectedDirections[sector][1],
+                  "sprint remap chooses the nearest of all eight vanilla directions");
+            check(sprint.sprinting==(expectedDirections[sector][0]>0),
+                  "logical sprint survives only a final forward-bearing remap");
+            const double r=yaw*3.14159265358979323846/180.0;
+            const double x=-std::sin(r)*sprint.forward+
+                           std::cos(r)*sprint.strafe;
+            const double z= std::cos(r)*sprint.forward+
+                           std::sin(r)*sprint.strafe;
+            check(z>0.7&&std::abs(x)<0.01,
+                  "sprint state never changes authoritative world-space intent");
+        }
+        const auto suppressed=movement.coordinateAxes(1.0,0.0,{0,0},{90,0},
+            {0,.1,.2},true,false,100);
+        check(suppressed.physicalSprinting&&!suppressed.sprinting&&
+              suppressed.sprintSuppressed,
+              "an incompatible remap suppresses an observed physical sprint");
+        const auto notManufactured=movement.coordinateAxes(1.0,0.0,{0,0},{0,0},
+            {0,.1,.2},false,false,101);
+        check(!notManufactured.physicalSprinting&&!notManufactured.sprinting&&
+              !notManufactured.sprintSuppressed,
+              "a compatible remap never manufactures sprint for a walking player");
+    }
+    {
+        using namespace mcoverlay::silent;
+        RotationManager rotation;
+        rotation.reset({179.0,0.0});
+        double previousPacket=179.0;
+        bool havePacket=false;
+        // Render at 240 Hz while vanilla emits one movement packet every
+        // twelve frames (20 TPS).  Continuity is asserted between packets,
+        // not merely between render snapshots.
+        for(int frame=0;frame<480;++frame) {
+            const double desired=179.0+static_cast<double>(frame)*1.75;
+            (void)rotation.acquire({desired,5.0*std::sin(frame/40.0)});
+            if(frame%12!=0) continue;
+            const auto packet=rotation.networkRotation();
+            if(havePacket)
+                check(std::abs(packet.yaw-previousPacket)<=180.0,
+                      "20 TPS packet yaw remains on one continuous branch");
+            rotation.acknowledgeReported(packet);
+            previousPacket=packet.yaw; havePacket=true;
+        }
+        rotation.observeCamera({-175.0,3.0});
+        rotation.deactivate();
+        const auto restore=rotation.networkRotation();
+        check(std::abs(restore.yaw-previousPacket)<=180.0,
+              "restore packet is continuous with the last logical packet");
+        rotation.acknowledgeReported(restore);
+        rotation.beginVanillaHandoff();
+        check(rotation.restoring()&&rotation.handoffPending(),
+              "restore acknowledgement retains ownership through vanilla handoff");
+        const auto vanilla=rotation.continuousVanillaRotation({-175.0,3.0});
+        check(std::abs(vanilla.yaw-restore.yaw)<=180.0,
+              "first vanilla rotation stays on the last reported yaw branch");
+        rotation.acknowledgeReported(vanilla);
+        rotation.finishVanillaHandoff();
+        check(!rotation.active()&&!rotation.restoring(),
+              "first changed vanilla rotation completes logical ownership handoff");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate firstTarget{
+            81,0x81U,{0,1.62,2.0},{-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        const TargetCandidate secondTarget{
+            82,0x82U,{2.0,1.62,0},{1.7,0.0,-0.3,2.3,1.9,0.3},true};
+        LogicalFrameInput input{};
+        input.tick=5000;input.physicsTick=10;input.worldGeneration=13;
+        input.localEntityId=1;
+        input.enabled=true;input.silent=true;input.mode=Mode::LockOn;
+        input.leftMouseDown=true;
+        input.maximumDistance=6;input.fovDegrees=360;
+        input.camera={0,0};input.eye={0,1.62,0};
+        input.physicalMovement.forward=true;
+        input.candidates={&firstTarget,1};
+        const auto clearTrace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        (void)controller.advance(input,clearTrace);
+        check(controller.latest().attackTargetId==81,
+              "initial logical tick commits a complete verified target");
+
+        const auto publishedBeforeTrace=controller.latest();
+        input.tick=5010;input.physicsTick=11;input.candidates={&secondTarget,1};
+        (void)controller.advance(input,clearTrace);
+        const auto committed=controller.latest();
+        check(publishedBeforeTrace.candidateTargetId==81&&
+              publishedBeforeTrace.attackTargetId==81&&
+              committed.candidateTargetId==82&&committed.attackTargetId==82,
+              "a complete trace replaces target and attack state in one publication");
+
+        input.tick=5020;input.physicsTick=12;input.candidates={};
+        const auto grace=controller.advance(input,clearTrace);
+        check(grace.silentActive&&controller.active()&&
+              controller.latest().attackTargetId<0,
+              "one incomplete target sample keeps ownership but exposes no attack");
+        controller.observeCameraInput({0,0},{3,4,5,2,true},-1,true,3);
+        check(controller.routeManualInput(true)&&!controller.active(),
+              "camera block owns a real input even during target-loss grace");
+        controller.observeCameraInput({0,0},{},-1,false,4);
+        check(!controller.routeManualInput(false),
+              "manual input releases cleanly during target-loss grace");
+        input.tick=5021;input.physicsTick=13;input.candidates={&secondTarget,1};
+        check(controller.advance(input,clearTrace).silentActive&&controller.active(),
+              "a fresh target sample reacquires after manual input releases");
+        input.tick=5030;input.physicsTick=14;input.candidates={};
+        check(controller.advance(input,clearTrace).silentActive,
+              "target loss grace retains the reacquired rotation owner");
+        input.tick=5081;input.physicsTick=15;
+        const auto released=controller.advance(input,clearTrace);
+        check(!released.silentActive&&!controller.active()&&controller.restoring(),
+              "real target loss begins one stable restore lifecycle");
+        input.candidates={&secondTarget,1};
+        const auto sameTick=controller.advance(input,clearTrace);
+        check(!sameTick.silentActive&&!controller.active(),
+              "same logical tick cannot release and reacquire rotation ownership");
+        input.tick=5082;input.physicsTick=16;
+        check(controller.advance(input,clearTrace).silentActive&&controller.active(),
+              "a later complete tick can reacquire after the stable release");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{42,0x42U,{0,1.62,2.0},
+                                     {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=1000; input.physicsTick=20;
+        input.worldGeneration=9; input.localEntityId=1;
+        input.enabled=true; input.silent=true; input.mode=Mode::LockOn;
+        input.leftMouseDown=true;
+        input.maximumDistance=6.0; input.fovDegrees=90.0;
+        input.camera={0,0}; input.eye={0,1.62,0};
+        input.physicalMovement.forward=true;
+        input.currentVelocity={0,0,0.2}; input.sprinting=true; input.onGround=true;
+        input.candidates={&target,1};
+        const auto clearTrace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        const auto plan=controller.advance(input,clearTrace);
+        check(plan.silentActive&&plan.candidateTargetId==42,
+              "pure AimAssist plus Silent Lock enters authoritative frame pipeline");
+        const auto movement=controller.movementCommand(0.0,1.0,20);
+        check(movement.enabled&&movement.logicalTick==20,
+              "pure Silent Lock publishes an executable movement command");
+        controller.updateAttackClock(true,true,1000000U,10);
+        input.tick=1001;
+        (void)controller.advance(input,clearTrace);
+        check(controller.click().kind==InteractionCommandKind::None,
+              "attack waits until its exact logical rotation is published");
+        const auto firstPacket=controller.packetPlan(false,false);
+        check(firstPacket.mutation==PacketMutation::InjectRotation,
+              "pending attack first requests its logical Look rotation");
+        controller.acknowledgePacket(firstPacket.rotation,PacketKind::Ground,
+                                     PacketKind::Look,false,true);
+        const auto click=controller.click();
+        check(click.kind==InteractionCommandKind::AttackEntity&&click.entityId==42,
+              "published logical ray decides authoritative entity interaction");
+        controller.attackDispatched(click,true);
+        controller.updateAttackClock(true,true,1100000U,10);
+        input.tick=1002;
+        (void)controller.advance(input,clearTrace);
+        const auto repeatedClick=controller.click();
+        check(repeatedClick.kind==InteractionCommandKind::AttackEntity&&
+              repeatedClick.intentId!=click.intentId,
+              "two real clicks in one native tick retain distinct attack intents");
+        controller.attackDispatched(repeatedClick,true);
+        check(controller.latest().attackDispatchCount==2,
+              "each committed attack intent records exactly one dispatch");
+        const auto snapshot=controller.latest();
+        check(snapshot.movement.controlsMinecraftMovement&&
+              snapshot.attackTargetId==42&&
+              snapshot.event==InteractionEvent::Attack,
+              "one logical tick links movement, raytrace, interaction and packet state");
+        check(controller.held(true).kind==InteractionCommandKind::None,
+              "actual held entry closes the attack client tick without a block action");
+        const auto packet=controller.packetPlan(false,false);
+        check(packet.mutation==PacketMutation::Pass,
+              "already-published logical rotation is not emitted twice");
+
+        // Ordinary items keep an executable combat intent; the camera block is
+        // only a fallback when that intent cannot commit.
+        input.tick=1008; input.physicsTick=21;
+        input.heldItemPolicy=HeldItemPolicy::Other;
+        (void)controller.advance(input,clearTrace);
+        controller.observeCameraInput({0,0},{4,5,6,2,true},-1,true,20,true);
+        check(!controller.routeManualInput(true) && controller.active(),
+              "ordinary held item keeps an executable combat click authoritative");
+        controller.observeCameraInput({0,0},{},-1,false,21);
+        check(!controller.routeManualInput(false),
+              "ordinary-item release leaves no manual block owner");
+        input.heldItemPolicy=HeldItemPolicy::MiningTool;
+        input.tick=1012; input.physicsTick=22;
+        check(controller.advance(input,clearTrace).silentActive,
+              "combat remains available before a mining-tool gesture");
+        controller.observeCameraInput({0,0},{4,5,6,2,true},-1,true,20,true);
+        check(controller.routeManualInput(true)&&!controller.active(),
+              "mining tool gives a valid camera block priority over combat");
+        controller.observeCameraInput({0,0},{},-1,false,21);
+        check(!controller.routeManualInput(false),
+              "mining-tool gesture releases manual ownership cleanly");
+
+        input.tick=1016; input.physicsTick=23;
+        (void)controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,0.5,{4,5,6,2,true}};
+        });
+        check(controller.click().kind==InteractionCommandKind::None,
+              "blocked attack never becomes implicit digging");
+        controller.observeCameraInput({0,60},{4,5,6,2,true},-1,true,21,true);
+        check(controller.routeManualInput(true) && !controller.active(),
+              "camera block input releases combat rotation before vanilla dig");
+        input.tick=1020;
+        check(!controller.advance(input,clearTrace).silentActive &&
+            controller.latest().interactionOwner==InteractionOwner::ManualBlock,
+            "render frames cannot steal ownership during a held manual dig");
+        check(!controller.movementCommand(0,0.294,21).enabled,
+            "manual dig keeps vanilla movement source");
+        controller.observeCameraInput({0,0},{},-1,false,22);
+        check(!controller.routeManualInput(false),"release ends manual ownership");
+        input.tick=1024; input.physicsTick=24;
+        check(controller.advance(input,clearTrace).silentActive,
+              "combat re-acquires only after manual release");
+        const auto stable=controller.movementCommand(0,0.98,24);
+        input.tick=1028; input.camera={20,0};
+        (void)controller.advance(input,clearTrace);
+        const auto sameTick=controller.movementCommand(0.98,0,24);
+        check(sameTick.physicalStrafe==0.98&&sameTick.physicalForward==0.0&&
+              sameTick.enabled&&sameTick.snapshotVersion==stable.snapshotVersion&&
+              sameTick.strafe==stable.strafe&&sameTick.forward==stable.forward,
+              "same physics tick reuses the first consumer-owned movement commit");
+        check(stable.logicalRotation.yaw==sameTick.logicalRotation.yaw&&
+              stable.cameraRotation.yaw==sameTick.cameraRotation.yaw,
+              "same Minecraft tick retains one camera/logical yaw snapshot");
+        input.tick=1030; input.physicsTick=25;
+        (void)controller.advance(input,clearTrace);
+        const auto jumpSnapshot=controller.jumpCommand(0.0,0.98,true,25);
+        const auto moveAfterJump=controller.movementCommand(0.0,0.98,25);
+        check(jumpSnapshot.physicalStrafe==moveAfterJump.physicalStrafe&&
+              jumpSnapshot.physicalForward==moveAfterJump.physicalForward&&
+              jumpSnapshot.strafe==moveAfterJump.strafe&&
+              jumpSnapshot.forward==moveAfterJump.forward&&
+              jumpSnapshot.sprinting==moveAfterJump.sprinting,
+              "jump and moveFlying share the current physics-tick snapshot");
+        controller.deactivate();
+        input.tick=1032; input.physicsTick=26;
+        input.enabled=false; input.silent=false;
+        input.candidates={};
+        const auto drain=controller.advance(input,clearTrace);
+        check(drain.interactionTransition.kind==
+                  InteractionCommandKind::None,
+              "shutdown does not reset a block dig it does not own");
+        const auto restorePacket=controller.packetPlan(false,false);
+        check(restorePacket.mutation==PacketMutation::InjectRotation&&
+              restorePacket.restoring,
+              "feature shutdown serializes one continuous camera restore");
+        controller.acknowledgePacket(restorePacket.rotation,PacketKind::Ground,
+                                     PacketKind::Look,false,true);
+        check(controller.requiresDrain(),
+              "restore acknowledgement keeps the vanilla handoff managed");
+        const auto equivalent=controller.packetPlan(false,true,{20,0},true);
+        check(equivalent.mutation==PacketMutation::RemoveRotation&&
+              equivalent.vanillaHandoff,
+              "equivalent first vanilla rotation is suppressed without ending handoff");
+        controller.acknowledgeSuppressedPacket(PacketKind::Look,
+                                               PacketKind::Ground,false);
+        check(controller.requiresDrain(),
+              "suppressed equivalent vanilla yaw cannot prematurely release ownership");
+        const auto resumed=controller.packetPlan(false,true,{21,0},true);
+        check(resumed.mutation==PacketMutation::InjectRotation&&
+              resumed.vanillaHandoff&&std::abs(resumed.rotation.yaw-21.0)<1e-9,
+              "changed vanilla yaw resumes on the continuous reported branch");
+        controller.acknowledgePacket(resumed.rotation,PacketKind::Look,
+                                     PacketKind::Look,false,true);
+        check(!controller.requiresDrain(),
+              "changed vanilla acknowledgement fully drains rotation ownership");
+        check(controller.packetContinuityRequired(),
+              "camera packets remain branch-normalized after handoff");
+        const auto delayedEquivalent=controller.packetPlan(
+            false,true,{381,0},true);
+        check(delayedEquivalent.mutation==PacketMutation::RemoveRotation,
+              "later modulo-equivalent vanilla Look is suppressed too");
+        controller.acknowledgeSuppressedPacket(PacketKind::Look,
+                                               PacketKind::Ground,false);
+        const auto laterChange=controller.packetPlan(false,true,{382,0},true);
+        check(laterChange.mutation==PacketMutation::InjectRotation&&
+              std::abs(laterChange.rotation.yaw-22.0)<1e-9,
+              "later vanilla mouse movement stays on the reported yaw branch");
+        controller.acknowledgePacket(laterChange.rotation,PacketKind::Look,
+                                     PacketKind::Look,false,true);
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{91,0x91U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=2000;input.physicsTick=40;input.worldGeneration=5;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.leftMouseDown=true;
+        input.mode=Mode::LockOn;input.maximumDistance=6;input.fovDegrees=90;
+        input.camera={0,0};input.eye={0,1.62,0};
+        input.physicalMovement.forward=true;input.coordinateMovement=false;
+        input.candidates={&target,1};
+        const auto plan=controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        });
+        const auto movement=controller.movementCommand(0,1,40);
+        const auto jump=controller.jumpCommand(0,1,false,40);
+        check(plan.silentActive&&!plan.movement.controlsMinecraftMovement&&
+              !movement.enabled&&!jump.enabled,
+              "control adaptation OFF leaves vanilla movement and jump untouched");
+        controller.observeCameraInput({0,0},{1,2,3,2,true},-1,true,40);
+        check(!controller.routeManualInput(true)&&controller.active(),
+              "control adaptation OFF does not apply tool/block ownership rules");
+        controller.updateAttackClock(true,true,2000000U,10);
+        input.tick=2001;
+        (void)controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        });
+        const auto packet=controller.packetPlan(false,false);
+        controller.acknowledgePacket(packet.rotation,PacketKind::Ground,
+                                     PacketKind::Look,false,true);
+        check(controller.click().kind==InteractionCommandKind::AttackEntity,
+              "control adaptation OFF does not gate core silent attack");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{92,0x92U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=2100;input.physicsTick=41;input.worldGeneration=6;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.leftMouseDown=true;
+        input.mode=Mode::LockOn;input.maximumDistance=6;input.fovDegrees=90;
+        input.camera={0,0};input.eye={0,1.62,0};
+        input.physicalMovement.forward=true;input.coordinateMovement=true;
+        input.enforceAttackAvailability=true;input.candidates={&target,1};
+        (void)controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,0.5,{1,2,3,2,true}};
+        });
+        check(controller.outputReady()&&controller.latest().attackTargetId<0&&
+              controller.movementCommand(0,1,41).enabled&&
+              controller.jumpCommand(0,1,false,41).enabled,
+              "attack availability gates only dispatch, not rotation or adaptation");
+        check(controller.packetPlan(false,false).mutation==
+                  PacketMutation::InjectRotation,
+              "blocked attack viability still publishes silent rotation");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{93,0x93U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=2200;input.physicsTick=42;input.worldGeneration=7;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.mode=Mode::LockOn;input.maximumDistance=6;input.fovDegrees=90;
+        input.camera={0,0};input.eye={0,1.62,0};input.candidates={&target,1};
+        input.heldItemPolicy=HeldItemPolicy::BlockItem;
+        controller.observeCameraInput({0,0},{},-1,false,42);
+        const auto idle=controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        });
+        check(!idle.silentActive&&!controller.active()&&idle.candidateTargetId==93,
+              "held block keeps camera rotation while idle but retains target knowledge");
+        controller.observeCameraInput({0,0},{},-1,true,43);
+        controller.updateAttackClock(true,true,2201000U,10);
+        input.leftMouseDown=true;
+        input.tick=2201;input.physicsTick=43;
+        check(controller.advance(input,[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        }).silentActive,
+              "held block temporarily acquires logical rotation for a real left click");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const std::array<TargetCandidate,2> targets{{
+            {71,0x71U,{0,1.62,2.0},{-0.3,0.0,1.7,0.3,1.9,2.3},true,false},
+            {72,0x72U,{1.7,1.62,1.7},{1.4,0.0,1.4,2.0,1.9,2.0},true,false}
+        }};
+        LogicalFrameInput input{};
+        input.tick=4000; input.worldGeneration=12; input.localEntityId=1;
+        input.enabled=true; input.silent=true; input.mode=Mode::LockOn;
+        input.leftMouseDown=true;
+        input.sequentialTargets=true; input.maximumDistance=6.0;
+        input.fovDegrees=360.0; input.camera={0,0}; input.eye={0,1.62,0};
+        input.candidates=targets;
+        const auto clearTrace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        const auto first=controller.advance(input,clearTrace);
+        check(first.candidateTargetId==71 && controller.attackTargetId()==71,
+              "sequential Silent Lock starts with the best ready target");
+        controller.updateAttackClock(true,true,4000000U,10);
+        input.tick=4001;
+        (void)controller.advance(input,clearTrace);
+        const auto firstPacket=controller.packetPlan(false,false);
+        controller.acknowledgePacket(firstPacket.rotation,PacketKind::Ground,
+                                     PacketKind::Look,false,true);
+        const auto firstAttack=controller.click();
+        check(firstAttack.kind==InteractionCommandKind::AttackEntity &&
+              firstAttack.entityId==71,
+              "sequential attack records the first logical target");
+
+        input.tick=4016;
+        controller.observeCameraInput({0,0},{},-1,false,2);
+        const auto second=controller.advance(input,clearTrace);
+        check(second.candidateTargetId==72 && controller.attackTargetId()==72,
+              "a cooling target yields to the next attackable target");
+        controller.updateAttackClock(true,true,4100000U,10);
+        input.tick=4017;
+        (void)controller.advance(input,clearTrace);
+        const auto secondPacket=controller.packetPlan(false,false);
+        if(secondPacket.mutation==PacketMutation::InjectRotation)
+            controller.acknowledgePacket(secondPacket.rotation,PacketKind::Ground,
+                                         PacketKind::Look,false,true);
+        check(controller.click().entityId==72,
+              "left click consumes the newly selected sequential target");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{94,0x94U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=5000;input.physicsTick=50;input.worldGeneration=8;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.mode=Mode::LockOn;input.leftMouseDown=true;
+        input.maximumDistance=6;input.fovDegrees=90;
+        input.camera={0,0};input.eye={0,1.62,0};input.candidates={&target,1};
+        const auto trace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        check(controller.advance(input,trace).silentActive,
+              "held left mouse grants SilentCombat rotation ownership");
+        controller.updateAttackClock(true,true,5000000U,10);
+        controller.observeCameraInput({0,0},{},-1,false,50);
+        check(!controller.active()&&
+              controller.click().kind==InteractionCommandKind::None,
+              "physical release entry cancels SilentCombat before the next frame");
+        input.leftMouseDown=false;input.tick=5001;
+        const auto released=controller.advance(input,trace);
+        controller.updateAttackClock(false,true,5001000U,10);
+        check(!released.silentActive&&!controller.active()&&
+              controller.latest().interactionOwner==InteractionOwner::None,
+              "left-mouse release immediately returns every owner to Camera");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate forwardTarget{96,0x96U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        const TargetCandidate sideTarget{97,0x97U,{2.0,1.62,0},
+            {1.7,0.0,-0.3,2.3,1.9,0.3},true};
+        LogicalFrameInput input{};
+        input.tick=6000;input.physicsTick=60;input.worldGeneration=9;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.mode=Mode::LockOn;input.leftMouseDown=true;
+        input.coordinateMovement=true;input.maximumDistance=6;
+        input.fovDegrees=360;input.camera={0,0};input.eye={0,1.62,0};
+        input.physicalMovement.forward=true;input.sprinting=false;
+        input.candidates={&forwardTarget,1};
+        const auto trace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        (void)controller.advance(input,trace);
+        const auto walking=controller.movementCommand(0,1,60);
+        check(walking.enabled&&!walking.sprinting&&
+              controller.arbitrateSprint(true)&&
+              !controller.arbitrateSprint(false),
+              "sprint arbitration treats Lunar true as intent without manufacturing it");
+        input.tick=6001;input.physicsTick=61;input.candidates={&sideTarget,1};
+        (void)controller.advance(input,trace);
+        (void)controller.movementCommand(0,1,61);
+        check(!controller.arbitrateSprint(true),
+              "held SilentCombat vetoes sprint for an incompatible logical direction");
+        controller.observeCameraInput({0,0},{},-1,false,61);
+        check(controller.arbitrateSprint(true),
+              "mouse release returns sprint arbitration to vanilla immediately");
+    }
+    {
+        using namespace mcoverlay::silent;
+        for(const int cps:{1,7,20}) {
+            FixedCpsAttackScheduler clock;
+            int dispatched=0;
+            for(std::uint64_t now=0;now<=5000000U;now+=2000U) {
+                const auto pulse=clock.update(true,false,now,cps);
+                if(pulse.intentId&&clock.consume()) ++dispatched;
+            }
+            check(std::abs(dispatched-(cps*5+1))<=1,
+                "fixed-CPS clock stays within one intent over five seconds");
+        }
+        FixedCpsAttackScheduler clock;
+        const auto first=clock.update(true,false,1000U,20);
+        const auto held=clock.update(true,false,50000U,20);
+        check(first.intentId!=0U&&held.intentId==first.intentId,
+            "a pending deadline owns one stable unique intent");
+        const auto cancelled=clock.update(true,true,51000U,20);
+        check(cancelled.cancelledIntentId==first.intentId&&clock.pending()==0U,
+            "placement or mining priority classifies and cancels a pending intent");
+    }
+    for (double phase : {0.0, 0.25, 0.5, 0.999}) {
+        const Angles before{178,12}, current{179,15}, output{181,16};
+        const auto previous=shiftedPrevious(before,current,output);
+        const double renderedBefore=before.yaw+(current.yaw-before.yaw)*phase;
+        const double renderedAfter=previous.yaw+(output.yaw-previous.yaw)*phase;
+        check(std::abs(renderedAfter-renderedBefore-2)<1e-9,
+              "camera delta is independent of 20Hz interpolation phase");
+        check(std::abs((previous.pitch+(output.pitch-previous.pitch)*phase)-
+                       (before.pitch+(current.pitch-before.pitch)*phase)-1)<1e-9,
+              "pitch preserves existing mouse interpolation");
+    }
+    for (int hz : {60,144,240}) {
+        SmoothMouseOutput smooth;
+        smooth.reset({0,0});
+        Angles angle{}, previous{};
+        for (int frame=0; frame<hz*8; ++frame) {
+            const double time=double(frame)/hz;
+            const Angles desired{20*std::sin(time), 7*std::sin(time*0.7)};
+            if (int(time*20)!=int((time-1.0/hz)*20)) previous=angle;
+            const auto output=smooth.apply(angle,desired,1.0/hz,0.5,70);
+            previous=shiftedPrevious(previous,angle,output);
+            check(std::abs(output.yaw-angle.yaw)<2.0,"moving target has no snap on reversals");
+            check(std::abs(previous.yaw-output.yaw)<1e-8,"no tick-reset sawtooth after paired output");
+            angle=output;
+        }
+    }
+    for(int hz : {60,144,240}) for(int speed : {1,35,100}) {
+        SmoothMouseOutput output;
+        output.reset({0,0});
+        Angles angle{};
+        const double dt=1.0/hz;
+        angle=output.apply(angle,{20,10},dt,0.5,speed);
+        check(angle.yaw<20 && angle.pitch<10,"Smooth at 100% is not a hard lock");
+        double previous=angle.yaw;
+        for(int frame=0;frame<hz*20;++frame) {
+            angle=output.apply(angle,{20,10},dt,0.5,speed);
+            check(angle.yaw>=previous-1e-6 && angle.yaw<=20.00001,"settling does not overshoot or oscillate");
+            check(std::isfinite(angle.pitch),"finite pitch");
+            previous=angle.yaw;
+        }
+        output.reset({-45,0}); // Mode/target changes reset residual mouse counts.
+        angle=output.apply({-45,0},{-45,0},dt,0.5,speed);
+        check(std::abs(angle.yaw+45)<1e-9,"no old residual kick after reset");
+    }
+    std::printf("%d checks, %d failures\n",checks,failed);
+    return failed ? 1 : 0;
+}

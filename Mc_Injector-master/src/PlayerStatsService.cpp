@@ -267,13 +267,16 @@ void PlayerStatsService::finishHypixelLookup(QNetworkReply *reply,
     const QString networkError = reply->errorString();
     m_reply.clear();
     reply->deleteLater();
+    const QJsonObject root = QJsonDocument::fromJson(document).object();
     if (tooLarge || !networkOk || status < 200 || status >= 300) {
+        QString cause = root.value(QStringLiteral("cause")).toString(networkError);
+        if (m_apiKeys != nullptr && !m_apiKeys->apiKey().isEmpty())
+            cause.replace(QString::fromUtf8(m_apiKeys->apiKey()), QStringLiteral("[redacted]"));
         failActive(status == 429 ? QStringLiteral("Hypixel rate limit reached")
-                                 : QStringLiteral("Hypixel query failed: %1").arg(networkError));
+            : QStringLiteral("Hypixel HTTP %1: %2").arg(status).arg(cause.left(180)));
         return;
     }
 
-    const QJsonObject root = QJsonDocument::fromJson(document).object();
     const QJsonObject player = root.value(QStringLiteral("player")).toObject();
     if (!root.value(QStringLiteral("success")).toBool(false) || player.isEmpty()) {
         failActive(QStringLiteral("unavailable"));

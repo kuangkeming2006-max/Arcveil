@@ -24,6 +24,7 @@ using namespace mcoverlay::bindings;
     mapping.livingSignature = "Lexample/lunar/Living;";
     mapping.entityName = "example.lunar.Entity";
     mapping.entitySignature = "Lexample/lunar/Entity;";
+    mapping.entityPlayerSignature = "Lexample/lunar/Player;";
     mapping.aabbName = "example.lunar.Box";
     mapping.aabbSignature = "Lexample/lunar/Box;";
     mapping.worldName = "example.lunar.World";
@@ -113,6 +114,42 @@ int main()
         "Lnet/minecraft/client/Minecraft;", forge);
     passed &= expect(forge.family() == ClientFamily::Forge, "Forge environment detection");
     passed &= expect(forgeCandidates.count == 1U, "Forge provider selection");
+    passed &= expect(forgeCandidates.items[0] &&
+        forgeCandidates.items[0]->previousRotationYawField == "field_70126_B" &&
+        forgeCandidates.items[0]->previousRotationPitchField == "field_70127_C",
+        "Forge current/previous camera rotations mapped independently");
+    passed &= expect(forgeCandidates.items[0] &&
+        forgeCandidates.items[0]->clickMouse == "func_147116_af" &&
+        forgeCandidates.items[0]->sendClickBlock == "func_147115_a" &&
+        forgeCandidates.items[0]->moveFlying == "func_70060_a" &&
+        forgeCandidates.items[0]->isSprinting == "func_70051_ag" &&
+        forgeCandidates.items[0]->setSprinting == "func_70031_b" &&
+        forgeCandidates.items[0]->entityRendererName ==
+            "net.minecraft.client.renderer.EntityRenderer" &&
+        forgeCandidates.items[0]->updateCameraAndRender == "func_181560_a" &&
+        forgeCandidates.items[0]->orientCamera == "func_78467_g" &&
+        forgeCandidates.items[0]->setAngles == "func_70082_c" &&
+        forgeCandidates.items[0]->renderGlobalName ==
+            "net.minecraft.client.renderer.RenderGlobal" &&
+        forgeCandidates.items[0]->setupTerrain == "func_174970_a" &&
+        forgeCandidates.items[0]->setupTerrainDescriptor ==
+            "(Lnet/minecraft/entity/Entity;DLnet/minecraft/client/renderer/culling/ICamera;IZ)V" &&
+        forgeCandidates.items[0]->thirdPersonViewField == "field_74320_O" &&
+        forgeCandidates.items[0]->movementInputFields[0] == "field_70702_br" &&
+        forgeCandidates.items[0]->movementInputFields[1] == "field_70701_bs" &&
+        forgeCandidates.items[0]->jump == "func_70664_aZ" &&
+        forgeCandidates.items[0]->rayBlockPosField == "field_178783_e" &&
+        forgeCandidates.items[0]->raySideHitField == "field_178784_b" &&
+        forgeCandidates.items[0]->rayTraceBlocks == "func_147447_a",
+        "Forge authoritative movement, interaction and world ray mappings");
+    passed &= expect(forgeCandidates.items[0] &&
+        forgeCandidates.items[0]->movementPacketName ==
+            "net.minecraft.network.play.client.C03PacketPlayer" &&
+        forgeCandidates.items[0]->writeMovementPacket == "func_148840_b" &&
+        forgeCandidates.items[0]->packetYawField == "field_149476_e" &&
+        forgeCandidates.items[0]->packetPitchField == "field_149473_f" &&
+        forgeCandidates.items[0]->packetRotatingField == "field_149481_i",
+        "Forge silent output maps only the outgoing movement packet");
 
     MappingRegistry lunarBuiltins;
     ClientEnvironment lunar;
@@ -125,7 +162,43 @@ int main()
     passed &= expect(lunarBuiltins.hasMappingsForFamily(ClientFamily::Lunar),
                      "Lunar legacy namespace is registered");
     passed &= expect(lunarCandidates.count == 1U,
-                     "Lunar legacy provider reuses the verified Notch namespace");
+                      "Lunar legacy provider reuses the verified Notch namespace");
+    passed &= expect(lunarCandidates.items[0] &&
+        lunarCandidates.items[0]->previousRotationYawField == "A" &&
+        lunarCandidates.items[0]->previousRotationPitchField == "B",
+        "Notch previous camera rotations verified against MCP SRG");
+    passed &= expect(lunarCandidates.items[0] &&
+        lunarCandidates.items[0]->clickMouse == "aw" &&
+        lunarCandidates.items[0]->sendClickBlock == "b" &&
+        lunarCandidates.items[0]->moveFlying == "a" &&
+        lunarCandidates.items[0]->isSprinting == "aw" &&
+        lunarCandidates.items[0]->setSprinting == "d" &&
+        lunarCandidates.items[0]->entityRendererName == "bfk" &&
+        lunarCandidates.items[0]->updateCameraAndRender == "a" &&
+        lunarCandidates.items[0]->orientCamera == "f" &&
+        lunarCandidates.items[0]->setAngles == "c" &&
+        lunarCandidates.items[0]->renderGlobalName == "bfr" &&
+        lunarCandidates.items[0]->setupTerrain == "a" &&
+        lunarCandidates.items[0]->setupTerrainDescriptor ==
+            "(Lpk;DLbia;IZ)V" &&
+        lunarCandidates.items[0]->thirdPersonViewField == "aB" &&
+        lunarCandidates.items[0]->movementInputFields[0] == "aZ" &&
+        lunarCandidates.items[0]->movementInputFields[1] == "ba" &&
+        lunarCandidates.items[0]->jump == "bF" &&
+        lunarCandidates.items[0]->swingItem == "bw" &&
+        lunarCandidates.items[0]->blockPosCoordinateMethods[0] == "n" &&
+        lunarCandidates.items[0]->facingIndexMethod == "a" &&
+        lunarCandidates.items[0]->rayHitName == "auh" &&
+        lunarCandidates.items[0]->getItemUseDuration == "bT" &&
+        lunarCandidates.items[0]->getEyeHeight == "aS",
+        "Notch click, hit result and live bow charge mappings");
+    passed &= expect(lunarCandidates.items[0] &&
+        lunarCandidates.items[0]->movementPacketName == "ip" &&
+        lunarCandidates.items[0]->writeMovementPacket == "b" &&
+        lunarCandidates.items[0]->packetYawField == "d" &&
+        lunarCandidates.items[0]->packetPitchField == "e" &&
+        lunarCandidates.items[0]->packetRotatingField == "h",
+        "Notch silent output packet mappings match MCP 1.8.9 SRG");
     passed &= expect(lunarCandidates.items[0] != nullptr &&
                          lunarCandidates.items[0]->scoreObjectiveName == "auk" &&
                          lunarCandidates.items[0]->scoreObjectiveSignature == "Lauk;" &&
@@ -172,7 +245,31 @@ int main()
     passed &= expect(lunarNamed.family() == ClientFamily::Lunar,
                      "Lunar named environment detection");
     passed &= expect(lunarNamedCandidates.count == 1U,
-                     "Lunar MCP-named provider selection");
+                      "Lunar MCP-named provider selection");
+    passed &= expect(lunarNamedCandidates.items[0] &&
+        lunarNamedCandidates.items[0]->previousRotationYawField == "prevRotationYaw" &&
+        lunarNamedCandidates.items[0]->previousRotationPitchField == "prevRotationPitch",
+        "Lunar named previous camera rotations");
+    passed &= expect(lunarNamedCandidates.items[0] &&
+        lunarNamedCandidates.items[0]->clickMouse == "clickMouse" &&
+        lunarNamedCandidates.items[0]->sendClickBlock ==
+            "sendClickBlockToController" &&
+        lunarNamedCandidates.items[0]->moveFlying == "moveFlying" &&
+        lunarNamedCandidates.items[0]->isSprinting == "isSprinting" &&
+        lunarNamedCandidates.items[0]->setSprinting == "setSprinting" &&
+        lunarNamedCandidates.items[0]->movementInputFields[0] == "moveStrafing" &&
+        lunarNamedCandidates.items[0]->movementInputFields[1] == "moveForward" &&
+        lunarNamedCandidates.items[0]->jump == "jump" &&
+        lunarNamedCandidates.items[0]->swingItem == "swingItem" &&
+        lunarNamedCandidates.items[0]->rayTraceBlocks == "rayTraceBlocks" &&
+        lunarNamedCandidates.items[0]->getItemUseDuration == "getItemInUseDuration",
+        "Lunar named click and bow bindings");
+    passed &= expect(lunarNamedCandidates.items[0] &&
+        lunarNamedCandidates.items[0]->writeMovementPacket == "writePacketData" &&
+        lunarNamedCandidates.items[0]->packetYawField == "yaw" &&
+        lunarNamedCandidates.items[0]->packetPitchField == "pitch" &&
+        lunarNamedCandidates.items[0]->packetRotatingField == "rotating",
+        "Lunar named silent output packet members");
     passed &= expect(lunarNamedCandidates.items[0] != nullptr &&
                          lunarNamedCandidates.items[0]->id ==
                              "minecraft-1.8.9-lunar-mcp",
@@ -192,6 +289,22 @@ int main()
                              "setKeyBindState" &&
                          lunarNamedCandidates.items[0]->isAirBlock == "isAirBlock",
                      "Lunar named dictionary exposes optional Safewalk mappings");
+    passed &= expect(lunarNamedCandidates.items[0] != nullptr &&
+        lunarNamedCandidates.items[0]->attackEntity == "attackEntity" &&
+        lunarNamedCandidates.items[0]->currentScreenField == "currentScreen" &&
+        lunarNamedCandidates.items[0]->getCollidingBoundingBoxes == "getCollidingBoundingBoxes",
+        "Lunar must not inherit SRG attack/input/collision member names");
+    passed &= expect(lunarNamedCandidates.items[0] &&
+        lunarNamedCandidates.items[0]->entityRendererName ==
+            "net.minecraft.client.renderer.EntityRenderer" &&
+        lunarNamedCandidates.items[0]->updateCameraAndRender == "updateCameraAndRender" &&
+        lunarNamedCandidates.items[0]->orientCamera == "orientCamera" &&
+        lunarNamedCandidates.items[0]->setAngles == "setAngles" &&
+        lunarNamedCandidates.items[0]->renderGlobalName ==
+            "net.minecraft.client.renderer.RenderGlobal" &&
+        lunarNamedCandidates.items[0]->setupTerrain == "setupTerrain" &&
+        lunarNamedCandidates.items[0]->thirdPersonViewField == "thirdPersonView",
+        "Lunar named FreeLook mappings remain namespace-correct");
 
     MappingRegistry external;
     std::string error;

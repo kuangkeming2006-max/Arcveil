@@ -1,4 +1,6 @@
 #include "SkinProfileService.h"
+#include "SkinImage.h"
+#include <QCryptographicHash>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -75,6 +77,7 @@ void SkinProfileService::lookup(const QString &playerName)
     m_requestedName = name;
     m_displayName = name;
     m_skinUrl.clear();
+    m_slim = false;
     m_errorMessage.clear();
     if (!validName(name)) {
         emit changed();
@@ -146,10 +149,12 @@ void SkinProfileService::finishProfile(QNetworkReply *reply, const quint64 gener
             break;
         }
     }
-    QUrl skin(QJsonDocument::fromJson(QByteArray::fromBase64(texturesValue)).object()
+    const QJsonObject skinObject = QJsonDocument::fromJson(QByteArray::fromBase64(texturesValue)).object()
                   .value(QStringLiteral("textures")).toObject()
-                  .value(QStringLiteral("SKIN")).toObject()
-                  .value(QStringLiteral("url")).toString());
+                  .value(QStringLiteral("SKIN")).toObject();
+    m_slim = skinObject.value(QStringLiteral("metadata")).toObject()
+                 .value(QStringLiteral("model")).toString() == QStringLiteral("slim");
+    QUrl skin(skinObject.value(QStringLiteral("url")).toString());
     if (skin.scheme() == QStringLiteral("http")) skin.setScheme(QStringLiteral("https"));
     if (!skin.isValid() || skin.scheme() != QStringLiteral("https") ||
         skin.host().compare(QStringLiteral("textures.minecraft.net"), Qt::CaseInsensitive) != 0) {
@@ -186,6 +191,8 @@ void SkinProfileService::finishSkin(QNetworkReply *reply, const quint64 generati
         return;
     }
 
+    if (skin.height()==32) m_slim=false;
+    skin = skin::normalize(skin);
     const QString cacheDirectory = QStandardPaths::writableLocation(
         QStandardPaths::CacheLocation) + QStringLiteral("/skins");
     if (!QDir().mkpath(cacheDirectory)) {
@@ -193,7 +200,8 @@ void SkinProfileService::finishSkin(QNetworkReply *reply, const quint64 generati
         return;
     }
     const QString cachePath = cacheDirectory + QLatin1Char('/') +
-                              m_requestedName.toLower() + QStringLiteral(".png");
+                              QString::fromLatin1(QCryptographicHash::hash(body,
+                                  QCryptographicHash::Sha256).toHex()) + QStringLiteral("-uv2.png");
     QSaveFile output(cachePath);
     if (!output.open(QIODevice::WriteOnly) || !skin.save(&output, "PNG") ||
         !output.commit()) {

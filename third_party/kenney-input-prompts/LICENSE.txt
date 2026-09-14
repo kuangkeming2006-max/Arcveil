@@ -1,0 +1,16 @@
+Input Prompts (1.5A)
+
+Created/distributed by Kenney (www.kenney.nl)
+Creation date: 11-07-2026
+
+License: Creative Commons Zero, CC0 1.0
+https://creativecommons.org/publicdomain/zero/1.0/
+
+You can use this content for personal, educational, and commercial purposes.
+
+Support by crediting "Kenney" or "www.kenney.nl" (this is not a requirement).
+
+Source asset: https://kenney.nl/assets/input-prompts
+Files embedded by Arcveil:
+- kenney_keyboard_mouse.png
+- kenney_keyboard_mouse.xml

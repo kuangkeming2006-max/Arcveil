@@ -1,7 +1,11 @@
 #pragma once
+#include "MediaHotkeyEdges.h"
 
 #include "bindings/GameBindings.h"
 #include "wndproc_hook.h"
+#include "UiPreferences.h"
+#include "UiMotion.h"
+#include "gaussian_blur.h"
 
 #include <windows.h>
 
@@ -17,7 +21,7 @@ namespace mcoverlay {
 struct OverlayInputState;
 
 struct FeatureSettings final {
-    static constexpr std::size_t FeatureHotkeyCount = 15U;
+    static constexpr std::size_t FeatureHotkeyCount = 18U;
     bool espEnabled = true;
     bool entityEspEnabled = true;
     bool entityEspPlayersOnly = false;
@@ -49,10 +53,25 @@ struct FeatureSettings final {
     bool bhopEnabled = false;
     bool bhopAutoJump = true;
     bool aimAssistEnabled = false;
-    bool aimSlowdownMode = true;
+    bool aimLockOnMode = false;
+    bool aimSilentLock = false;
+    bool silentFileDebug = false;
+    bool silentChatDebug = false;
+    bool aimScannerEnabled = true;
+    bool aimAttackViability = true;
+    // Independent opt-in for remapping vanilla movement/jump/sprint while
+    // Silent Lock owns the logical rotation. Attack-ray policy must never
+    // implicitly enable or disable this behaviour.
+    bool silentControlAdaptation = false;
+    // Rotates through attack-ready targets instead of waiting on one target's
+    // hurt/click cooldown. One physical click still emits at most one attack.
+    bool aimSequentialTargets = false;
+    // Integrated-single-player only. The binding layer repeats this guard.
+    bool bedBreakerEnabled = false;
     bool aimNearestPriority = true;
     bool textGuiEnabled = false;
     bool textGuiVerticalLine = true;
+    bool textGuiShowModes = false;
     bool knockbackPredictionEnabled = false;
     bool bowPredictionEnabled = false;
     // These controls are enforced again inside GameBindings. They can never
@@ -64,6 +83,7 @@ struct FeatureSettings final {
     bool fireballEspEnabled = false;
     bool fireballEspFilled = true;
     bool longJumpEnabled = false;
+    bool freeLookEnabled = false;
     // High-risk movement helpers fail closed on Hypixel. This explicit,
     // persisted opt-in is intentionally separate from each feature switch so
     // an accidental hotkey press can never silently override the server guard.
@@ -94,18 +114,24 @@ struct FeatureSettings final {
     int flySpeedPercent = 100;
     int bhopAirSpeedPercent = 100;
     int longJumpSpeedPercent = 100;
-    int aimSlowdownPercent = 45;
+    int aimSlowdownPercent = 45; // Reserved legacy wire slot; no sensitivity modification.
     int aimSpeedPercent = 35;
     int aimMinimumDistance = 0;
     int aimMaximumDistance = 16;
     int aimFovDegrees = 90;
+    int aimAttackCps = 10;
     int textGuiAlignment = 2; // 0=left, 1=center, 2=right
     int localMobReach = 4;
     int localAttackDelayMs = 500;
     int localVelocityPercent = 100;
+    int localVelocityProbability = 100;
+    int localVelocityVerticalPercent = 100;
     int clickGuiWidthPercent = 100;
     int clickGuiHeightPercent = 100;
     int clickGuiOpacity = 96;
+    int clickGuiBlur = 65;
+    int imePanelX = -1;
+    int imePanelY = -1;
     int textGuiX = -1;
     int textGuiY = -1;
     // Stored as 0xRRGGBB so the value is renderer-independent and can travel
@@ -191,6 +217,7 @@ struct BlacklistOverlaySnapshot final {
     bool showWithClickGui = true;
     bool collapsed = false;
     int panelOpacity = 82;
+    int contentScale = 100;
     std::uint32_t panelColor = 0x111218U;
     int panelX = -1;
     int panelY = -1;
@@ -217,8 +244,40 @@ struct BlacklistAction final {
     bool showWithClickGui = true;
     bool collapsed = false;
     int panelOpacity = 82;
+    int contentScale = 100;
     std::uint32_t panelColor = 0x111218U;
 };
+
+struct MediaOverlaySettings final {
+    bool enabled = true;
+    int opacity = 58;
+    int spectrumOpacity = 100;
+    // Continuous whole-card scale. Every internal coordinate is derived from
+    // the same design-space multiplier so typography and controls stay aligned.
+    int scalePercent = 52;
+    int previousHotkey = VK_MEDIA_PREV_TRACK;
+    int toggleHotkey = VK_MEDIA_PLAY_PAUSE;
+    int nextHotkey = VK_MEDIA_NEXT_TRACK;
+    std::uint32_t panelColor = 0x857F82U;
+    int panelX = -1;
+    int panelY = -1;
+    [[nodiscard]] bool operator==(const MediaOverlaySettings&) const noexcept = default;
+};
+
+struct MediaPlaybackSnapshot final {
+    bool available = false;
+    bool playing = false;
+    std::array<char, 192U> title{};
+    std::array<char, 160U> artist{};
+    std::array<char, 160U> source{};
+    std::array<char, 512U> coverPath{};
+    std::int64_t positionMs = 0;
+    std::int64_t durationMs = 0;
+    std::uint64_t receivedAtMs = 0U;
+    std::array<float, 10U> spectrum{};
+};
+
+enum class MediaAction : std::uint8_t { None, Previous, Toggle, Next };
 
 class OverlayRenderer final {
 public:
@@ -243,6 +302,10 @@ public:
     void setHypixelSnapshot(const HypixelOverlaySnapshot& snapshot) noexcept;
     void setPlayerStatsSnapshot(const PlayerStatsOverlaySnapshot& snapshot) noexcept;
     void setBlacklistSnapshot(const BlacklistOverlaySnapshot& snapshot) noexcept;
+    void setMediaSnapshot(const MediaPlaybackSnapshot& snapshot) noexcept;
+    void setMediaSettings(const MediaOverlaySettings& settings) noexcept;
+    [[nodiscard]] bool consumeMediaSettings(MediaOverlaySettings& settings) noexcept;
+    [[nodiscard]] MediaAction consumeMediaAction() noexcept;
     [[nodiscard]] bool consumeBlacklistAction(BlacklistAction& action) noexcept;
     [[nodiscard]] bool consumeHypixelQuery(std::array<char, 17U>& playerId) noexcept;
     void setMenuHotkey(unsigned virtualKey) noexcept;
@@ -250,13 +313,16 @@ public:
     void setGuiScaleIndex(int index) noexcept;
     [[nodiscard]] bool consumeGuiScaleChange(int& index) noexcept;
     [[nodiscard]] bool consumeBedRescanRequest() noexcept;
+    void setGameScreenOpen(bool open) noexcept;
 
 private:
+    friend struct OverlayRendererTestAccess;
     [[nodiscard]] bool initialize(HWND window, HGLRC context) noexcept;
     void pollFallbackInput() noexcept;
     void captureBackdropTexture() noexcept;
     void renderInventoryBlur(float strength) noexcept;
     void renderImeOverlay(float deltaSeconds, float uiScale) noexcept;
+    void renderMediaOverlay(float deltaSeconds, float uiScale, bool interactive) noexcept;
     void applyGuiScaleStyle(float scale, int fontIndex) noexcept;
     void enqueueFeatureToasts(const FeatureSettings& before,
                               const FeatureSettings& after) noexcept;
@@ -295,7 +361,17 @@ private:
     HypixelOverlaySnapshot m_hypixel{};
     PlayerStatsOverlaySnapshot m_playerStats{};
     BlacklistOverlaySnapshot m_blacklist{};
+    MediaPlaybackSnapshot m_media{};
+    MediaOverlaySettings m_mediaSettings{};
+    MediaHotkeyEdges m_mediaKeyEdges;
     BlacklistAction m_blacklistAction{};
+    std::uint64_t m_blacklistLayoutPendingUntil = 0U;
+    std::uint64_t m_blacklistSettingsPendingUntil = 0U;
+    std::array<char, 81U> m_blacklistSearch{};
+    std::array<char, 50U> m_blacklistDeleteKey{};
+    SmoothScroll m_navigationScroll;
+    std::array<SmoothScroll, 23U> m_settingsScroll{};
+    SmoothScroll m_blacklistScroll;
     bool m_blacklistActionDirty = false;
     bool m_featureSettingsDirty = false;
     bool m_hypixelQueryPending = false;
@@ -307,7 +383,7 @@ private:
     float m_statsPanelVelocity = 0.0F;
     float m_blacklistPanelProgress = 0.0F;
     float m_blacklistPanelVelocity = 0.0F;
-    float m_toggleAnimation[48]{};
+    float m_toggleAnimation[64]{};
     float m_clickGuiX = -9999.0F;
     float m_clickGuiY = 18.0F;
     double m_lastBedRefreshTime = 0.0;
@@ -317,6 +393,9 @@ private:
     std::array<ImFont*, 4U> m_fonts{};
     std::array<ImFont*, 4U> m_boldFonts{};
     ImFont* m_imeFont = nullptr;
+    // A single, card-local font atlas entry covers Chinese and Japanese media
+    // metadata. It is never installed as ImGui's default GUI font.
+    ImFont* m_mediaFont = nullptr;
     unsigned m_menuHotkey = VK_OEM_7;
     bool m_menuHotkeyDirty = false;
     bool m_guiScaleDirty = false;
@@ -324,15 +403,69 @@ private:
     bool m_waitingForHotkey = false;
     int m_hotkeyCaptureCooldownFrames = 0;
     bool m_hotkeyCaptureArmed = false;
-    int m_hotkeyCaptureTarget = 0; // 1=menu, 2=bed, 3=stats, 4=safewalk
+    int m_hotkeyCaptureTarget = 0; // 1=menu, 2=bed, 3=stats, 4=safewalk, 5..7=media
     int m_clickGuiPage = 0;
     int m_previousClickGuiPage = 0;
     float m_clickGuiPageProgress = 1.0F;
     float m_clickGuiNavPosition = 0.0F;
-    std::array<float, 19U> m_clickGuiNavHover{};
+    std::array<char, 96U> m_featureSearch{};
+    float m_searchIslandProgress = 0.0F;
+    float m_searchTransitionFrom = 0.0F;
+    float m_searchTransitionTarget = 0.0F;
+    double m_searchTransitionStartedAt = 0.0;
+    double m_searchActivationStartedAt = 0.0;
+    double m_searchLoadingStartedAt = 0.0;
+    float m_searchClearProgress = 0.0F;
+    float m_searchHoverProgress = 0.0F;
+    bool m_searchInputActive = false;
+    bool m_searchIslandOpen = false;
+    bool m_searchFocusRequested = false;
+    std::array<float, 23U> m_clickGuiNavHover{};
+    bool m_mediaSettingsDirty = false;
+    MediaAction m_mediaAction = MediaAction::None;
+    float m_mediaPanelProgress = 0.0F;
+    float m_mediaPanelVelocity = 0.0F;
+    bool m_mediaDragging = false;
+    float m_mediaDragOffsetX = 0.0F;
+    float m_mediaDragOffsetY = 0.0F;
+    std::array<bool, 3U> m_mediaHotkeyWasDown{};
+    unsigned m_mediaCoverTexture = 0U;
+    unsigned m_mediaPreviousCoverTexture = 0U;
+    unsigned m_mediaKeycapTexture = 0U;
+    const char* m_mediaKeycapAtlasXml = nullptr;
+    std::size_t m_mediaKeycapAtlasXmlSize = 0U;
+    int m_mediaCoverWidth = 0;
+    int m_mediaCoverHeight = 0;
+    std::array<char, 512U> m_mediaLoadedCoverPath{};
+    std::array<char, 192U> m_mediaLoadedTitle{};
+    std::array<char, 160U> m_mediaLoadedArtist{};
+    std::array<char, 192U> m_mediaPreviousTitle{};
+    std::array<char, 160U> m_mediaPreviousArtist{};
+    std::array<float, 10U> m_mediaSpectrumDisplay{};
+    std::array<float, 3U> m_mediaAccent{{0.36F,0.70F,1.0F}};
+    float m_mediaTrackProgress = 1.0F;
+    float m_mediaTrackVelocity = 0.0F;
+    float m_mediaAnimatedWidth = 0.0F;
+    float m_mediaWidthVelocity = 0.0F;
+    float m_mediaPlayMorph = 0.0F;
+    float m_mediaPlayMorphVelocity = 0.0F;
+    std::array<bool, 4U> m_aimSectionOpen{{true, true, true, false}};
+    std::array<float, 4U> m_aimSectionProgress{{1.0F, 1.0F, 1.0F, 0.0F}};
+    std::array<float, 4U> m_aimSectionVelocity{};
+    // Natural expanded body heights are measured from real ImGui content.
+    // Keeping them separate from animation progress prevents fixed-height
+    // cards from clipping wrapped text or leaving text exactly on the border.
+    std::array<float, 4U> m_aimSectionBodyHeight{};
+    std::uint64_t m_mediaElapsedClockTick = 0U;
+    std::int64_t m_mediaElapsedFallbackMs = 0;
+    int m_mediaSlideDirection = -1;
     std::uint64_t m_lastImeRevision = 0U;
     std::uint64_t m_lastImeActivityTick = 0U;
     float m_imePanelProgress = 0.0F;
+    bool m_imePositionEditing = false;
+    bool m_imeDragging = false;
+    float m_imeEditX = 0.0F;
+    float m_imeEditY = 0.0F;
     float m_clickGuiThemeProgress = 0.0F;
     bool m_statsPanelTransformDirty = false;
     bool m_statsPanelDragging = false;
@@ -365,10 +498,10 @@ private:
     int m_blacklistResizeStartHeight = 100;
     bool m_safewalkHotkeyWasDown = false;
     std::array<bool, FeatureSettings::FeatureHotkeyCount> m_featureHotkeyWasDown{};
-    std::array<float, 18U> m_textGuiModuleProgress{};
-    std::array<float, 18U> m_textGuiModuleVelocity{};
-    std::array<std::array<float, 32U>, 18U> m_textGuiGlyphBrightness{};
-    std::array<std::array<float, 32U>, 18U> m_textGuiGlyphTargets{};
+    std::array<float, 19U> m_textGuiModuleProgress{};
+    std::array<float, 19U> m_textGuiModuleVelocity{};
+    std::array<std::array<float, 32U>, 19U> m_textGuiGlyphBrightness{};
+    std::array<std::array<float, 32U>, 19U> m_textGuiGlyphTargets{};
     std::uint64_t m_textGuiNextShuffleTick = 0U;
     bool m_textGuiGlyphsInitialized = false;
     bool m_scaffoldBlockedNoticeShown = false;
@@ -424,12 +557,11 @@ private:
     std::array<KnockbackVisual, GameSnapshot::MaxKnockbackTrajectories>
         m_knockbackVisuals{};
     std::uint64_t m_lastKnockbackGeneration = 0U;
-    BowTrajectory m_bowVisualTrajectory{};
-    bool m_bowVisualInitialized = false;
     std::uint64_t m_lastEntitySampleGeneration = 0U;
     float m_lastEntityPartialTicks = 0.0F;
     unsigned m_missedEntityTicks = 0U;
     unsigned m_blurTexture = 0U;
+    GaussianBlur m_gaussianBlur;
     unsigned m_bedTexture = 0U;
     unsigned m_blockTextures[6]{};
     int m_blurWidth = 0;

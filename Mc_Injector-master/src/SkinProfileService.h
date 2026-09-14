@@ -13,6 +13,7 @@ class SkinProfileService final : public QObject
     Q_PROPERTY(QString displayName READ displayName NOTIFY changed)
     Q_PROPERTY(QString skinUrl READ skinUrl NOTIFY changed)
     Q_PROPERTY(bool loading READ loading NOTIFY changed)
+    Q_PROPERTY(bool slim READ slim NOTIFY changed)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY changed)
 
 public:
@@ -22,6 +23,7 @@ public:
     [[nodiscard]] QString displayName() const { return m_displayName; }
     [[nodiscard]] QString skinUrl() const { return m_skinUrl; }
     [[nodiscard]] bool loading() const noexcept { return m_loading; }
+    [[nodiscard]] bool slim() const noexcept { return m_slim; }
     [[nodiscard]] QString errorMessage() const { return m_errorMessage; }
 
 public slots:
@@ -45,4 +47,5 @@ private:
     QString m_errorMessage;
     quint64 m_generation = 0;
     bool m_loading = false;
+    bool m_slim = false;
 };

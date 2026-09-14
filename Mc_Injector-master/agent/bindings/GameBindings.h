@@ -13,6 +13,17 @@
 
 #include "BedWarsState.h"
 #include "MappingProvider.h"
+#include "AimControl.h"
+#include "SilentLockCoordinator.h"
+#include "LiveInteractionTransform.h"
+#include "LiveAttackTransform.h"
+#include "LiveInteractionObserver.h"
+#include "LiveMovementTransform.h"
+#include "LiveJumpTransform.h"
+#include "LivePacketTransform.h"
+#include "LiveFreeLookTransform.h"
+#include "FreeLookDiagnostics.h"
+#include "KnockbackEvidence.h"
 
 namespace mcoverlay {
 
@@ -45,6 +56,8 @@ struct EntityMarker final {
     jint entityId = -1;
     float health = 0.0F;
     float maxHealth = 0.0F;
+    int hurtTime = -1;
+    bool groundKnown = false;
     double distance = 0.0;
     bool player = false;
     bool hostile = false;
@@ -86,6 +99,8 @@ struct BowTrajectory final {
     jint impactEntityId = -1;
     bool hasImpact = false;
     bool impactPlayer = false;
+    bool impactLiving = false;
+    bool budgetLimited = false;
     bool active = false;
 };
 
@@ -158,15 +173,21 @@ struct GameSnapshot final {
     bool singlePlayer = false;
     bool integratedSinglePlayer = false;
     bool hypixelServer = false;
+    bool gameScreenOpen = true;
     std::array<EntityMarker, MaxEntityMarkers> entityMarkers{};
     std::uint32_t entityMarkerCount = 0U;
     // Incremented only when the 20 Hz JNI entity snapshot is refreshed. The
     // renderer combines this with renderPartialTicks to detect a game-tick
     // boundary that happened between two snapshots and briefly extrapolate it.
     std::uint64_t entitySampleGeneration = 0U;
+    std::uint64_t worldGeneration = 0U;
+    double entityRenderTick = 0.0;
     std::array<KnockbackTrajectory, MaxKnockbackTrajectories>
         knockbackTrajectories{};
     std::uint8_t knockbackTrajectoryCount = 0U;
+    bool knockbackHurtAvailable = false;
+    std::uint32_t knockbackDamageEvents = 0, knockbackImpulseEvents = 0,
+                  knockbackConfirmedEvents = 0;
     BowTrajectory bowTrajectory{};
     std::array<BedMarker, MaxBedMarkers> bedMarkers{};
     std::uint32_t bedMarkerCount = 0U;
@@ -188,6 +209,9 @@ struct GameSnapshot final {
     int ownBedZ = 0;
     OwnBedSource ownBedSource = OwnBedSource::Unknown;
     WorldCameraSnapshot camera{};
+    jint aimTargetEntityId = -1;
+    jint aimAttackTargetEntityId = -1;
+    bool silentAimAvailable = false;
     std::uint32_t mappingAttempt = 0U;
     std::uint32_t mappingRetryInMs = 0U;
     const char* mapping = "unresolved";
@@ -202,17 +226,33 @@ struct GameplaySettings final {
     bool bhopAutoJump = true;
     bool aimAssist = false;
     bool longJump = false;
-    bool aimSlowdownMode = true;
+    bool aimLockOnMode = false;
+    bool aimSilentLock = false;
+    bool silentFileDebug = false;
+    bool silentChatDebug = false;
+    bool aimAttackViability = true;
+    bool silentControlAdaptation = false;
+    bool aimSequentialTargets = false;
     bool aimNearestPriority = true;
+    bool bedBreaker = false;
     bool localMobAura = false;
     bool localVelocity = false;
+    // Keep the user's UI request separate from runtime gating so FreeLook's
+    // always-on diagnostic trace can explain why an enabled toggle did not
+    // become an active camera request.
+    bool freeLookConfigured = false;
+    bool freeLookGuiOpen = false;
+    bool freeLookForeground = false;
+    bool freeLook = false;
+    int freeLookHotkey = VK_LMENU;
     int safewalkReleaseDelayMs = 120;
     int safewalkEdgeSensitivity = 55;
     int safewalkMinimumPitch = -5;
     int flySpeedPercent = 100;
     int bhopAirSpeedPercent = 100;
-    int aimSlowdownPercent = 45;
+    int aimSlowdownPercent = 45; // Legacy transport compatibility only.
     int aimSpeedPercent = 35;
+    int aimAttackCps = 10;
     int aimMinimumDistance = 0;
     int aimMaximumDistance = 16;
     int aimFovDegrees = 90;
@@ -220,6 +260,8 @@ struct GameplaySettings final {
     int localMobReach = 4;
     int localAttackDelayMs = 500;
     int localVelocityPercent = 100;
+    int localVelocityProbability = 100;
+    int localVelocityVerticalPercent = 100;
 };
 
 // Minecraft 1.8.9-only JNI binding cache. Only jclass global references and
@@ -261,11 +303,26 @@ public:
     // folded into a by-value copy, so the resolver never writes render-owned
     // memory. The immutable cache is published with release/acquire ordering.
     [[nodiscard]] GameSnapshot snapshot(std::uint64_t tickMilliseconds) const noexcept;
+    // Render-thread-only cheap state read; avoid copying the entire entity /
+    // trajectory snapshot just to decide whether title-menu input is allowed.
+    [[nodiscard]] bool hasPlayerSnapshot() const noexcept {
+        return m_snapshot.state == GameSnapshot::State::Ready;
+    }
+    [[nodiscard]] bool gameScreenOpen(JNIEnv* env) noexcept;
     [[nodiscard]] const GameSnapshot& sample(JNIEnv* env, std::uint64_t tickMilliseconds) noexcept;
     // ActiveRenderInfo is refreshed by Minecraft during every 3D world pass.
     // This lightweight copy intentionally runs once per SwapBuffers frame so
     // yaw/pitch, FOV and view-bobbing never inherit the 10 Hz telemetry limit.
     void sampleCamera(JNIEnv* env) noexcept;
+    void sampleBow(JNIEnv* env, GameSnapshot& snapshot, bool enabled) noexcept;
+    jobject serializeLogicalPacket(JNIEnv* env, jobject packet) noexcept;
+    void deactivateSilentOutput() noexcept;
+    jint aimTargetId() const noexcept { return m_logicalController.targetId(); }
+    jint aimAttackTargetId() const noexcept {
+        return m_logicalController.attackTargetId();
+    }
+    bool silentAvailable() const noexcept;
+    bool silentAttackAvailable() const noexcept;
     // Releases/reacquires LWJGL's mouse grab through Minecraft's own focus
     // methods. Must be called from the Java-owned render thread.
     [[nodiscard]] bool setInputCaptured(JNIEnv* env, bool guiOpen) noexcept;
@@ -274,8 +331,8 @@ public:
     // LWJGL release path each frame without repeatedly invoking Minecraft's
     // mapped focus methods.
     [[nodiscard]] bool maintainInputReleased(JNIEnv* env) noexcept;
-    // Main-thread edge assistant. It samples only four support blocks beneath
-    // the player's AABB and controls Minecraft's own sneak KeyBinding. The
+    // Main-thread edge assistant. It queries current/predicted foot collision
+    // geometry and controls Minecraft's own sneak KeyBinding. The
     // method restores the physical key state whenever the feature disables,
     // the world disappears, or the agent shuts down.
     [[nodiscard]] bool updateGameplay(JNIEnv* env,
@@ -327,6 +384,34 @@ private:
     [[nodiscard]] bool ensureLwjglKeyboardBindings(JNIEnv* env) noexcept;
     [[nodiscard]] bool queryLwjglKeyDown(JNIEnv* env, int lwjglKey,
                                          bool& down) noexcept;
+    [[nodiscard]] jfloat beginLogicalMovement(JNIEnv* env, jobject entity,
+                                              jfloat strafe,
+                                              jfloat forward) noexcept;
+    [[nodiscard]] jfloat logicalMovementForward(JNIEnv* env, jobject entity,
+                                                 jfloat fallback) noexcept;
+    void endLogicalMovement(JNIEnv* env, jobject entity) noexcept;
+    [[nodiscard]] bool arbitrateLogicalSprint(JNIEnv* env,jobject entity,
+                                               bool requested) noexcept;
+    void beginLogicalJump(JNIEnv* env, jobject entity) noexcept;
+    void endLogicalJump(JNIEnv* env, jobject entity) noexcept;
+    void rotateFreeLookCamera(JNIEnv* env,jobject entity,jfloat yawDelta,
+                              jfloat pitchDelta) noexcept;
+    [[nodiscard]] jfloat freeLookCameraAngle(
+        JNIEnv* env,jobject entity,LiveFreeLookTransform::Angle angle) noexcept;
+    void endFreeLook(JNIEnv* env,const char* reason="disabled",
+                     bool forced=true) noexcept;
+    [[nodiscard]] bool setFreeLookPerspective(JNIEnv* env,int perspective,
+                                               int* previous=nullptr) noexcept;
+    [[nodiscard]] bool consumeLogicalInteraction(
+        JNIEnv* env, jobject minecraft, LiveInteractionTransform::Entry entry,
+        bool heldDown) noexcept;
+    [[nodiscard]] jobject arbitrateLogicalAttack(
+        JNIEnv* env,jobject originalTarget) noexcept;
+    [[nodiscard]] bool executeLogicalInteraction(
+        JNIEnv* env, jobject minecraft,
+        const silent::InteractionCommand& command) noexcept;
+    [[nodiscard]] silent::BlockRayHit traceLogicalBlock(
+        JNIEnv* env, jobject world, const silent::LogicalFramePlan& plan) noexcept;
     static void deleteGlobalRefs(JNIEnv* env, BindingCache& cache) noexcept;
 
     JavaVM* m_vm = nullptr;
@@ -346,6 +431,7 @@ private:
     std::atomic<std::uint64_t> m_retryAtMilliseconds{0U};
     std::uint64_t m_lastSample = 0U;
     std::uint64_t m_entitySampleGeneration = 0U;
+    std::uint64_t m_worldGeneration = 0U;
     std::uint64_t m_lastPlayerScan = 0U;
     std::uint64_t m_playerRosterGeneration = 0U;
     std::uint64_t m_debugRosterGeneration = 0U;
@@ -388,6 +474,18 @@ private:
     GameSnapshot::OwnBedSource m_lockedOwnBedSource =
         GameSnapshot::OwnBedSource::Unknown;
     GameSnapshot m_snapshot{};
+    struct KnockbackTrack {
+        int entityId = -1;
+        std::array<char, 37U> uuid{};
+        std::array<char, 17U> name{};
+        std::uint64_t lastSeen = 0;
+        WorldPoint position{};
+        prediction::KnockbackEvidence evidence;
+        prediction::Velocity pendingImpulse{};
+        std::uint64_t pendingAt=0U;
+        bool pendingPrediction=false;
+    };
+    std::array<KnockbackTrack, GameSnapshot::MaxEntityMarkers> m_knockbackTracks{};
 
     static constexpr std::size_t DebugQueueCapacity = 32U;
     static constexpr std::size_t DebugLineCapacity = 160U;
@@ -429,11 +527,53 @@ private:
     int m_safewalkSneakKeyCode = 0;
     std::uint8_t m_safewalkSupportMask = 0U;
     std::uint64_t m_safewalkReleaseAt = 0U;
-    jint m_aimTargetEntityId = -1;
-    jint m_aimFilteredTargetEntityId = -1;
-    float m_aimFilteredYaw = 0.0F;
-    float m_aimFilteredPitch = 0.0F;
-    bool m_aimFilterInitialized = false;
+    LivePacketTransform m_silentRotationHook;
+    LiveMovementTransform m_logicalMovementHook;
+    LiveJumpTransform m_logicalJumpHook;
+    LiveInteractionTransform m_logicalInteractionHook;
+    LiveAttackTransform m_attackOwnershipHook;
+    FreeLookDiagnostics m_freeLookDiagnostics;
+    LiveFreeLookTransform m_freeLookHook;
+    // A transformed client can finish loading the queue/click owner after the
+    // first usable render frame.  Failed installs are therefore retried with
+    // a cooldown instead of being permanently poisoned by a one-shot flag.
+    std::uint64_t m_nextSilentRotationHookAttemptTick = 0U;
+    std::uint64_t m_nextLogicalMovementHookAttemptTick = 0U;
+    std::uint64_t m_nextLogicalInteractionHookAttemptTick = 0U;
+    std::uint64_t m_nextAttackOwnershipHookAttemptTick = 0U;
+    std::uint64_t m_nextFreeLookHookAttemptTick = 0U;
+    std::uint8_t m_freeLookHookAttemptCount = 0U;
+    bool m_freeLookHookRetryLatched = false;
+    std::uint64_t m_nextAimCandidateDebugTick = 0U;
+    silent::LogicalStateController m_logicalController;
+    LiveInteractionObserver m_interactionObserver;
+    std::uint64_t m_nextInteractionObserverAttempt=0;
+    bool observeLogicalCamera(JNIEnv* env,jobject minecraft,bool leftDown) noexcept;
+    bool m_waitingVanillaResume=false;
+    std::atomic<bool> m_freeLookRequested{false};
+    std::atomic<int> m_freeLookHotkey{VK_LMENU};
+    jobject m_freeLookEntity=nullptr;
+    float m_freeLookYaw=0.0F;
+    float m_freeLookPitch=0.0F;
+    float m_freeLookPreviousYaw=0.0F;
+    float m_freeLookPreviousPitch=0.0F;
+    int m_freeLookPreviousPerspective=0;
+    bool m_freeLookPerspectiveSaved=false;
+    bool m_freeLookActive=false;
+    bool m_freeLookObservationInitialized=false;
+    bool m_freeLookUiRequestedObserved=false;
+    bool m_freeLookRuntimeRequestedObserved=false;
+    bool m_freeLookReadyObserved=false;
+    bool m_freeLookCapabilityObserved=false;
+    bool m_freeLookHeldObserved=false;
+    bool m_freeLookGuiObserved=false;
+    bool m_freeLookForegroundObserved=false;
+    bool m_freeLookNotReadyObserved=false;
+    bool m_freeLookActiveEventLogged=false;
+    std::uint8_t m_freeLookBridgeMask=0U;
+    std::uint64_t m_nextFreeLookVerboseTick=0U;
+    void observeActualInteraction(JNIEnv* env,LiveInteractionObserver::Event event,jobject argument) noexcept;
+    void observeDigPacket(JNIEnv* env,jobject packet) noexcept;
     std::uint64_t m_lastScaffoldPlacementTick = 0U;
     // Scaffold keeps the last supported block layer while the player is in
     // the air. Recomputing this from minY during a jump raises the target one
@@ -444,9 +584,12 @@ private:
     std::uint64_t m_lastLongJumpTick = 0U;
     bool m_aimSensitivityModified = false;
     float m_originalMouseSensitivity = 0.5F;
-    std::uint64_t m_bowDrawStartedAt = 0U;
-    std::uint64_t m_lastBowTrajectoryAt = 0U;
     std::uint64_t m_lastLocalAttackTick = 0U;
+    std::uint64_t m_lastBedBreakerTick = 0U;
+    int m_bedBreakerTargetX = 0;
+    int m_bedBreakerTargetY = 0;
+    int m_bedBreakerTargetZ = 0;
+    bool m_bedBreakerTargetValid = false;
     float m_lastLocalHealth = -1.0F;
     jint m_lastLocalEntityId = -1;
 };

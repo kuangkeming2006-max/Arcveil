@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     capture.beginCapture();
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(&application, &escape);
-    if (!require(canceled, "Escape did not emit captureCanceled") ||
+    if (!require(capturedKey==0 && !canceled, "Escape must bind None, not merely cancel capture") ||
         !require(!capture.capturing(), "capture stayed active after Escape")) return 1;
     std::puts("Hotkey capture tests passed.");
     return 0;

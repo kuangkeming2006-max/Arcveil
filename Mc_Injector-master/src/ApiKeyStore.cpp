@@ -1,4 +1,5 @@
 #include "ApiKeyStore.h"
+#include "ApiKeyFormat.h"
 
 #include <QSettings>
 
@@ -80,7 +81,7 @@ QByteArray ApiKeyStore::unprotect(const QByteArray &cipherText)
 
 void ApiKeyStore::load()
 {
-    const QByteArray environment = qEnvironmentVariable("HYPIXEL_API_KEY").trimmed().toUtf8();
+    const QByteArray environment = normalizeHypixelApiKey(qEnvironmentVariable("HYPIXEL_API_KEY"));
     if (!environment.isEmpty()) {
         replaceInMemory(environment);
         m_statusMessage = QStringLiteral("Using HYPIXEL_API_KEY from the process environment");
@@ -95,12 +96,9 @@ void ApiKeyStore::load()
 
 bool ApiKeyStore::saveKey(const QString &key)
 {
-    const QByteArray trimmed = key.trimmed().toUtf8();
-    if (trimmed.size() < 16 || trimmed.size() > 256 ||
-        std::any_of(trimmed.cbegin(), trimmed.cend(), [](const char value) {
-            return static_cast<unsigned char>(value) <= 0x20U;
-        })) {
-        m_statusMessage = QStringLiteral("Enter a valid Hypixel application API key");
+    const QByteArray trimmed = normalizeHypixelApiKey(key);
+    if (trimmed.isEmpty()) {
+        m_statusMessage = QStringLiteral("Paste the complete personal, production or development API key (no spaces or line breaks)");
         emit changed();
         return false;
     }

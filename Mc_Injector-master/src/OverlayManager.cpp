@@ -51,6 +51,49 @@ QByteArray encodeProtocolToken(const QString &value)
                            : value.toUtf8().toPercentEncoding();
 }
 
+QString boundedUtf8(QString value, const qsizetype maximumBytes)
+{
+    // The native side stores protocol text in fixed-size UTF-8 buffers.  A
+    // QString::left() character limit is insufficient because non-ASCII
+    // status text may occupy several bytes per character.  Trim complete
+    // Unicode characters until the encoded payload is guaranteed to fit.
+    while (!value.isEmpty() && value.toUtf8().size() > maximumBytes)
+        value.chop(1);
+    return value;
+}
+
+bool validConfigName(const QString &name)
+{
+    static const QRegularExpression expression(
+        QStringLiteral("^[A-Za-z0-9 _.-]{1,32}$"));
+    return expression.match(name).hasMatch();
+}
+
+bool settingsGroupHasValues(QSettings &settings, const QString &group)
+{
+    settings.beginGroup(group);
+    const bool result = !settings.childKeys().isEmpty();
+    settings.endGroup();
+    return result;
+}
+
+void copySettingsGroup(QSettings &settings, const QString &source,
+                       const QString &destination)
+{
+    settings.beginGroup(source);
+    const QStringList keys = settings.childKeys();
+    QVariantMap values;
+    for (const QString &key : keys)
+        values.insert(key, settings.value(key));
+    settings.endGroup();
+
+    settings.beginGroup(destination);
+    settings.remove(QString{});
+    for (auto iterator = values.cbegin(); iterator != values.cend(); ++iterator)
+        settings.setValue(iterator.key(), iterator.value());
+    settings.endGroup();
+}
+
 QString firstExistingFile(const QStringList &candidates)
 {
     for (const QString &candidate : candidates) {
@@ -147,6 +190,19 @@ OverlayManager::OverlayManager(QObject *parent)
     : QObject(parent)
 {
     loadFeatureSettings();
+    {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("Config"));
+        m_configAutoSave = settings.value(QStringLiteral("autoSave"), false).toBool();
+        m_configNames = settings.value(QStringLiteral("names")).toStringList();
+        m_activeConfig = settings.value(QStringLiteral("active")).toString();
+        settings.endGroup();
+        m_configNames.removeDuplicates();
+        m_configNames.erase(std::remove_if(m_configNames.begin(), m_configNames.end(),
+            [](const QString &name) { return !validConfigName(name); }),
+            m_configNames.end());
+        if (!m_configNames.contains(m_activeConfig)) m_activeConfig.clear();
+    }
     m_server.setSocketOptions(QLocalServer::UserAccessOption);
     connect(&m_server, &QLocalServer::newConnection,
             this, &OverlayManager::acceptAgentConnection);
@@ -590,7 +646,7 @@ void OverlayManager::setHypixelPanelHoldToShow(const bool enabled)
 
 void OverlayManager::setHypixelPanelHotkey(const int virtualKey)
 {
-    if (virtualKey < 8 || virtualKey > 254 || m_hypixelPanelHotkey == virtualKey) return;
+    if ((virtualKey != 0 && virtualKey < 8) || virtualKey > 254 || m_hypixelPanelHotkey == virtualKey) return;
     m_hypixelPanelHotkey = virtualKey;
     storeFeatureSettings();
     emit featureSettingsChanged();
@@ -760,8 +816,13 @@ MC_OVERLAY_BOOL_SETTER(setFireballEspEnabled, m_fireballEspEnabled)
 MC_OVERLAY_BOOL_SETTER(setFireballEspFilled, m_fireballEspFilled)
 MC_OVERLAY_BOOL_SETTER(setLongJumpEnabled, m_longJumpEnabled)
 MC_OVERLAY_BOOL_SETTER(setAimAssistEnabled, m_aimAssistEnabled)
-MC_OVERLAY_BOOL_SETTER(setAimSlowdownMode, m_aimSlowdownMode)
+MC_OVERLAY_BOOL_SETTER(setAimLockOnMode, m_aimLockOnMode)
+MC_OVERLAY_BOOL_SETTER(setAimSilentLock, m_aimSilentLock)
+MC_OVERLAY_BOOL_SETTER(setAimScannerEnabled, m_aimScannerEnabled)
+MC_OVERLAY_BOOL_SETTER(setAimAttackViability, m_aimAttackViability)
+MC_OVERLAY_BOOL_SETTER(setSilentControlAdaptation, m_silentControlAdaptation)
 MC_OVERLAY_BOOL_SETTER(setTextGuiEnabled, m_textGuiEnabled)
+MC_OVERLAY_BOOL_SETTER(setTextGuiShowModes, m_textGuiShowModes)
 MC_OVERLAY_BOOL_SETTER(setAllowHypixelMovement, m_allowHypixelMovement)
 
 #undef MC_OVERLAY_BOOL_SETTER
@@ -784,7 +845,7 @@ void OverlayManager::setSafewalkMinimumPitch(const int pitch)
 
 void OverlayManager::setSafewalkHotkey(const int virtualKey)
 {
-    if (virtualKey < 8 || virtualKey > 254 || m_safewalkHotkey == virtualKey) return;
+    if ((virtualKey != 0 && virtualKey < 8) || virtualKey > 254 || m_safewalkHotkey == virtualKey) return;
     m_safewalkHotkey = virtualKey;
     storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
 }
@@ -864,6 +925,14 @@ void OverlayManager::setAimFovDegrees(const int degrees)
     storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
 }
 
+void OverlayManager::setAimAttackCps(const int cps)
+{
+    const int bounded=std::clamp(cps,1,20);
+    if(m_aimAttackCps==bounded) return;
+    m_aimAttackCps=bounded;
+    storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
+}
+
 void OverlayManager::setClickGuiWidthPercent(const int percent)
 {
     const int bounded = std::clamp(percent, 80, 150);
@@ -936,7 +1005,7 @@ void OverlayManager::setBedThreatRadius(const int radius)
 
 void OverlayManager::setBedDefenseHotkey(const int virtualKey)
 {
-    if (virtualKey < 8 || virtualKey > 254 || m_bedDefenseHotkey == virtualKey) return;
+    if ((virtualKey != 0 && virtualKey < 8) || virtualKey > 254 || m_bedDefenseHotkey == virtualKey) return;
     m_bedDefenseHotkey = virtualKey;
     storeFeatureSettings();
     emit featureSettingsChanged();
@@ -985,8 +1054,9 @@ void OverlayManager::setBedDefensePanelColor(const QString &color)
 
 void OverlayManager::setMenuHotkey(const int virtualKey)
 {
-    if (virtualKey < 8 || virtualKey > 254 || m_menuHotkey == virtualKey) return;
+    if ((virtualKey != 0 && virtualKey < 8) || virtualKey > 254 || m_menuHotkey == virtualKey) return;
     m_menuHotkey = virtualKey;
+    storeFeatureSettings();
     emit menuHotkeyChanged();
     sendBindSnapshot();
 }
@@ -996,8 +1066,113 @@ void OverlayManager::setGuiScaleIndex(const int index)
     const int bounded = std::clamp(index, 0, 3);
     if (m_guiScaleIndex == bounded) return;
     m_guiScaleIndex = bounded;
+    storeFeatureSettings();
     emit guiScaleIndexChanged();
     sendGuiScaleSnapshot();
+}
+
+void OverlayManager::setConfigAutoSave(const bool enabled)
+{
+    if (m_configAutoSave == enabled) return;
+    m_configAutoSave = enabled;
+    if (enabled && m_activeConfig.isEmpty()) {
+        (void)saveConfig(QStringLiteral("Auto Save"));
+    } else {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("Config"));
+        settings.setValue(QStringLiteral("autoSave"), enabled);
+        settings.endGroup();
+        settings.sync();
+        emit configStateChanged();
+    }
+}
+
+bool OverlayManager::saveConfig(const QString &requestedName)
+{
+    const QString name = requestedName.simplified();
+    if (!validConfigName(name)) {
+        setStatusMessage(QStringLiteral(
+            "Config names may contain letters, numbers, spaces, dots, dashes and underscores."));
+        return false;
+    }
+    if (m_featureSettingsStoreTimer.isActive()) {
+        m_featureSettingsStoreTimer.stop();
+        flushFeatureSettings();
+    }
+    QSettings settings;
+    copySettingsGroup(settings, QStringLiteral("features"),
+                      QStringLiteral("ConfigProfiles/%1/features").arg(name));
+    copySettingsGroup(settings, QStringLiteral("MediaOverlay"),
+                      QStringLiteral("ConfigProfiles/%1/media").arg(name));
+    if (!m_configNames.contains(name)) {
+        m_configNames.append(name);
+        m_configNames.sort(Qt::CaseInsensitive);
+    }
+    m_activeConfig = name;
+    settings.beginGroup(QStringLiteral("Config"));
+    settings.setValue(QStringLiteral("names"), m_configNames);
+    settings.setValue(QStringLiteral("active"), m_activeConfig);
+    settings.setValue(QStringLiteral("autoSave"), m_configAutoSave);
+    settings.endGroup();
+    settings.sync();
+    setStatusMessage(QStringLiteral("Saved config “%1”").arg(name));
+    emit configStateChanged();
+    return true;
+}
+
+bool OverlayManager::applyConfig(const QString &requestedName)
+{
+    const QString name = requestedName.simplified();
+    if (!validConfigName(name) || !m_configNames.contains(name)) return false;
+    if (m_featureSettingsStoreTimer.isActive()) {
+        m_featureSettingsStoreTimer.stop();
+        flushFeatureSettings();
+    }
+    QSettings settings;
+    const QString profileRoot = QStringLiteral("ConfigProfiles/%1/").arg(name);
+    if (!settingsGroupHasValues(settings, profileRoot + QStringLiteral("features")))
+        return false;
+    copySettingsGroup(settings, profileRoot + QStringLiteral("features"),
+                      QStringLiteral("features"));
+    if (settingsGroupHasValues(settings, profileRoot + QStringLiteral("media"))) {
+        copySettingsGroup(settings, profileRoot + QStringLiteral("media"),
+                          QStringLiteral("MediaOverlay"));
+    }
+    settings.sync();
+    loadFeatureSettings();
+    m_activeConfig = name;
+    settings.beginGroup(QStringLiteral("Config"));
+    settings.setValue(QStringLiteral("active"), name);
+    settings.endGroup();
+    settings.sync();
+    emit featureSettingsChanged();
+    emit menuHotkeyChanged();
+    emit guiScaleIndexChanged();
+    emit configStateChanged();
+    sendFeatureSnapshot();
+    sendBindSnapshot();
+    sendGuiScaleSnapshot();
+    sendMediaSettings();
+    setStatusMessage(QStringLiteral("Applied config “%1”").arg(name));
+    return true;
+}
+
+bool OverlayManager::removeConfig(const QString &requestedName)
+{
+    const QString name = requestedName.simplified();
+    if (!m_configNames.removeOne(name)) return false;
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("ConfigProfiles"));
+    settings.remove(name);
+    settings.endGroup();
+    if (m_activeConfig == name) m_activeConfig.clear();
+    settings.beginGroup(QStringLiteral("Config"));
+    settings.setValue(QStringLiteral("names"), m_configNames);
+    settings.setValue(QStringLiteral("active"), m_activeConfig);
+    settings.endGroup();
+    settings.sync();
+    emit configStateChanged();
+    return true;
 }
 
 void OverlayManager::refreshBedCache()
@@ -1014,15 +1189,18 @@ void OverlayManager::publishHypixelResult(
     const double winRate, const double fkdr, const QString &status)
 {
     if (!m_authenticated) return;
+    const QString safeUuid = boundedUtf8(uuid.trimmed(), 38);
+    const QString safeDisplayName = boundedUtf8(displayName.trimmed(), 46);
+    const QString safeStatus = boundedUtf8(status.simplified(), 158);
     QByteArray command = QByteArrayLiteral("HYPIXEL_RESULT ")
         + QByteArray::number(std::clamp(state, 0, 3)) + ' '
-        + encodeProtocolToken(uuid) + ' ' + encodeProtocolToken(displayName) + ' '
+        + encodeProtocolToken(safeUuid) + ' ' + encodeProtocolToken(safeDisplayName) + ' '
         + QByteArray::number(wins) + ' ' + QByteArray::number(losses) + ' '
         + QByteArray::number(finalKills) + ' ' + QByteArray::number(finalDeaths) + ' '
         + QByteArray::number(bedsBroken) + ' ' + QByteArray::number(bedsLost) + ' '
         + QByteArray::number(std::isfinite(winRate) ? winRate : 0.0, 'g', 9) + ' '
         + QByteArray::number(std::isfinite(fkdr) ? fkdr : 0.0, 'g', 9) + ' '
-        + encodeProtocolToken(status) + '\n';
+        + encodeProtocolToken(safeStatus) + '\n';
     writeAgentCommand(command);
 }
 
@@ -1124,14 +1302,18 @@ void OverlayManager::readAgentMessages()
         return;
 
     QLocalSocket *const source = m_agentSocket;
-    while (m_agentSocket == source && source->bytesAvailable() > 0) {
-        const QByteArray chunk = source->read(kAgentReadChunkBytes);
-        if (chunk.isEmpty())
+    QElapsedTimer budget;
+    budget.start();
+    int processedLines = 0;
+    qint64 readBytes = 0;
+    // Telemetry bursts must yield to paint/input events. In particular, drain
+    // buffered complete lines on the next turn even if readyRead never fires
+    // again (all bytes may already have reached the user-space buffer).
+    while (m_agentSocket == source) {
+        if (processedLines >= 64 || readBytes >= 64 * 1024 || budget.elapsed() >= 3)
             break;
-        m_agentReadBuffer += chunk;
-
-        qsizetype newline = -1;
-        while ((newline = m_agentReadBuffer.indexOf('\n')) >= 0) {
+        const qsizetype newline = m_agentReadBuffer.indexOf('\n');
+        if (newline >= 0) {
             // Apply the limit to each wire line, not to a readAll() batch that
             // may legitimately contain many small telemetry messages.
             if (newline > kMaximumAgentMessageBytes) {
@@ -1143,8 +1325,10 @@ void OverlayManager::readAgentMessages()
             m_agentReadBuffer.remove(0, newline + 1);
             if (!line.isEmpty())
                 processAgentLine(line);
+            ++processedLines;
             if (m_agentSocket != source)
                 return;
+            continue;
         }
 
         // No newline is buffered, so these bytes all belong to one partial
@@ -1154,6 +1338,26 @@ void OverlayManager::readAgentMessages()
                  QStringLiteral("The native agent exceeded the per-line IPC message limit."));
             return;
         }
+        if (source->bytesAvailable() <= 0) break;
+        const QByteArray chunk = source->read(kAgentReadChunkBytes);
+        if (chunk.isEmpty()) break;
+        readBytes += chunk.size();
+        m_agentReadBuffer += chunk;
+    }
+    if (m_agentSocket == source && !m_agentReadBuffer.contains('\n') &&
+        m_agentReadBuffer.size() > kMaximumAgentMessageBytes) {
+        fail(QStringLiteral("IPC_MESSAGE_TOO_LARGE"),
+             QStringLiteral("The native agent exceeded the per-line IPC message limit."));
+        return;
+    }
+    if (m_agentSocket == source &&
+        (source->bytesAvailable() > 0 || m_agentReadBuffer.contains('\n')) &&
+        !m_agentReadScheduled) {
+        m_agentReadScheduled = true;
+        QTimer::singleShot(1, this, [this] {
+            m_agentReadScheduled = false;
+            readAgentMessages();
+        });
     }
 }
 
@@ -1191,6 +1395,22 @@ void OverlayManager::handleAgentDisconnected()
     }
 }
 
+bool OverlayManager::isRecoverableJvmAttachFailure(
+    const int exitCode, const QByteArray &standardError) noexcept
+{
+    if (exitCode == 10 || exitCode == 12 || exitCode == 13)
+        return true;
+
+    // JDK 8's Windows Attach listener uses native result 100 for
+    // ATTACH_ERROR_DISABLED. JDK 9+ turns that result into InternalError, which
+    // older helper builds did not catch and therefore returned as exit 1. Keep
+    // this controller-side recognition as a compatibility guard for either
+    // helper form. The native fallback still independently requires a live
+    // x64 JVM and a visible game window before it loads anything.
+    return standardError.contains(
+        QByteArrayLiteral("Remote thread failed for unknown reason (100)"));
+}
+
 void OverlayManager::handleAttachFinished(int exitCode,
                                           QProcess::ExitStatus exitStatus)
 {
@@ -1218,8 +1438,8 @@ void OverlayManager::handleAttachFinished(int exitCode,
     // handles both a new and an already-resident module and reports its own
     // structured failure if re-entry is not possible. Do not fall back for I/O,
     // security, or an unexpected helper failure.
-    const bool recoverableJvmAttachFailure = exitCode == 10 || exitCode == 12 ||
-                                             exitCode == 13;
+    const bool recoverableJvmAttachFailure =
+        isRecoverableJvmAttachFailure(exitCode, m_helperStandardError);
     if (exitStatus == QProcess::NormalExit && recoverableJvmAttachFailure
         && m_loaderKind == LoaderKind::JvmAttach
         && !m_nativeFallbackAttempted) {
@@ -1614,14 +1834,100 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             m_interactive = interactive;
             emit interactiveChanged();
         }
-    } else if (type == QByteArrayLiteral("FEATURE_STATE_CHANGED")) {
-        if (fields.size() != 85) return;
+    } else if (type == QByteArrayLiteral("MEDIA_ACTION")) {
+        if (fields.size() != 2) return;
+        qInfo().noquote() << "Now Playing action received from Agent:" << fields[1];
+        if (fields[1] == QByteArrayLiteral("PREVIOUS")) emit mediaPreviousRequested();
+        else if (fields[1] == QByteArrayLiteral("NEXT")) emit mediaNextRequested();
+        else if (fields[1] == QByteArrayLiteral("TOGGLE")) emit mediaToggleRequested();
+    } else if (type == QByteArrayLiteral("MEDIA_SETTINGS_CHANGED")) {
+        if (fields.size() != 9 && fields.size() != 10 && fields.size() != 11) return;
+        bool enabledOk=false, opacityOk=false, previousOk=false, toggleOk=false;
+        bool nextOk=false, colorOk=false, xOk=false, yOk=false;
+        const int enabled=fields[1].toInt(&enabledOk);
+        const int opacity=fields[2].toInt(&opacityOk);
+        const int previous=fields[3].toInt(&previousOk);
+        const int toggle=fields[4].toInt(&toggleOk);
+        const int next=fields[5].toInt(&nextOk);
+        const uint color=fields[6].toUInt(&colorOk);
+        const int x=fields[7].toInt(&xOk);
+        const int y=fields[8].toInt(&yOk);
+        bool spectrumOk=true;
+        const int spectrum=fields.size()>=10 ? fields[9].toInt(&spectrumOk) : 100;
+        bool sizeOk=true;
+        const int wireScale=fields.size()>=11 ? fields[10].toInt(&sizeOk) : 52;
+        int scalePercent=wireScale;
+        if(wireScale>=0 && wireScale<=3) {
+            static constexpr std::array<int,4> legacyScales{42,52,68,84};
+            scalePercent=legacyScales[static_cast<std::size_t>(wireScale)];
+        }
+        if(!spectrumOk || spectrum<0 || spectrum>100 || !sizeOk ||
+           scalePercent<35 || scalePercent>100) return;
+        if(!enabledOk || !opacityOk || !previousOk || !toggleOk || !nextOk ||
+           !colorOk || !xOk || !yOk || enabled<0 || enabled>1 || opacity<20 ||
+           opacity>100 || previous<0 || previous>254 || toggle<0 || toggle>254 ||
+           next<0 || next>254 || color>0xFFFFFFU || x<-1 || x>1000 || y<-1 || y>1000) return;
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("MediaOverlay"));
+        settings.setValue(QStringLiteral("enabled"),enabled!=0);
+        settings.setValue(QStringLiteral("opacity"),opacity);
+        settings.setValue(QStringLiteral("previousHotkey"),previous);
+        settings.setValue(QStringLiteral("toggleHotkey"),toggle);
+        settings.setValue(QStringLiteral("nextHotkey"),next);
+        settings.setValue(QStringLiteral("color"),color);
+        settings.setValue(QStringLiteral("x"),x);
+        settings.setValue(QStringLiteral("y"),y);
+        settings.setValue(QStringLiteral("spectrumOpacity"),spectrum);
+        settings.setValue(QStringLiteral("scalePercent"),scalePercent);
+        settings.endGroup(); settings.sync();
+        storeFeatureSettings();
+        // MediaOverlay is persisted in its own settings group, but it is also
+        // represented in the live TEXTGUI module list. Notify QML immediately
+        // so its preview never waits for a reconnect or another feature edit.
+        emit featureSettingsChanged();
+    } else if (type == QByteArrayLiteral("AIM_OPTIONS_CHANGED")) {
+        if(fields.size()!=2) return;
+        bool ok=false; const unsigned value=fields[1].toUInt(&ok);
+        if(!ok || value>0x7FFFFFFFU) return;
+        m_silentFileDebug=(value&0x08000000U)!=0;
+        m_silentChatDebug=(value&0x10000000U)!=0;
+        m_aimSilentLock=(value&1U)!=0;
+        m_aimScannerEnabled=(value&2U)!=0;
+        m_bedBreakerEnabled=(value&4U)!=0;
+        m_aimAttackViability=(value&8U)!=0;
+        m_aimSequentialTargets=(value&0x20000000U)!=0;
+        m_silentControlAdaptation=(value&0x40000000U)!=0;
+        m_textGuiShowModes=(value&16U)!=0;
+        m_localVelocityProbability=std::clamp(
+            static_cast<int>((value>>5U)&0x7FU),0,100);
+        m_localVelocityVerticalPercent=std::clamp(
+            static_cast<int>((value>>12U)&0x7FU),0,100);
+        m_velocityHotkey=std::clamp(
+            static_cast<int>((value>>19U)&0xFFU),0,254);
+        m_featureHotkeysPackedC=(m_featureHotkeysPackedC&0x1FF00U) |
+            static_cast<quint32>(m_velocityHotkey);
+        storeFeatureSettings(); emit featureSettingsChanged();
+    } else if(type==QByteArrayLiteral("AIM_ATTACK_CPS_CHANGED")) {
+        if(fields.size()!=2) return;
+        bool ok=false; const int value=fields[1].toInt(&ok);
+        if(!ok||value<1||value>20) return;
+        m_aimAttackCps=value;
+        storeFeatureSettings(); emit featureSettingsChanged();
+    } else if (type == QByteArrayLiteral("FEATURE_STATE_CHANGED") ||
+               type == QByteArrayLiteral("FEATURE_STATE_CHANGED_V2") ||
+               type == QByteArrayLiteral("FEATURE_STATE_CHANGED_V3")) {
+        const bool featureStateV3 =
+            type == QByteArrayLiteral("FEATURE_STATE_CHANGED_V3");
+        if (fields.size() != (featureStateV3 ? 86 : 85)) return;
         std::array<bool, 32U> values{};
         for (int index = 0; index < 32; ++index) {
             const QByteArray token = fields.at(index + 1);
             if (token != QByteArrayLiteral("0") && token != QByteArrayLiteral("1")) return;
             values[static_cast<std::size_t>(index)] = token == QByteArrayLiteral("1");
         }
+        // Normalize the legacy slowdown slot before both change detection and
+        // assignment; otherwise a mode reset could skip its UI/settings signal.
+        if (type == QByteArrayLiteral("FEATURE_STATE_CHANGED")) values[29] = false;
         bool defenseRadiusOk = false;
         bool threatRadiusOk = false;
         bool bedHotkeyOk = false;
@@ -1651,6 +1957,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         bool aimSlowdownOk = false, aimSpeedOk = false;
         bool textColorOk = false, textXOk = false, textYOk = false;
         bool bhopAirSpeedOk = false, hotkeysAOk = false, hotkeysBOk = false;
+        bool hotkeysCOk = !featureStateV3;
         bool fireballEnabledOk = false, fireballFilledOk = false;
         bool longJumpEnabledOk = false, longJumpSpeedOk = false;
         bool fireballColorOk = false;
@@ -1697,22 +2004,25 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         const int bhopAirSpeed = fields.at(66).toInt(&bhopAirSpeedOk);
         const quint64 hotkeysPackedA = fields.at(67).toULongLong(&hotkeysAOk);
         const quint64 hotkeysPackedB = fields.at(68).toULongLong(&hotkeysBOk);
-        const int fireballEnabled = fields.at(69).toInt(&fireballEnabledOk);
-        const int fireballFilled = fields.at(70).toInt(&fireballFilledOk);
-        const int longJumpEnabled = fields.at(71).toInt(&longJumpEnabledOk);
-        const int longJumpSpeed = fields.at(72).toInt(&longJumpSpeedOk);
-        const quint32 fireballColor = fields.at(73).toUInt(&fireballColorOk);
-        const int aimMinimumDistance = fields.at(74).toInt(&aimMinimumDistanceOk);
-        const int aimMaximumDistance = fields.at(75).toInt(&aimMaximumDistanceOk);
-        const int aimFovDegrees = fields.at(76).toInt(&aimFovOk);
-        const int clickGuiWidthPercent = fields.at(77).toInt(&clickGuiWidthOk);
-        const int clickGuiHeightPercent = fields.at(78).toInt(&clickGuiHeightOk);
-        const int clickGuiOpacity = fields.at(79).toInt(&clickGuiOpacityOk);
-        const quint32 extraBits = fields.at(80).toUInt(&extraBitsOk);
-        const int textGuiAlignment = fields.at(81).toInt(&textGuiAlignmentOk);
-        const int localMobReach = fields.at(82).toInt(&localMobReachOk);
-        const int localAttackDelayMs = fields.at(83).toInt(&localAttackDelayOk);
-        const int localVelocityPercent = fields.at(84).toInt(
+        const quint32 hotkeysPackedC = featureStateV3
+            ? fields.at(69).toUInt(&hotkeysCOk) : m_featureHotkeysPackedC;
+        const int tail = featureStateV3 ? 70 : 69;
+        const int fireballEnabled = fields.at(tail).toInt(&fireballEnabledOk);
+        const int fireballFilled = fields.at(tail + 1).toInt(&fireballFilledOk);
+        const int longJumpEnabled = fields.at(tail + 2).toInt(&longJumpEnabledOk);
+        const int longJumpSpeed = fields.at(tail + 3).toInt(&longJumpSpeedOk);
+        const quint32 fireballColor = fields.at(tail + 4).toUInt(&fireballColorOk);
+        const int aimMinimumDistance = fields.at(tail + 5).toInt(&aimMinimumDistanceOk);
+        const int aimMaximumDistance = fields.at(tail + 6).toInt(&aimMaximumDistanceOk);
+        const int aimFovDegrees = fields.at(tail + 7).toInt(&aimFovOk);
+        const int clickGuiWidthPercent = fields.at(tail + 8).toInt(&clickGuiWidthOk);
+        const int clickGuiHeightPercent = fields.at(tail + 9).toInt(&clickGuiHeightOk);
+        const int clickGuiOpacity = fields.at(tail + 10).toInt(&clickGuiOpacityOk);
+        const quint32 extraBits = fields.at(tail + 11).toUInt(&extraBitsOk);
+        const int textGuiAlignment = fields.at(tail + 12).toInt(&textGuiAlignmentOk);
+        const int localMobReach = fields.at(tail + 13).toInt(&localMobReachOk);
+        const int localAttackDelayMs = fields.at(tail + 14).toInt(&localAttackDelayOk);
+        const int localVelocityPercent = fields.at(tail + 15).toInt(
             &localVelocityPercentOk);
         const auto validHotkeyPack = [](const quint64 packed,
                                         const int count) noexcept {
@@ -1724,9 +2034,9 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         };
         if (!defenseRadiusOk || defenseRadius < 3 || defenseRadius > 10 ||
             !threatRadiusOk || threatRadius < 3 || threatRadius > 32 ||
-            !bedHotkeyOk || bedHotkey < 8 || bedHotkey > 254 ||
+            !bedHotkeyOk || (bedHotkey != 0 && bedHotkey < 8) || bedHotkey > 254 ||
             !panelOpacityOk || panelOpacity < 0 || panelOpacity > 100 ||
-            !hypixelHotkeyOk || hypixelHotkey < 8 || hypixelHotkey > 254 ||
+            !hypixelHotkeyOk || (hypixelHotkey != 0 && hypixelHotkey < 8) || hypixelHotkey > 254 ||
             !hypixelOpacityOk || hypixelOpacity < 0 || hypixelOpacity > 100 ||
             !hypixelScaleOk || hypixelScale < 70 || hypixelScale > 160 ||
             !hypixelHeightOk || hypixelHeight < 60 || hypixelHeight > 400 ||
@@ -1749,7 +2059,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             safewalkReleaseDelayMs < 0 || safewalkReleaseDelayMs > 750 ||
             !safewalkSensitivityOk || safewalkSensitivity < 0 || safewalkSensitivity > 95 ||
             !safewalkPitchOk || safewalkPitch < -90 || safewalkPitch > 90 ||
-            !safewalkHotkeyOk || safewalkHotkey < 8 || safewalkHotkey > 254 ||
+            !safewalkHotkeyOk || (safewalkHotkey != 0 && safewalkHotkey < 8) || safewalkHotkey > 254 ||
             !flySpeedOk || flySpeed < 10 || flySpeed > 500 ||
             !aimSlowdownOk || aimSlowdown < 5 || aimSlowdown > 95 ||
             !aimSpeedOk || aimSpeed < 1 || aimSpeed > 100 ||
@@ -1757,8 +2067,11 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             !textXOk || textX < -1 || textX > 1000 ||
             !textYOk || textY < -1 || textY > 1000) return;
         if (!bhopAirSpeedOk || bhopAirSpeed < 10 || bhopAirSpeed > 300 ||
-            !hotkeysAOk || !hotkeysBOk || !validHotkeyPack(hotkeysPackedA, 8) ||
-            !validHotkeyPack(hotkeysPackedB, 7) ||
+            !hotkeysAOk || !hotkeysBOk || !hotkeysCOk ||
+            !validHotkeyPack(hotkeysPackedA, 8) ||
+            !validHotkeyPack(hotkeysPackedB, 8) ||
+            hotkeysPackedC > 0x1FFFFU ||
+            !validHotkeyPack(hotkeysPackedC, 2) ||
             !fireballEnabledOk || fireballEnabled < 0 || fireballEnabled > 1 ||
             !fireballFilledOk || fireballFilled < 0 || fireballFilled > 1 ||
             !longJumpEnabledOk || longJumpEnabled < 0 || longJumpEnabled > 1 ||
@@ -1773,7 +2086,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             !clickGuiHeightOk || clickGuiHeightPercent < 80 ||
             clickGuiHeightPercent > 150 || !clickGuiOpacityOk ||
             clickGuiOpacity < 35 || clickGuiOpacity > 100 ||
-            !extraBitsOk || extraBits > 0xFFU || !textGuiAlignmentOk ||
+            !extraBitsOk || !textGuiAlignmentOk ||
             textGuiAlignment < 0 || textGuiAlignment > 2 ||
             !localMobReachOk || localMobReach < 3 || localMobReach > 10 ||
             !localAttackDelayOk || localAttackDelayMs < 100 ||
@@ -1819,7 +2132,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             m_safewalkEnabled != values[23] ||
             m_scaffoldEnabled != values[24] || m_flyEnabled != values[25] ||
             m_bhopEnabled != values[26] || m_bhopAutoJump != values[27] ||
-            m_aimAssistEnabled != values[28] || m_aimSlowdownMode != values[29] ||
+            m_aimAssistEnabled != values[28] || m_aimLockOnMode != values[29] ||
             m_textGuiEnabled != values[30] || m_allowHypixelMovement != values[31] ||
             m_bedDefenseRadius != defenseRadius || m_bedThreatRadius != threatRadius ||
             m_bedDefenseHotkey != bedHotkey ||
@@ -1851,6 +2164,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             m_textGuiY != textY || m_bhopAirSpeedPercent != bhopAirSpeed ||
             m_featureHotkeysPackedA != hotkeysPackedA ||
             m_featureHotkeysPackedB != hotkeysPackedB ||
+            m_featureHotkeysPackedC != hotkeysPackedC ||
             m_fireballEspEnabled != (fireballEnabled != 0) ||
             m_fireballEspFilled != (fireballFilled != 0) ||
             m_longJumpEnabled != (longJumpEnabled != 0) ||
@@ -1896,7 +2210,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         m_bhopEnabled = values[26];
         m_bhopAutoJump = values[27];
         m_aimAssistEnabled = values[28];
-        m_aimSlowdownMode = values[29];
+        m_aimLockOnMode = values[29];
         m_textGuiEnabled = values[30];
         m_allowHypixelMovement = values[31];
         m_bedDefenseRadius = defenseRadius;
@@ -1935,9 +2249,11 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         m_bhopAirSpeedPercent = bhopAirSpeed;
         m_featureHotkeysPackedA = hotkeysPackedA;
         m_featureHotkeysPackedB = hotkeysPackedB;
+        m_featureHotkeysPackedC = hotkeysPackedC;
+        m_velocityHotkey=static_cast<int>(hotkeysPackedC&0xFFU);
         m_fireballEspEnabled = fireballEnabled != 0;
         m_fireballEspFilled = fireballFilled != 0;
-        m_longJumpEnabled = longJumpEnabled != 0;
+        m_longJumpEnabled = false;
         m_longJumpSpeedPercent = longJumpSpeed;
         m_fireballEspColor = fireballColorName;
         m_aimMinimumDistance = aimMinimumDistance;
@@ -1946,7 +2262,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         m_clickGuiWidthPercent = clickGuiWidthPercent;
         m_clickGuiHeightPercent = clickGuiHeightPercent;
         m_clickGuiOpacity = clickGuiOpacity;
-        m_featureExtraBits = extraBits;
+        m_featureExtraBits = extraBits & ~0x10U;
         m_textGuiAlignment = textGuiAlignment;
         m_localMobReach = localMobReach;
         m_localAttackDelayMs = localAttackDelayMs;
@@ -1958,9 +2274,10 @@ void OverlayManager::processAgentLine(const QByteArray &line)
     } else if (type == QByteArrayLiteral("BIND_CHANGED")) {
         bool valid = false;
         const int virtualKey = fields.value(1).toInt(&valid);
-        if (fields.size() == 2 && valid && virtualKey >= 8 && virtualKey <= 254 &&
+        if (fields.size() == 2 && valid && (virtualKey == 0 || virtualKey >= 8) && virtualKey <= 254 &&
             m_menuHotkey != virtualKey) {
             m_menuHotkey = virtualKey;
+            storeFeatureSettings();
             emit menuHotkeyChanged();
         }
     } else if (type == QByteArrayLiteral("GUI_SCALE_CHANGED")) {
@@ -1969,6 +2286,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         if (fields.size() == 2 && valid && index >= 0 && index <= 3
             && m_guiScaleIndex != index) {
             m_guiScaleIndex = index;
+            storeFeatureSettings();
             emit guiScaleIndexChanged();
         }
     } else if (type == QByteArrayLiteral("PLAYER_FOUND")) {
@@ -2022,21 +2340,23 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             emit blacklistLayoutChanged(x, y, width, height);
         }
     } else if (type == QByteArrayLiteral("BLACKLIST_SETTINGS_CHANGED")) {
-        if (fields.size() != 8 ||
+        if (fields.size() != 9 ||
             (fields.at(1) != "0" && fields.at(1) != "1") ||
             (fields.at(2) != "0" && fields.at(2) != "1") ||
             (fields.at(3) != "0" && fields.at(3) != "1") ||
             (fields.at(4) != "0" && fields.at(4) != "1") ||
             (fields.at(5) != "0" && fields.at(5) != "1")) return;
-        bool opacityOk = false, colorOk = false;
+        bool opacityOk = false, scaleOk = false, colorOk = false;
         const int opacity = fields.at(6).toInt(&opacityOk);
-        const quint32 color = fields.at(7).toUInt(&colorOk);
+        const int contentScale = fields.at(7).toInt(&scaleOk);
+        const quint32 color = fields.at(8).toUInt(&colorOk);
         if (!opacityOk || opacity < 0 || opacity > 100 ||
+            !scaleOk || contentScale < 80 || contentScale > 200 ||
             !colorOk || color > 0xFFFFFFU) return;
         emit blacklistSettingsChanged(
             fields.at(1) == "1", fields.at(2) == "1", fields.at(3) == "1",
             fields.at(4) == "1", fields.at(5) == "1",
-            opacity, QStringLiteral("#%1").arg(
+            opacity, contentScale, QStringLiteral("#%1").arg(
                 color, 6, 16, QLatin1Char('0')).toUpper());
     } else if (type == QByteArrayLiteral("MATCH_STATE")) {
         if (fields.size() != 2 ||
@@ -2159,9 +2479,20 @@ void OverlayManager::processAgentLine(const QByteArray &line)
     } else if (type == QByteArrayLiteral("ERROR")) {
         const QString code = QString::fromUtf8(fields.value(1));
         const int detailStart = line.indexOf(' ', line.indexOf(' ') + 1);
-        fail(code.isEmpty() ? QStringLiteral("AGENT_ERROR") : code,
-             detailStart >= 0 ? QString::fromUtf8(line.mid(detailStart + 1))
-                              : QStringLiteral("The native agent reported an error."));
+        const QString detail = detailStart >= 0
+            ? QString::fromUtf8(line.mid(detailStart + 1))
+            : QStringLiteral("The native agent reported an error.");
+        // Statistics are an optional feature layered on top of the live
+        // overlay session.  A malformed/failed result must never tear down the
+        // control pipe: doing so leaves the already-loaded JVMTI agent alive
+        // and makes a subsequent attach look like a duplicate injection.
+        if (code == QStringLiteral("BAD_HYPIXEL_RESULT") ||
+            code == QStringLiteral("BAD_STATS") ||
+            code == QStringLiteral("BAD_STATS_ERROR")) {
+            setStatusMessage(QStringLiteral("Statistics update rejected: %1").arg(detail));
+            return;
+        }
+        fail(code.isEmpty() ? QStringLiteral("AGENT_ERROR") : code, detail);
     }
 }
 
@@ -2177,12 +2508,87 @@ void OverlayManager::sendStateSnapshot()
     sendFeatureSnapshot();
     sendBindSnapshot();
     sendGuiScaleSnapshot();
+    sendMediaSettings();
+}
+
+void OverlayManager::publishMediaState(bool available, bool playing,
+                                       const QString &title, const QString &artist,
+                                       const QString &source, const QString &coverPath,
+                                       qint64 positionMs, qint64 durationMs)
+{
+    if(!m_authenticated) return;
+    const QString safeTitle = boundedUtf8(title.simplified(), 190);
+    const QString safeArtist = boundedUtf8(artist.simplified(), 158);
+    const QString safeSource = boundedUtf8(source.simplified(), 158);
+    const QString safeCoverPath = boundedUtf8(coverPath, 510);
+    writeAgentCommand(QByteArrayLiteral("MEDIA_STATE ") +
+        QByteArray::number(available ? 1 : 0) + ' ' +
+        QByteArray::number(playing ? 1 : 0) + ' ' +
+        encodeProtocolToken(safeTitle) + ' ' + encodeProtocolToken(safeArtist) + ' ' +
+        encodeProtocolToken(safeSource) + ' ' + encodeProtocolToken(safeCoverPath) + ' ' +
+        QByteArray::number(std::max<qint64>(0,positionMs)) + ' ' +
+        QByteArray::number(std::max<qint64>(0,durationMs)) + '\n');
+}
+
+void OverlayManager::publishMediaSpectrum(const QByteArray &bands)
+{
+    if (!m_authenticated || bands.size() > 80) return;
+    const QList<QByteArray> values = bands.split(',');
+    if (values.size() != 10) return;
+    for (const QByteArray &value : values) {
+        bool converted = false;
+        const int band = value.toInt(&converted);
+        if (!converted || band < 0 || band > 1000) return;
+    }
+    writeAgentCommand(QByteArrayLiteral("MEDIA_SPECTRUM ") + bands + '\n');
+}
+
+void OverlayManager::sendMediaSettings()
+{
+    if(!m_authenticated) return;
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("MediaOverlay"));
+    const bool enabled=settings.value(QStringLiteral("enabled"),true).toBool();
+    const int storedOpacity=settings.value(QStringLiteral("opacity"),58).toInt();
+    const int opacity=std::clamp(storedOpacity==86?58:storedOpacity,20,100);
+    const int previous=std::clamp(settings.value(QStringLiteral("previousHotkey"),0xB1).toInt(),0,254);
+    const int toggle=std::clamp(settings.value(QStringLiteral("toggleHotkey"),0xB3).toInt(),0,254);
+    const int next=std::clamp(settings.value(QStringLiteral("nextHotkey"),0xB0).toInt(),0,254);
+    const uint storedColor=std::min(settings.value(QStringLiteral("color"),0x857F82U).toUInt(),0xFFFFFFU);
+    const uint color=storedColor==0x111318U?0x857F82U:storedColor;
+    const int x=std::clamp(settings.value(QStringLiteral("x"),-1).toInt(),-1,1000);
+    const int y=std::clamp(settings.value(QStringLiteral("y"),-1).toInt(),-1,1000);
+    const int storedSpectrum=settings.value(QStringLiteral("spectrumOpacity"),100).toInt();
+    const int spectrum=std::clamp(storedSpectrum==40?100:storedSpectrum,0,100);
+    constexpr std::array<int,4> legacyScales{{42,52,68,84}};
+    int scalePercent=settings.value(QStringLiteral("scalePercent"),-1).toInt();
+    if(scalePercent<0) {
+        const int legacy=std::clamp(
+            settings.value(QStringLiteral("sizeIndex"),1).toInt(),0,3);
+        scalePercent=legacyScales[static_cast<std::size_t>(legacy)];
+    }
+    scalePercent=std::clamp(scalePercent,35,100);
+    if(storedOpacity!=opacity) settings.setValue(QStringLiteral("opacity"),opacity);
+    if(storedColor!=color) settings.setValue(QStringLiteral("color"),color);
+    if(storedSpectrum!=spectrum)
+        settings.setValue(QStringLiteral("spectrumOpacity"),spectrum);
+    settings.endGroup();
+    writeAgentCommand(QByteArrayLiteral("MEDIA_SETTINGS ") +
+        QByteArray::number(enabled ? 1 : 0) + ' ' + QByteArray::number(opacity) + ' ' +
+        QByteArray::number(previous) + ' ' + QByteArray::number(toggle) + ' ' +
+        QByteArray::number(next) + ' ' + QByteArray::number(color) + ' ' +
+        QByteArray::number(x) + ' ' + QByteArray::number(y) + ' ' +
+        QByteArray::number(spectrum) + ' ' + QByteArray::number(scalePercent) + '\n');
 }
 
 void OverlayManager::loadFeatureSettings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("features"));
+    m_menuHotkey = std::clamp(settings.value(
+        QStringLiteral("menuHotkey"), 0xDE).toInt(), 0, 254);
+    m_guiScaleIndex = std::clamp(settings.value(
+        QStringLiteral("guiScaleIndex"), 1).toInt(), 0, 3);
     m_espEnabled = settings.value(QStringLiteral("espEnabled"), true).toBool();
     m_entityEspEnabled = settings.value(QStringLiteral("entityEspEnabled"), true).toBool();
     m_entityEspPlayersOnly = settings.value(QStringLiteral("entityEspPlayersOnly"), false).toBool();
@@ -2193,7 +2599,7 @@ void OverlayManager::loadFeatureSettings()
     m_hypixelPanelHoldToShow = settings.value(
         QStringLiteral("hypixelPanelHoldToShow"), true).toBool();
     m_hypixelPanelHotkey = std::clamp(settings.value(
-        QStringLiteral("hypixelPanelHotkey"), 0x09).toInt(), 8, 254);
+        QStringLiteral("hypixelPanelHotkey"), 0x09).toInt(), 0, 254);
     m_hypixelPanelOpacity = std::clamp(settings.value(
         QStringLiteral("hypixelPanelOpacity"), 76).toInt(), 0, 100);
     m_hypixelRailOpacity = std::clamp(settings.value(
@@ -2244,7 +2650,7 @@ void OverlayManager::loadFeatureSettings()
     m_safewalkMinimumPitch = std::clamp(settings.value(
         QStringLiteral("safewalkMinimumPitch"), -5).toInt(), -90, 90);
     m_safewalkHotkey = std::clamp(settings.value(
-        QStringLiteral("safewalkHotkey"), 0x77).toInt(), 8, 254);
+        QStringLiteral("safewalkHotkey"), 0x77).toInt(), 0, 254);
     m_scaffoldEnabled = settings.value(
         QStringLiteral("scaffoldEnabled"), false).toBool();
     m_flyEnabled = settings.value(QStringLiteral("flyEnabled"), false).toBool();
@@ -2258,12 +2664,14 @@ void OverlayManager::loadFeatureSettings()
         QStringLiteral("featureHotkeysPackedA"), qulonglong(0)).toULongLong();
     m_featureHotkeysPackedB = settings.value(
         QStringLiteral("featureHotkeysPackedB"), qulonglong(0)).toULongLong();
+    m_featureHotkeysPackedC = settings.value(
+        QStringLiteral("featureHotkeysPackedC"), quint32(0xA400U)).toUInt();
+    if(m_featureHotkeysPackedC>0x1FFFFU) m_featureHotkeysPackedC=0xA400U;
     m_fireballEspEnabled = settings.value(
         QStringLiteral("fireballEspEnabled"), false).toBool();
     m_fireballEspFilled = settings.value(
         QStringLiteral("fireballEspFilled"), true).toBool();
-    m_longJumpEnabled = settings.value(
-        QStringLiteral("longJumpEnabled"), false).toBool();
+    m_longJumpEnabled = false;
     m_longJumpSpeedPercent = std::clamp(settings.value(
         QStringLiteral("longJumpSpeedPercent"), 100).toInt(), 25, 250);
     // Migrate the old standalone Safewalk binding into the page-hotkey pack.
@@ -2271,8 +2679,29 @@ void OverlayManager::loadFeatureSettings()
         m_featureHotkeysPackedA |= (static_cast<quint64>(m_safewalkHotkey) << 32U);
     m_aimAssistEnabled = settings.value(
         QStringLiteral("aimAssistEnabled"), false).toBool();
-    m_aimSlowdownMode = settings.value(
-        QStringLiteral("aimSlowdownMode"), true).toBool();
+    m_aimLockOnMode = settings.value(
+        QStringLiteral("aimLockOnMode"), false).toBool();
+    m_aimSilentLock=settings.value(QStringLiteral("aimSilentLock"),false).toBool();
+    m_silentFileDebug=settings.value(QStringLiteral("silentFileDebug"),false).toBool();
+    m_silentChatDebug=settings.value(QStringLiteral("silentChatDebug"),false).toBool();
+    m_aimScannerEnabled=settings.value(QStringLiteral("aimScannerEnabled"),true).toBool();
+    m_aimAttackViability=settings.value(
+        QStringLiteral("aimAttackViability"),true).toBool();
+    m_silentControlAdaptation=settings.value(
+        QStringLiteral("silentControlAdaptation"),false).toBool();
+    m_aimSequentialTargets=settings.value(
+        QStringLiteral("aimSequentialTargets"),false).toBool();
+    m_bedBreakerEnabled=settings.value(QStringLiteral("bedBreakerEnabled"),false).toBool();
+    m_textGuiShowModes=settings.value(QStringLiteral("textGuiShowModes"),false).toBool();
+    m_localVelocityProbability=std::clamp(settings.value(
+        QStringLiteral("localVelocityProbability"),100).toInt(),0,100);
+    m_localVelocityVerticalPercent=std::clamp(settings.value(
+        QStringLiteral("localVelocityVerticalPercent"),100).toInt(),0,100);
+    m_velocityHotkey=std::clamp(settings.value(
+        QStringLiteral("velocityHotkey"),
+        static_cast<int>(m_featureHotkeysPackedC&0xFFU)).toInt(),0,254);
+    m_featureHotkeysPackedC=(m_featureHotkeysPackedC&0x1FF00U) |
+        static_cast<quint32>(m_velocityHotkey);
     m_aimSlowdownPercent = std::clamp(settings.value(
         QStringLiteral("aimSlowdownPercent"), 45).toInt(), 5, 95);
     m_aimSpeedPercent = std::clamp(settings.value(
@@ -2284,6 +2713,8 @@ void OverlayManager::loadFeatureSettings()
         std::max(1, m_aimMinimumDistance), 128);
     m_aimFovDegrees = std::clamp(settings.value(
         QStringLiteral("aimFovDegrees"), 90).toInt(), 1, 360);
+    m_aimAttackCps=std::clamp(settings.value(
+        QStringLiteral("aimAttackCps"),10).toInt(),1,20);
     m_clickGuiWidthPercent = std::clamp(settings.value(
         QStringLiteral("clickGuiWidthPercent"), 100).toInt(), 80, 150);
     m_clickGuiHeightPercent = std::clamp(settings.value(
@@ -2291,7 +2722,7 @@ void OverlayManager::loadFeatureSettings()
     m_clickGuiOpacity = std::clamp(settings.value(
         QStringLiteral("clickGuiOpacity"), 96).toInt(), 35, 100);
     m_featureExtraBits = settings.value(
-        QStringLiteral("featureExtraBits"), 0x43U).toUInt() & 0xFFU;
+        QStringLiteral("featureExtraBits"), 0x43U).toUInt() & ~0x10U;
     m_textGuiAlignment = std::clamp(settings.value(
         QStringLiteral("textGuiAlignment"), 2).toInt(), 0, 2);
     m_localMobReach = std::clamp(settings.value(
@@ -2315,7 +2746,7 @@ void OverlayManager::loadFeatureSettings()
     m_bedThreatRadius = std::clamp(
         settings.value(QStringLiteral("bedThreatRadius"), 8).toInt(), 3, 32);
     m_bedDefenseHotkey = std::clamp(
-        settings.value(QStringLiteral("bedDefenseHotkey"), 0xA4).toInt(), 8, 254);
+        settings.value(QStringLiteral("bedDefenseHotkey"), 0xA4).toInt(), 0, 254);
     m_bedDefensePanelOpacity = std::clamp(
         settings.value(QStringLiteral("bedDefensePanelOpacity"), 78).toInt(), 0, 100);
     const QString savedPlayerColor = normalizedRgbColor(
@@ -2367,10 +2798,12 @@ void OverlayManager::storeFeatureSettings()
     m_featureSettingsStoreTimer.start();
 }
 
-void OverlayManager::flushFeatureSettings() const
+void OverlayManager::flushFeatureSettings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("features"));
+    settings.setValue(QStringLiteral("menuHotkey"), m_menuHotkey);
+    settings.setValue(QStringLiteral("guiScaleIndex"), m_guiScaleIndex);
     settings.setValue(QStringLiteral("espEnabled"), m_espEnabled);
     settings.setValue(QStringLiteral("entityEspEnabled"), m_entityEspEnabled);
     settings.setValue(QStringLiteral("entityEspPlayersOnly"), m_entityEspPlayersOnly);
@@ -2426,18 +2859,35 @@ void OverlayManager::flushFeatureSettings() const
                       QVariant::fromValue<qulonglong>(m_featureHotkeysPackedA));
     settings.setValue(QStringLiteral("featureHotkeysPackedB"),
                       QVariant::fromValue<qulonglong>(m_featureHotkeysPackedB));
+    settings.setValue(QStringLiteral("featureHotkeysPackedC"),
+                      m_featureHotkeysPackedC);
     settings.setValue(QStringLiteral("fireballEspEnabled"), m_fireballEspEnabled);
     settings.setValue(QStringLiteral("fireballEspFilled"), m_fireballEspFilled);
     settings.setValue(QStringLiteral("fireballEspColor"), m_fireballEspColor);
     settings.setValue(QStringLiteral("longJumpEnabled"), m_longJumpEnabled);
     settings.setValue(QStringLiteral("longJumpSpeedPercent"), m_longJumpSpeedPercent);
     settings.setValue(QStringLiteral("aimAssistEnabled"), m_aimAssistEnabled);
-    settings.setValue(QStringLiteral("aimSlowdownMode"), m_aimSlowdownMode);
+    settings.setValue(QStringLiteral("aimLockOnMode"), m_aimLockOnMode);
+    settings.setValue(QStringLiteral("aimSilentLock"), m_aimSilentLock);
+    settings.setValue(QStringLiteral("silentFileDebug"), m_silentFileDebug);
+    settings.setValue(QStringLiteral("silentChatDebug"), m_silentChatDebug);
+    settings.setValue(QStringLiteral("aimScannerEnabled"), m_aimScannerEnabled);
+    settings.setValue(QStringLiteral("aimAttackViability"),m_aimAttackViability);
+    settings.setValue(QStringLiteral("silentControlAdaptation"),m_silentControlAdaptation);
+    settings.setValue(QStringLiteral("aimSequentialTargets"),m_aimSequentialTargets);
+    settings.setValue(QStringLiteral("bedBreakerEnabled"), m_bedBreakerEnabled);
+    settings.setValue(QStringLiteral("textGuiShowModes"),m_textGuiShowModes);
+    settings.setValue(QStringLiteral("localVelocityProbability"),
+                      m_localVelocityProbability);
+    settings.setValue(QStringLiteral("localVelocityVerticalPercent"),
+                      m_localVelocityVerticalPercent);
+    settings.setValue(QStringLiteral("velocityHotkey"),m_velocityHotkey);
     settings.setValue(QStringLiteral("aimSlowdownPercent"), m_aimSlowdownPercent);
     settings.setValue(QStringLiteral("aimSpeedPercent"), m_aimSpeedPercent);
     settings.setValue(QStringLiteral("aimMinimumDistance"), m_aimMinimumDistance);
     settings.setValue(QStringLiteral("aimMaximumDistance"), m_aimMaximumDistance);
     settings.setValue(QStringLiteral("aimFovDegrees"), m_aimFovDegrees);
+    settings.setValue(QStringLiteral("aimAttackCps"),m_aimAttackCps);
     settings.setValue(QStringLiteral("clickGuiWidthPercent"), m_clickGuiWidthPercent);
     settings.setValue(QStringLiteral("clickGuiHeightPercent"), m_clickGuiHeightPercent);
     settings.setValue(QStringLiteral("clickGuiOpacity"), m_clickGuiOpacity);
@@ -2463,12 +2913,19 @@ void OverlayManager::flushFeatureSettings() const
     settings.setValue(QStringLiteral("bedDefensePanelColor"), m_bedDefensePanelColor);
     settings.endGroup();
     settings.sync();
+    if (m_configAutoSave && !m_activeConfig.isEmpty()) {
+        copySettingsGroup(settings, QStringLiteral("features"),
+            QStringLiteral("ConfigProfiles/%1/features").arg(m_activeConfig));
+        copySettingsGroup(settings, QStringLiteral("MediaOverlay"),
+            QStringLiteral("ConfigProfiles/%1/media").arg(m_activeConfig));
+        settings.sync();
+    }
 }
 
 void OverlayManager::sendFeatureSnapshot()
 {
     if (!m_authenticated) return;
-    writeAgentCommand(QByteArrayLiteral("FEATURE_STATE ")
+    writeAgentCommand(QByteArrayLiteral("FEATURE_STATE_V3 ")
                       + (m_espEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_entityEspEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_bedEspEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
@@ -2498,14 +2955,14 @@ void OverlayManager::sendFeatureSnapshot()
                       + (m_bhopEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_bhopAutoJump ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_aimAssistEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
-                      + (m_aimSlowdownMode ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
+                      + (m_aimLockOnMode ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_textGuiEnabled ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + (m_allowHypixelMovement ? QByteArrayLiteral("1 ") : QByteArrayLiteral("0 "))
                       + QByteArray::number(std::clamp(m_bedDefenseRadius, 3, 10)) + ' '
                       + QByteArray::number(std::clamp(m_bedThreatRadius, 3, 32)) + ' '
-                      + QByteArray::number(std::clamp(m_bedDefenseHotkey, 8, 254)) + ' '
+                      + QByteArray::number(std::clamp(m_bedDefenseHotkey, 0, 254)) + ' '
                       + QByteArray::number(std::clamp(m_bedDefensePanelOpacity, 0, 100)) + ' '
-                      + QByteArray::number(std::clamp(m_hypixelPanelHotkey, 8, 254)) + ' '
+                      + QByteArray::number(std::clamp(m_hypixelPanelHotkey, 0, 254)) + ' '
                       + QByteArray::number(std::clamp(m_hypixelPanelOpacity, 0, 100)) + ' '
                       + QByteArray::number(std::clamp(m_hypixelPanelScale, 70, 160)) + ' '
                       + QByteArray::number(std::clamp(m_hypixelPanelX, -1, 1000)) + ' '
@@ -2527,7 +2984,7 @@ void OverlayManager::sendFeatureSnapshot()
                       + QByteArray::number(std::clamp(m_safewalkReleaseDelayMs, 0, 750)) + ' '
                       + QByteArray::number(std::clamp(m_safewalkEdgeSensitivity, 0, 100)) + ' '
                       + QByteArray::number(std::clamp(m_safewalkMinimumPitch, -90, 90)) + ' '
-                      + QByteArray::number(std::clamp(m_safewalkHotkey, 8, 254)) + ' '
+                      + QByteArray::number(std::clamp(m_safewalkHotkey, 0, 254)) + ' '
                       + QByteArray::number(std::clamp(m_flySpeedPercent, 10, 500)) + ' '
                       + QByteArray::number(std::clamp(m_aimSlowdownPercent, 5, 95)) + ' '
                       + QByteArray::number(std::clamp(m_aimSpeedPercent, 1, 100)) + ' '
@@ -2537,6 +2994,7 @@ void OverlayManager::sendFeatureSnapshot()
                       + QByteArray::number(std::clamp(m_bhopAirSpeedPercent, 10, 300)) + ' '
                       + QByteArray::number(static_cast<qulonglong>(m_featureHotkeysPackedA)) + ' '
                       + QByteArray::number(static_cast<qulonglong>(m_featureHotkeysPackedB)) + ' '
+                      + QByteArray::number(m_featureHotkeysPackedC) + ' '
                       + QByteArray::number(m_fireballEspEnabled ? 1 : 0) + ' '
                       + QByteArray::number(m_fireballEspFilled ? 1 : 0) + ' '
                       + QByteArray::number(m_longJumpEnabled ? 1 : 0) + ' '
@@ -2549,18 +3007,32 @@ void OverlayManager::sendFeatureSnapshot()
                       + QByteArray::number(std::clamp(m_clickGuiWidthPercent, 80, 150)) + ' '
                       + QByteArray::number(std::clamp(m_clickGuiHeightPercent, 80, 150)) + ' '
                       + QByteArray::number(std::clamp(m_clickGuiOpacity, 35, 100)) + ' '
-                      + QByteArray::number(m_featureExtraBits & 0xFFU) + ' '
+                      + QByteArray::number(m_featureExtraBits) + ' '
                       + QByteArray::number(std::clamp(m_textGuiAlignment, 0, 2)) + ' '
                       + QByteArray::number(std::clamp(m_localMobReach, 3, 10)) + ' '
                       + QByteArray::number(std::clamp(m_localAttackDelayMs, 100, 1500)) + ' '
                       + QByteArray::number(std::clamp(m_localVelocityPercent, 0, 100)) + '\n');
+    writeAgentCommand(QByteArrayLiteral("AIM_OPTIONS ")+QByteArray::number(
+        (m_aimSilentLock ? 1U : 0U) | (m_aimScannerEnabled ? 2U : 0U) |
+        (m_bedBreakerEnabled ? 4U : 0U) |
+        (m_aimAttackViability ? 8U : 0U) |
+        (m_textGuiShowModes ? 16U : 0U) |
+        (m_silentControlAdaptation ? 0x40000000U : 0U) |
+        (m_aimSequentialTargets ? 0x20000000U : 0U) |
+        (m_silentFileDebug ? 0x08000000U : 0U) |
+        (m_silentChatDebug ? 0x10000000U : 0U) |
+        (static_cast<unsigned>(std::clamp(m_localVelocityProbability,0,100))<<5U) |
+        (static_cast<unsigned>(std::clamp(m_localVelocityVerticalPercent,0,100))<<12U) |
+        (static_cast<unsigned>(std::clamp(m_velocityHotkey,0,254))<<19U))+'\n');
+    writeAgentCommand(QByteArrayLiteral("AIM_ATTACK_CPS ")+
+        QByteArray::number(std::clamp(m_aimAttackCps,1,20))+'\n');
 }
 
 void OverlayManager::sendBindSnapshot()
 {
     if (!m_authenticated) return;
     writeAgentCommand(QByteArrayLiteral("BIND ") +
-                      QByteArray::number(std::clamp(m_menuHotkey, 8, 254)) + '\n');
+                      QByteArray::number(std::clamp(m_menuHotkey, 0, 254)) + '\n');
 }
 
 void OverlayManager::sendGuiScaleSnapshot()
@@ -2715,4 +3187,36 @@ void OverlayManager::fail(const QString &code, const QString &detail)
     setRenderer({});
     resetGameState();
     setErrorState(code, detail);
+}
+
+QStringList OverlayManager::textGuiModules() const
+{
+    QStringList result;
+    const auto add=[&](bool enabled,const char* label) {
+        if(enabled) result.append(QString::fromLatin1(label));
+    };
+    add(m_entityEspEnabled,"Player ESP"); add(m_bedEspEnabled,"Bed ESP");
+    add(m_nametagEnabled,"Nametag"); add(m_bedThreatAlertsEnabled,"Bed Alert");
+    add(m_safewalkEnabled,"Safewalk"); add(m_scaffoldEnabled,"Scaffold");
+    add(m_flyEnabled,"Fly"); add(m_bhopEnabled,"BHop");
+    if(m_aimAssistEnabled) {
+        QString label=QStringLiteral("Aim Assist");
+        if(m_textGuiShowModes) label+=m_aimSilentLock
+            ? QStringLiteral("  ·  Silent Lock")
+            : m_aimLockOnMode ? QStringLiteral("  ·  Lock On")
+                              : QStringLiteral("  ·  Smooth");
+        result.append(label);
+    }
+    add(m_hypixelPanelEnabled,"Player Stats");
+    add(m_debugChatEnabled,"Debug"); add(m_fireballEspEnabled,"Fireball ESP");
+    add(m_featureExtraBits & 0x04U,"Knockback Prediction");
+    add(m_featureExtraBits & 0x08U,"Bow Prediction");
+    add(m_featureExtraBits & 0x20U,"Local Velocity");
+    add((m_featureHotkeysPackedC & 0x10000U) != 0U,"FreeLook");
+    QSettings mediaSettings;
+    mediaSettings.beginGroup(QStringLiteral("MediaOverlay"));
+    const bool mediaEnabled=mediaSettings.value(QStringLiteral("enabled"),true).toBool();
+    mediaSettings.endGroup();
+    add(mediaEnabled,"Now Playing");
+    return result;
 }

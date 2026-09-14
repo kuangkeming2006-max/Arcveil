@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import McOverlay 1.0
 
 ApplicationWindow {
@@ -10,15 +11,19 @@ ApplicationWindow {
     height: AppSettings.windowHeight
     minimumWidth: 1040
     minimumHeight: 680
-    visible: true
+    property bool startupReady: false
+    visible: startupReady
     title: "Java Overlay Studio"
     color: backgroundColor
+    // Keep the real Windows caption, snap targets and DPI-aware resize frame.
+    flags: Qt.Window
+    readonly property int chromeHeight: 0
 
     readonly property bool darkTheme: AppSettings.darkTheme
-    readonly property color backgroundColor: darkTheme ? "#101217" : "#F7F2FA"
-    readonly property color surfaceColor: darkTheme ? "#181B21" : "#FFFBFE"
-    readonly property color surfaceElevatedColor: darkTheme ? "#20242C" : "#FFFFFF"
-    readonly property color surfaceVariant: darkTheme ? "#2A2E37" : "#E7E0EC"
+    readonly property color backgroundColor: darkTheme ? "#0F1217" : "#F5F3F8"
+    readonly property color surfaceColor: darkTheme ? "#191D24" : "#FFFFFF"
+    readonly property color surfaceElevatedColor: darkTheme ? "#222730" : "#FFFFFF"
+    readonly property color surfaceVariant: darkTheme ? "#292E37" : "#ECE8F0"
     readonly property color primaryColor: darkTheme ? "#C9B7FF" : "#6750A4"
     readonly property color primaryContainer: darkTheme ? "#493B68" : "#EADDFF"
     readonly property color primaryContainerText: darkTheme ? "#F0E8FF" : "#21005D"
@@ -31,6 +36,7 @@ ApplicationWindow {
     readonly property color onPrimaryColor: darkTheme ? "#24163E" : "#FFFFFF"
     readonly property color primaryContainerMutedText: darkTheme ? "#D4C4F4" : "#4F378B"
     property bool windowPersistenceReady: false
+    property bool exitConfirmed: false
     readonly property var menuHotkeyOptions: [
         { "label": "Apostrophe (')", "value": 222 },
         { "label": "Insert", "value": 45 },
@@ -78,7 +84,7 @@ ApplicationWindow {
     readonly property var featureNavigationItems: [
         { "icon": "⌂", "label": "Main", "description": "Session status and controls", "route": "main" },
         { "icon": "P", "label": "Player Status", "description": "Identity, health and skin", "route": "player" },
-        { "icon": "◇", "label": "ESP", "description": "Single-player diagnostics", "route": "esp" },
+        { "icon": "◆", "label": "Config", "description": "Save and restore settings", "route": "config" },
         { "icon": "H", "label": "Hypixel", "description": "Official API statistics", "route": "hypixel" },
         { "icon": "i", "label": "About", "description": "Build and architecture", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Runtime preferences", "route": "settings" }
@@ -88,7 +94,10 @@ ApplicationWindow {
                                                     : setupNavigationItems
 
     property string activeRoute: "scanner"
-    onActiveRouteChanged: Qt.callLater(function() { pageEnterAnimation.restart() })
+    onActiveRouteChanged: {
+        Lifecycle.record("navigation: " + activeRoute)
+        Qt.callLater(function() { pageEnterAnimation.restart() })
+    }
     property alias autoRefresh: autoRefreshBinding.value
     QtObject {
         id: autoRefreshBinding
@@ -97,6 +106,11 @@ ApplicationWindow {
                             AppSettings.processAutoRefresh = value
     }
     property var pendingProcess: ({})
+    // Scan feedback remains long enough to read, then collapses out of the
+    // layout with a small upward rebound. It is deliberately independent from
+    // statusMessage so the model can retain useful diagnostics without pinning
+    // an empty strip above the process cards.
+    property bool scanFeedbackVisible: false
 
     function menuHotkeyIndex(virtualKey) {
         for (let index = 0; index < menuHotkeyOptions.length; ++index) {
@@ -121,8 +135,33 @@ ApplicationWindow {
     onWidthChanged: if (windowPersistenceReady) windowSizeSave.restart()
     onHeightChanged: if (windowPersistenceReady) windowSizeSave.restart()
     onClosing: function(close) {
+        Lifecycle.record("main window close requested")
+        if ((OverlayManager.attached || OverlayManager.busy) && !exitConfirmed) {
+            close.accepted = false
+            confirmExitDialog.open()
+            return
+        }
         AppSettings.windowWidth = width
         AppSettings.windowHeight = height
+        Lifecycle.requestExit("main window accepted close")
+    }
+
+    Dialog {
+        id: confirmExitDialog
+        anchors.centerIn: parent
+        width: 430
+        modal: true
+        title: "Close Java Overlay Studio?"
+        standardButtons: Dialog.Cancel | Dialog.Ok
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Closing will disconnect the current game overlay. Choose Cancel to keep the session running."
+        }
+        onAccepted: {
+            app.exitConfirmed = true
+            app.close()
+        }
     }
 
     Component.onCompleted: windowPersistenceReady = true
@@ -204,7 +243,7 @@ ApplicationWindow {
     }
 
     function pageIndexForRoute(route) {
-        if (route === "esp")
+        if (route === "config")
             return 1
         if (route === "main")
             return 2
@@ -268,7 +307,7 @@ ApplicationWindow {
     function browseProcesses() {
         browsingProcesses = true
         activeRoute = "scanner"
-        ProcessScanner.refresh()
+        ProcessScanner.refreshOnce()
     }
 
     function returnToSession() {
@@ -281,7 +320,7 @@ ApplicationWindow {
             OverlayManager.detach()
         pendingProcess = ({})
         ProcessScanner.selectProcess(0)
-        ProcessScanner.refresh()
+        ProcessScanner.refreshOnce()
     }
 
     Connections {
@@ -291,14 +330,26 @@ ApplicationWindow {
             if (!app.hasSelectedProcess)
                 app.activeRoute = "scanner"
         }
+
+        function onRefreshingChanged() {
+            if (ProcessScanner.refreshing) {
+                scanFeedbackDismiss.stop()
+                app.scanFeedbackVisible = true
+            } else if (app.scanFeedbackVisible) {
+                scanFeedbackDismiss.restart()
+            }
+        }
     }
 
     Connections {
         target: OverlayManager
 
         function onTargetExited() {
-            app.browsingProcesses = false
+            // A dead target has no session to return to. Keep the scanner route
+            // explicit even if the subsequent retry transitions through Error.
+            app.browsingProcesses = true
             app.activeRoute = "scanner"
+            ProcessScanner.refreshOnce()
         }
 
         function onStateChanged() {
@@ -329,8 +380,18 @@ ApplicationWindow {
     Timer {
         interval: 5000
         repeat: true
-        running: app.autoRefresh
+        // Wait five seconds *after* the previous five-second scan completes.
+        // This prevents an always-busy loop and gives the result chip time to
+        // finish its disappearance animation.
+        running: app.autoRefresh && !ProcessScanner.refreshing
         onTriggered: ProcessScanner.refresh()
+    }
+
+    Timer {
+        id: scanFeedbackDismiss
+        interval: 1250
+        repeat: false
+        onTriggered: app.scanFeedbackVisible = false
     }
 
     Rectangle {
@@ -339,11 +400,154 @@ ApplicationWindow {
     }
 
     Rectangle {
+        id: windowChrome
+        z: 500
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: app.chromeHeight
+        visible: false
+        color: app.darkTheme ? "#12151A" : "#F8F6FA"
+        border.width: 1
+        border.color: app.outlineVariantColor
+
+        RowLayout {
+            anchors.left: parent.left
+            anchors.leftMargin: 14
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 9
+            Rectangle {
+                Layout.preferredWidth: 22
+                Layout.preferredHeight: 22
+                radius: 7
+                color: app.primaryColor
+                Text {
+                    anchors.centerIn: parent
+                    text: "J"
+                    color: app.onPrimaryColor
+                    font.pixelSize: 12
+                    font.weight: Font.Bold
+                }
+            }
+            Text {
+                text: "Java Overlay Studio"
+                color: app.textColor
+                font.pixelSize: 12
+                font.weight: Font.Medium
+            }
+        }
+
+        MouseArea {
+            anchors.left: parent.left
+            anchors.right: chromeButtons.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            acceptedButtons: Qt.LeftButton
+            onPressed: app.startSystemMove()
+            onDoubleClicked: {
+                if (app.visibility === Window.Maximized) app.showNormal()
+                else app.showMaximized()
+            }
+        }
+
+        Row {
+            id: chromeButtons
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+
+            Repeater {
+                model: [
+                    { "glyph": "−", "action": "minimize", "label": "Minimize" },
+                    { "glyph": app.visibility === Window.Maximized ? "❐" : "□",
+                      "action": "maximize", "label": "Maximize or restore" },
+                    { "glyph": "×", "action": "close", "label": "Close" }
+                ]
+                delegate: Rectangle {
+                    required property var modelData
+                    width: 48
+                    height: windowChrome.height
+                    color: chromeMouse.containsMouse
+                           ? (modelData.action === "close" ? "#D83B3B"
+                                                          : app.hoverColor)
+                           : "transparent"
+                    Behavior on color { ColorAnimation { duration: 130 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData.glyph
+                        color: chromeMouse.containsMouse && modelData.action === "close"
+                               ? "white" : app.textColor
+                        font.pixelSize: modelData.action === "minimize" ? 19 : 17
+                    }
+                    MouseArea {
+                        id: chromeMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (modelData.action === "minimize") app.showMinimized()
+                            else if (modelData.action === "maximize") {
+                                if (app.visibility === Window.Maximized) app.showNormal()
+                                else app.showMaximized()
+                            } else app.close()
+                        }
+                    }
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.label
+                }
+            }
+        }
+    }
+
+    // Preserve native-feeling resize hit targets after replacing the Windows
+    // caption with the unified Material chrome.
+    MouseArea {
+        z: 1000; width: 6; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+        enabled: false; cursorShape: Qt.SizeHorCursor
+        onPressed: app.startSystemResize(Qt.LeftEdge)
+    }
+    MouseArea {
+        z: 1000; width: 6; anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+        enabled: false; cursorShape: Qt.SizeHorCursor
+        onPressed: app.startSystemResize(Qt.RightEdge)
+    }
+    MouseArea {
+        z: 1000; height: 6; anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
+        enabled: false; cursorShape: Qt.SizeVerCursor
+        onPressed: app.startSystemResize(Qt.TopEdge)
+    }
+    MouseArea {
+        z: 1000; height: 6; anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right
+        enabled: false; cursorShape: Qt.SizeVerCursor
+        onPressed: app.startSystemResize(Qt.BottomEdge)
+    }
+    MouseArea {
+        z: 1001; width: 10; height: 10; anchors.left: parent.left; anchors.top: parent.top
+        enabled: false; cursorShape: Qt.SizeFDiagCursor
+        onPressed: app.startSystemResize(Qt.LeftEdge | Qt.TopEdge)
+    }
+    MouseArea {
+        z: 1001; width: 10; height: 10; anchors.right: parent.right; anchors.top: parent.top
+        enabled: false; cursorShape: Qt.SizeBDiagCursor
+        onPressed: app.startSystemResize(Qt.RightEdge | Qt.TopEdge)
+    }
+    MouseArea {
+        z: 1001; width: 10; height: 10; anchors.left: parent.left; anchors.bottom: parent.bottom
+        enabled: false; cursorShape: Qt.SizeBDiagCursor
+        onPressed: app.startSystemResize(Qt.LeftEdge | Qt.BottomEdge)
+    }
+    MouseArea {
+        z: 1001; width: 10; height: 10; anchors.right: parent.right; anchors.bottom: parent.bottom
+        enabled: false; cursorShape: Qt.SizeFDiagCursor
+        onPressed: app.startSystemResize(Qt.RightEdge | Qt.BottomEdge)
+    }
+
+    Rectangle {
         id: navigationRail
         width: app.navigationPaneWidth
         z: 2
         anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.top: windowChrome.bottom
         anchors.bottom: parent.bottom
         color: app.darkTheme ? "#15181E" : "#F1ECF4"
 
@@ -442,6 +646,8 @@ ApplicationWindow {
                 model: app.navigationItems
                 spacing: 8
                 interactive: contentHeight > height
+                acceptedButtons: Qt.NoButton
+                PageWheelHandler { scroller: navigationList }
                 boundsBehavior: Flickable.StopAtBounds
                 clip: true
 
@@ -637,6 +843,7 @@ ApplicationWindow {
 
                     MouseArea {
                         id: navMouse
+                        objectName: "navigation_" + modelData.route
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
@@ -817,7 +1024,7 @@ ApplicationWindow {
         id: workspace
         anchors.left: navigationRail.right
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: windowChrome.bottom
         anchors.bottom: actionBar.top
         transformOrigin: Item.Center
 
@@ -878,45 +1085,11 @@ ApplicationWindow {
                             }
                         }
 
-                        Rectangle {
-                            Layout.preferredWidth: scanStatus.implicitWidth + 28
-                            Layout.preferredHeight: 38
-                            visible: workspace.width >= 820
-                            radius: 19
-                            color: "#EEE8F1"
-
-                            Row {
-                                anchors.centerIn: parent
-                                spacing: 8
-                                Rectangle {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 8
-                                    height: 8
-                                    radius: 4
-                                    color: ProcessScanner.refreshing ? "#F2A000" : app.primaryColor
-
-                                    SequentialAnimation on opacity {
-                                        running: ProcessScanner.refreshing
-                                        loops: Animation.Infinite
-                                        NumberAnimation { to: 0.25; duration: 520 }
-                                        NumberAnimation { to: 1; duration: 520 }
-                                    }
-                                }
-                                Text {
-                                    id: scanStatus
-                                    text: ProcessScanner.statusMessage
-                                    color: app.secondaryTextColor
-                                    font.pixelSize: 12
-                                    font.weight: Font.Medium
-                                }
-                            }
-                        }
-
                         MaterialButton {
                             text: ProcessScanner.refreshing ? "Scanning…" : "Refresh"
-                            iconText: "↻"
+                            objectName: "scanRefreshButton"
+                            iconText: ProcessScanner.refreshing ? "" : "↻"
                             filled: false
-                            visible: workspace.width >= 720
                             foregroundColor: app.primaryColor
                             outlineColor: app.outlineColor
                             enabled: !ProcessScanner.refreshing
@@ -924,14 +1097,57 @@ ApplicationWindow {
                         }
                     }
 
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: app.scanFeedbackVisible ? 40 : 0
+                        opacity: app.scanFeedbackVisible ? 1 : 0
+                        scale: app.scanFeedbackVisible ? 1 : 0.965
+                        clip: true
+
+                        Behavior on Layout.preferredHeight {
+                            NumberAnimation {
+                                duration: 360
+                                easing.type: Easing.BezierSpline
+                                easing.bezierCurve: [0.34, 1.28, 0.64, 1.0, 1.0, 1.0]
+                            }
+                        }
+                        Behavior on opacity { NumberAnimation { duration: 210 } }
+                        Behavior on scale {
+                            NumberAnimation {
+                                duration: 330
+                                easing.type: Easing.OutBack
+                                easing.overshoot: 0.8
+                            }
+                        }
+
+                        Column {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: 7
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: ProcessScanner.statusMessage
+                                color: app.secondaryTextColor
+                                font.pixelSize: 12
+                                font.weight: Font.Medium
+                            }
+                            ScanIndicator {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: Math.min(320, workspace.width * 0.42)
+                                running: ProcessScanner.refreshing
+                                color: app.primaryColor
+                            }
+                        }
+                    }
+
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         radius: 24
-                        color: "#ECE6EF"
+                        color: app.darkTheme ? "#15191F" : "#ECE6EF"
+                        Behavior on color { ColorAnimation { duration: 280 } }
                         clip: true
 
-                        Flickable {
+                        WheelPage {
                             id: processGrid
                             anchors.fill: parent
                             anchors.margins: 18
@@ -939,7 +1155,7 @@ ApplicationWindow {
                             boundsBehavior: Flickable.StopAtBounds
                             property int columnCount: width >= 1080 ? 3 : (width >= 680 ? 2 : 1)
                             contentWidth: width
-                            contentHeight: processCardLayout.implicitHeight
+                            contentHeight: processCardLayout.implicitHeight + 16
 
                             ScrollBar.vertical: ScrollBar {
                                 policy: ScrollBar.AsNeeded
@@ -951,7 +1167,9 @@ ApplicationWindow {
                             // row naturally adopts its tallest card.
                             GridLayout {
                                 id: processCardLayout
-                                width: processGrid.width
+                                x: 8
+                                y: 8
+                                width: processGrid.width - 16
                                 columns: processGrid.columnCount
                                 columnSpacing: 18
                                 rowSpacing: 18
@@ -1029,9 +1247,23 @@ ApplicationWindow {
                 }
             }
 
-            // ESP / local world diagnostics --------------------------------
+            // Saved feature configurations ----------------------------------
             Item {
-                Flickable {
+                ConfigPage {
+                    anchors.fill: parent
+                    z: 10
+                    backgroundColor: app.backgroundColor
+                    surfaceColor: app.surfaceColor
+                    surfaceVariant: app.surfaceVariant
+                    textColor: app.textColor
+                    secondaryTextColor: app.secondaryTextColor
+                    primaryColor: app.primaryColor
+                    onPrimaryColor: app.onPrimaryColor
+                    outlineVariantColor: app.outlineVariantColor
+                }
+                WheelPage {
+                    visible: false
+                    enabled: false
                     anchors.fill: parent
                     contentWidth: width
                     contentHeight: mainContent.implicitHeight + 58
@@ -1363,7 +1595,7 @@ ApplicationWindow {
                                     Item { Layout.fillWidth: true }
                                     Text {
                                         text: OverlayManager.hypixelPanelColor.toUpperCase() === "#FFFFFF" ? "LIGHT" : "DARK"
-                                        color: app.mutedColor
+                                        color: app.secondaryTextColor
                                         font.pixelSize: 12
                                         font.weight: Font.Bold
                                     }
@@ -1803,7 +2035,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             Layout.preferredWidth: 2
-                            Layout.minimumWidth: 520
+                            Layout.minimumWidth: 420
                             radius: 24
                             color: app.surfaceColor
                             border.width: 1
@@ -2002,15 +2234,29 @@ ApplicationWindow {
 
                                 Item { Layout.fillHeight: true }
 
-                                MaterialButton {
-                                    Layout.alignment: Qt.AlignLeft
-                                    text: "Retry attach"
-                                    iconText: "↻"
+                                RowLayout {
+                                    Layout.fillWidth: true
                                     visible: OverlayManager.state === OverlayManager.Error
-                                    filled: true
-                                    containerColor: app.primaryColor
-                                    enabled: OverlayManager.targetPid !== 0 && !OverlayManager.busy
-                                    onClicked: OverlayManager.attachToProcess(OverlayManager.targetPid)
+                                    spacing: 10
+
+                                    MaterialButton {
+                                        text: "Retry attach"
+                                        iconText: "↻"
+                                        filled: true
+                                        containerColor: app.primaryColor
+                                        enabled: OverlayManager.targetPid !== 0 && !OverlayManager.busy
+                                        onClicked: OverlayManager.attachToProcess(OverlayManager.targetPid)
+                                    }
+
+                                    MaterialButton {
+                                        text: "Browse processes"
+                                        iconText: "⌕"
+                                        filled: false
+                                        foregroundColor: app.primaryColor
+                                        outlineColor: app.outlineColor
+                                        enabled: !OverlayManager.busy
+                                        onClicked: app.browseProcesses()
+                                    }
                                 }
 
                                 MaterialButton {
@@ -2031,58 +2277,32 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             Layout.preferredWidth: 1
-                            Layout.minimumWidth: 300
-                            visible: workspace.width >= 940
+                            Layout.minimumWidth: 220
                             radius: 24
                             color: "#211E24"
                             clip: true
 
-                            ColumnLayout {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 22
-                                spacing: 16
-
+                            Column {
+                                anchors.left: parent.left; anchors.right: parent.right
+                                anchors.top: parent.top; anchors.margins: 22
+                                spacing: 22
                                 Text {
-                                    Layout.fillWidth: true
-                                    text: "LIVE SURFACE PREVIEW"
-                                    color: "#D0C8D7"
-                                    font.pixelSize: 10
-                                    font.weight: Font.Bold
-                                    font.letterSpacing: 1.1
+                                    text: "TEXTGUI PREVIEW"
+                                    color: "#D0C8D7"; font.pixelSize: 10
+                                    font.weight: Font.Bold; font.letterSpacing: 1.1
                                 }
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 128
-                                    radius: 20
-                                    color: "#E91E1B20"
-                                    border.width: 1
-                                    border.color: "#45FFFFFF"
-
-                                    Column {
-                                        anchors.fill: parent
-                                        anchors.margins: 16
-                                        spacing: 6
-                                        Text { text: "JNI NATIVE OVERLAY"; color: "#D0BCFF"; font.pixelSize: 10; font.weight: Font.Bold; font.letterSpacing: 1 }
-                                        Text { text: OverlayManager.rendererActive ? "In-game renderer active" : "Preview"; color: "white"; font.pixelSize: 19; font.weight: Font.DemiBold }
-                                        Text { text: OverlayManager.interactive ? "ImGui input capture enabled" : "Game input passthrough"; color: "#CAC4D0"; font.pixelSize: 12 }
-                                    }
+                                TextGuiPreview {
+                                    width: parent.width
+                                    modules: OverlayManager.textGuiModules.concat(Blacklist.panelEnabled ? ["Blacklist"] : [])
+                                    textColor: OverlayManager.textGuiColor
+                                    alignment: OverlayManager.textGuiAlignment
+                                    verticalLine: OverlayManager.textGuiVerticalLine
                                 }
-                            }
-
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: 2
-                                height: 34
-                                color: "#90D0BCFF"
-                            }
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: 34
-                                height: 2
-                                color: "#90D0BCFF"
+                                Text {
+                                    width: parent.width; wrapMode: Text.WordWrap
+                                    text: OverlayManager.textGuiEnabled ? "Enabled modules · live settings" : "Preview only · TextGUI is disabled"
+                                    color: "#AAA5B2"; font.pixelSize: 12
+                                }
                             }
                         }
                     }
@@ -2091,7 +2311,7 @@ ApplicationWindow {
 
             // Hypixel official API -------------------------------------------
             Item {
-                Flickable {
+                WheelPage {
                     anchors.fill: parent
                     contentWidth: width
                     contentHeight: hypixelContent.implicitHeight + 68
@@ -2195,7 +2415,7 @@ ApplicationWindow {
 
             // About ---------------------------------------------------------
             Item {
-                Flickable {
+                WheelPage {
                     anchors.fill: parent
                     contentWidth: width
                     contentHeight: aboutContent.implicitHeight + 68
@@ -2257,7 +2477,7 @@ ApplicationWindow {
 
             // Settings -------------------------------------------------------
             Item {
-                Flickable {
+                WheelPage {
                     anchors.fill: parent
                     contentWidth: width
                     contentHeight: settingsContent.implicitHeight + 68
@@ -2266,10 +2486,10 @@ ApplicationWindow {
 
                     ColumnLayout {
                         id: settingsContent
-                        x: 34
+                        x: Math.round((parent.width - width) / 2)
                         y: 28
-                        width: parent.width - 68
-                        spacing: 20
+                        width: Math.min(parent.width - 68, 1280)
+                        spacing: 14
 
                     Text {
                         text: "Injector settings"
@@ -2283,9 +2503,15 @@ ApplicationWindow {
                         font.pixelSize: 14
                     }
 
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width >= 920 ? 2 : 1
+                        columnSpacing: 14
+                        rowSpacing: 14
+
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 118
+                        Layout.preferredHeight: 124
                         radius: 22
                         color: app.surfaceColor
                         border.width: 1
@@ -2307,9 +2533,11 @@ ApplicationWindow {
                                     font.weight: Font.DemiBold
                                 }
                                 Text {
-                                    text: "Theme and window size are restored on the next launch"
+                                    Layout.fillWidth: true
+                                    text: "Choose a comfortable controller theme. Window size is restored automatically."
                                     color: app.secondaryTextColor
                                     font.pixelSize: 13
+                                    wrapMode: Text.WordWrap
                                 }
                             }
                             MaterialButton {
@@ -2335,7 +2563,7 @@ ApplicationWindow {
 
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 104
+                        Layout.preferredHeight: 124
                         radius: 22
                         color: app.surfaceColor
                         border.width: 1
@@ -2349,11 +2577,18 @@ ApplicationWindow {
                                 Text { text: "Automatic process refresh"; color: app.textColor; font.pixelSize: 17; font.weight: Font.DemiBold }
                                 Text { text: "Rescan Java processes every five seconds"; color: app.secondaryTextColor; font.pixelSize: 13 }
                             }
-                            Switch {
-                                checked: app.autoRefresh
-                                onToggled: app.autoRefresh = checked
+                            MaterialButton {
+                                Layout.preferredWidth: 112
+                                text: app.autoRefresh ? "Enabled" : "Disabled"
+                                iconText: app.autoRefresh ? "✓" : ""
+                                filled: app.autoRefresh
+                                containerColor: app.primaryColor
+                                foregroundColor: app.autoRefresh ? app.onPrimaryColor : app.primaryColor
+                                outlineColor: app.outlineVariantColor
+                                onClicked: app.autoRefresh = !app.autoRefresh
                             }
                         }
+                    }
                     }
 
                     Rectangle {
@@ -2373,8 +2608,10 @@ ApplicationWindow {
                                     Text { text: "Hypixel API key"; color: app.textColor; font.pixelSize: 17; font.weight: Font.DemiBold }
                                     Text { text: ApiKeys.statusMessage; color: ApiKeys.configured ? "#20853B" : app.secondaryTextColor; font.pixelSize: 12 }
                                 }
+                                Item { Layout.fillWidth: true }
                                 MaterialButton {
                                     text: "Remove"; filled: false; visible: ApiKeys.configured
+                                    Layout.preferredWidth: 104
                                     Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                                     foregroundColor: "#FFB4AB"; outlineColor: app.outlineVariantColor
                                     onClicked: ApiKeys.clearKey()
@@ -2385,26 +2622,32 @@ ApplicationWindow {
                                 MaterialTextField {
                                     id: apiKeyField
                                     Layout.fillWidth: true; Layout.preferredHeight: 52
-                                    placeholderText: "Paste Hypixel developer API key"
+                                    placeholderText: "Paste complete Hypixel Personal / Development API key"
                                     echoMode: TextInput.Password
                                     passwordCharacter: "●"
                                     selectByMouse: true
-                                    maximumLength: 256
+                                    maximumLength: 8192
                                     Accessible.name: "Hypixel API key"
                                     onAccepted: if (ApiKeys.saveKey(text)) text = ""
                                 }
                                 MaterialButton {
                                     text: "Save securely"; filled: true; containerColor: app.primaryColor
-                                    enabled: apiKeyField.text.trim().length >= 16
+                                    enabled: apiKeyField.text.trim().length > 0
                                     onClicked: if (ApiKeys.saveKey(apiKeyField.text)) apiKeyField.text = ""
                                 }
                             }
                         }
                     }
 
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: width >= 920 ? 2 : 1
+                        columnSpacing: 14
+                        rowSpacing: 14
+
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 104
+                        Layout.preferredHeight: 116
                         radius: 22
                         color: app.surfaceColor
                         border.width: 1
@@ -2433,7 +2676,7 @@ ApplicationWindow {
 
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 104
+                        Layout.preferredHeight: 116
                         radius: 22
                         color: app.surfaceColor
                         border.width: 1
@@ -2465,10 +2708,11 @@ ApplicationWindow {
                             }
                         }
                     }
+                    }
 
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 176
+                        Layout.preferredHeight: 144
                         radius: 22
                         color: app.primaryContainer
 
@@ -2486,10 +2730,10 @@ ApplicationWindow {
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 7
-                                Text { text: "Dear ImGui + OpenGL 2"; color: app.primaryContainerText; font.pixelSize: 19; font.weight: Font.DemiBold }
+                                Text { text: "Native overlay runtime"; color: app.primaryContainerText; font.pixelSize: 19; font.weight: Font.DemiBold }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "The controller first uses JVM Attach and can fall back to the standard Windows DLL loader when runtime Attach is unavailable. The agent renders before SwapBuffers in Minecraft's own LWJGL 2 OpenGL context."
+                                    text: "JVM Attach with a native loader fallback · Dear ImGui · OpenGL 2 · authenticated local IPC"
                                     color: app.primaryContainerMutedText
                                     font.pixelSize: 13
                                     wrapMode: Text.WordWrap
@@ -2717,6 +2961,9 @@ ApplicationWindow {
 
     Popup {
         id: attachDialog
+        objectName: "attachDialog"
+        onOpened: Lifecycle.record("attach dialog opened")
+        onClosed: Lifecycle.record("attach dialog closed")
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(520, app.width - 80)

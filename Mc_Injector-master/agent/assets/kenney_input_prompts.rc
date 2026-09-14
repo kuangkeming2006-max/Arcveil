@@ -1,0 +1,4 @@
+#include "KenneyInputPromptsResource.h"
+
+MCOVERLAY_KENNEY_INPUT_PROMPTS_PNG RCDATA "kenney_keyboard_mouse.png"
+MCOVERLAY_KENNEY_INPUT_PROMPTS_XML RCDATA "kenney_keyboard_mouse.xml"

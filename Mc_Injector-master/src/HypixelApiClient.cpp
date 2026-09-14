@@ -376,7 +376,12 @@ void HypixelApiClient::finishReply(QNetworkReply *reply,
             setError(QStringLiteral("Hypixel rate limit reached; retry after %1 seconds")
                          .arg(std::max(0, m_rateResetSeconds)));
         } else if (status == 403) {
-            setError(QStringLiteral("Hypixel rejected the registered API key"));
+            QString cause = QJsonDocument::fromJson(document).object()
+                .value(QStringLiteral("cause")).toString(QStringLiteral("Access forbidden"));
+            if (m_apiKeys != nullptr && !m_apiKeys->apiKey().isEmpty())
+                cause.replace(QString::fromUtf8(m_apiKeys->apiKey()), QStringLiteral("[redacted]"));
+            setError(QStringLiteral("Hypixel HTTP 403: %1. If your Personal application shows Pending review, it cannot be used until approved. Both key types use the API-Key header; also check expiry/revocation in the dashboard.")
+                .arg(cause.left(180)));
         } else {
             setError(QStringLiteral("Hypixel request failed (%1): %2")
                          .arg(status)

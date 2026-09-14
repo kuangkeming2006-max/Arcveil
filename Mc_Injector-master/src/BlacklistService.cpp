@@ -449,6 +449,13 @@ void BlacklistService::setPanelOpacity(const int opacity)
     m_panelOpacity = bounded; save(); emit settingsChanged(); emitSettingsCommand();
 }
 
+void BlacklistService::setContentScale(const int scale)
+{
+    const int bounded = std::clamp(scale, 80, 200);
+    if (m_contentScale == bounded) return;
+    m_contentScale = bounded; save(); emit settingsChanged(); emitSettingsCommand();
+}
+
 void BlacklistService::setPanelColor(const QString &color)
 {
     const QString normalized = normalizedColor(color);
@@ -484,6 +491,7 @@ void BlacklistService::handleAgentSettings(const bool panelEnabled,
                                            const bool showWithClickGui,
                                            const bool collapsed,
                                            const int opacity,
+                                           const int contentScale,
                                            const QString &color)
 {
     m_panelEnabled = panelEnabled;
@@ -492,6 +500,7 @@ void BlacklistService::handleAgentSettings(const bool panelEnabled,
     m_showWithClickGui = showWithClickGui;
     m_collapsed = collapsed;
     m_panelOpacity = std::clamp(opacity, 0, 100);
+    m_contentScale = std::clamp(contentScale, 80, 200);
     const QString normalized = normalizedColor(color);
     if (!normalized.isEmpty()) m_panelColor = normalized;
     save();
@@ -509,7 +518,8 @@ void BlacklistService::emitSettingsCommand()
         QByteArray::number(m_collapsed ? 1 : 0) + ' ' +
         QByteArray::number(m_panelOpacity) + ' ' + QByteArray::number(rgb) + ' ' +
         QByteArray::number(m_panelX) + ' ' + QByteArray::number(m_panelY) + ' ' +
-        QByteArray::number(m_panelWidth) + ' ' + QByteArray::number(m_panelHeight) + '\n';
+        QByteArray::number(m_panelWidth) + ' ' + QByteArray::number(m_panelHeight) + ' ' +
+        QByteArray::number(m_contentScale) + '\n';
     emit commandReady(line);
 }
 
@@ -553,6 +563,8 @@ void BlacklistService::load()
     m_showWithClickGui = settings.value(QStringLiteral("showWithClickGui"), true).toBool();
     m_collapsed = settings.value(QStringLiteral("collapsed"), false).toBool();
     m_panelOpacity = std::clamp(settings.value(QStringLiteral("panelOpacity"), 82).toInt(), 0, 100);
+    m_contentScale = std::clamp(settings.value(
+        QStringLiteral("contentScale"), 100).toInt(), 80, 200);
     const QString color = normalizedColor(settings.value(
         QStringLiteral("panelColor"), QStringLiteral("#111218")).toString());
     m_panelColor = color.isEmpty() ? QStringLiteral("#111218") : color;
@@ -610,6 +622,7 @@ void BlacklistService::save() const
     settings.setValue(QStringLiteral("showWithClickGui"), m_showWithClickGui);
     settings.setValue(QStringLiteral("collapsed"), m_collapsed);
     settings.setValue(QStringLiteral("panelOpacity"), m_panelOpacity);
+    settings.setValue(QStringLiteral("contentScale"), m_contentScale);
     settings.setValue(QStringLiteral("panelColor"), m_panelColor);
     settings.setValue(QStringLiteral("panelX"), m_panelX);
     settings.setValue(QStringLiteral("panelY"), m_panelY);

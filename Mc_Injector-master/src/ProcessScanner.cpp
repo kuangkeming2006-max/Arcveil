@@ -2,6 +2,7 @@
 
 #include <QLocale>
 #include <QTimer>
+#include <QtConcurrentRun>
 
 #include <algorithm>
 #include <array>
@@ -131,8 +132,27 @@ quint64 workingSetBytes(HANDLE process)
 ProcessScanner::ProcessScanner(QObject *parent)
     : QAbstractListModel(parent)
 {
-    // Defer the first scan until the QML engine has connected to model signals.
-    QTimer::singleShot(0, this, &ProcessScanner::refresh);
+    // StartupLoader starts the first scan after the main window's first frame.
+    // Constructing services must not block the initial loading animation.
+    connect(&m_scanWatcher, &QFutureWatcher<QVector<ProcessInfo>>::finished, this, [this] {
+        m_workerPending = false;
+        try {
+            applyScanResults(m_scanWatcher.result());
+        } catch (...) {
+            // Retain the previous usable model if enumeration failed.
+            m_scanFailed = true;
+        }
+        if (!m_continuous || m_scanClock.elapsed() >= 5000) finishScan();
+    });
+    m_scanTimer.setInterval(50);
+    connect(&m_scanTimer, &QTimer::timeout, this, [this] {
+        emit scanProgressChanged();
+        if (m_scanClock.elapsed() >= 5000) {
+            if (!m_workerPending) finishScan();
+        } else if (!m_workerPending && m_scanClock.elapsed() - m_lastDispatch >= 500) {
+            launchScan();
+        }
+    });
 }
 
 int ProcessScanner::rowCount(const QModelIndex &parent) const
@@ -195,19 +215,78 @@ QString ProcessScanner::lastRefresh() const
 
 void ProcessScanner::refresh()
 {
+    startScan(true);
+}
+
+void ProcessScanner::refreshOnce()
+{
+    startScan(false);
+}
+
+double ProcessScanner::scanProgress() const
+{
+    return m_scanClock.isValid() ? std::clamp(m_scanClock.elapsed()/5000.0,0.0,1.0) : 0;
+}
+
+void ProcessScanner::startScan(bool continuous)
+{
     if (m_refreshing)
         return;
 
+    m_continuous = continuous;
+    m_scanFailed = false;
+    m_scanClock.restart();
+    if (continuous) m_scanTimer.start();
     setRefreshing(true);
+    emit scanProgressChanged();
     setStatusMessage(QStringLiteral("Scanning Windows processes…"));
+    launchScan();
+}
 
+void ProcessScanner::launchScan()
+{
+    m_workerPending = true;
+    m_lastDispatch = m_scanClock.elapsed();
+
+    // The worker owns only value data; it captures no QObject or model pointer.
+    // Slow process/path queries cannot occupy the GUI thread. The watcher
+    // publishes the finished result on the model's own thread.
+    m_scanWatcher.setFuture(QtConcurrent::run(&ProcessScanner::enumerateJavaProcesses));
+}
+
+void ProcessScanner::finishScan()
+{
+    m_scanTimer.stop();
+    setRefreshing(false);
+    emit scanProgressChanged();
+    setStatusMessage(m_scanFailed
+        ? QStringLiteral("Some process queries failed. Refresh to retry.")
+        : m_processes.isEmpty() ? QStringLiteral("No running Java processes found")
+        : QStringLiteral("Found %1 Java process%2").arg(m_processes.size())
+            .arg(m_processes.size()==1 ? QString{} : QStringLiteral("es")));
+}
+
+void ProcessScanner::applyScanResults(QVector<ProcessInfo> discovered)
+{
     const int previousCount = m_processes.size();
     const quint32 previousSelection = m_selectedPid;
-    QVector<ProcessInfo> discovered = enumerateJavaProcesses();
 
-    beginResetModel();
-    m_processes = std::move(discovered);
-    endResetModel();
+    // Preserve delegates/hover/selection on repeated polls; memory changing
+    // must not tear down all cards ten times during the scan animation.
+    const bool sameOrder = discovered.size()==m_processes.size() && std::equal(
+        discovered.cbegin(), discovered.cend(), m_processes.cbegin(),
+        [](const auto& a,const auto& b) { return a.pid==b.pid; });
+    if (sameOrder) {
+        for (int row=0; row<discovered.size(); ++row) {
+            if (discovered[row]==m_processes[row]) continue;
+            m_processes[row]=std::move(discovered[row]);
+            emit dataChanged(index(row,0),index(row,0));
+        }
+    } else {
+        beginResetModel();
+        m_processes = std::move(discovered);
+        endResetModel();
+    }
 
     const bool selectionStillExists = std::any_of(
         m_processes.cbegin(), m_processes.cend(),
@@ -226,12 +305,13 @@ void ProcessScanner::refresh()
     m_lastRefresh = QDateTime::currentDateTime();
     emit lastRefreshChanged();
 
-    setStatusMessage(m_processes.isEmpty()
+    setStatusMessage(m_continuous && m_scanClock.elapsed()<5000
+        ? QStringLiteral("Scanning… %1 found").arg(m_processes.size())
+        : m_processes.isEmpty()
         ? QStringLiteral("No running Java processes found")
         : QStringLiteral("Found %1 Java process%2")
               .arg(m_processes.size())
               .arg(m_processes.size() == 1 ? QString{} : QStringLiteral("es")));
-    setRefreshing(false);
 }
 
 void ProcessScanner::selectProcess(quint32 pid)

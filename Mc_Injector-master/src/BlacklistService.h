@@ -31,6 +31,8 @@ class BlacklistService final : public QObject
     Q_PROPERTY(bool collapsed READ collapsed WRITE setCollapsed NOTIFY settingsChanged)
     Q_PROPERTY(int panelOpacity READ panelOpacity WRITE setPanelOpacity
                NOTIFY settingsChanged)
+    Q_PROPERTY(int contentScale READ contentScale WRITE setContentScale
+               NOTIFY settingsChanged)
     Q_PROPERTY(QString panelColor READ panelColor WRITE setPanelColor
                NOTIFY settingsChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -48,6 +50,7 @@ public:
     [[nodiscard]] bool showWithClickGui() const noexcept { return m_showWithClickGui; }
     [[nodiscard]] bool collapsed() const noexcept { return m_collapsed; }
     [[nodiscard]] int panelOpacity() const noexcept { return m_panelOpacity; }
+    [[nodiscard]] int contentScale() const noexcept { return m_contentScale; }
     [[nodiscard]] QString panelColor() const { return m_panelColor; }
     [[nodiscard]] QString lastError() const { return m_lastError; }
 
@@ -70,7 +73,7 @@ public slots:
     void handleAgentLayout(int x, int y, int width, int height);
     void handleAgentSettings(bool panelEnabled, bool matchAlertsEnabled,
                              bool allowIdOnlyNicks, bool showWithClickGui,
-                             bool collapsed, int opacity,
+                             bool collapsed, int opacity, int contentScale,
                              const QString &color);
     void setReasonPresets(const QStringList &presets);
     void setPanelEnabled(bool enabled);
@@ -79,6 +82,7 @@ public slots:
     void setShowWithClickGui(bool enabled);
     void setCollapsed(bool collapsed);
     void setPanelOpacity(int opacity);
+    void setContentScale(int scale);
     void setPanelColor(const QString &color);
 
 signals:
@@ -140,6 +144,7 @@ private:
     bool m_showWithClickGui = true;
     bool m_collapsed = false;
     int m_panelOpacity = 82;
+    int m_contentScale = 100;
     QString m_panelColor = QStringLiteral("#111218");
     int m_panelX = -1;
     int m_panelY = -1;

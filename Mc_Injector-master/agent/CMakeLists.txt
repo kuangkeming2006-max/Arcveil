@@ -153,7 +153,18 @@ add_library(McOverlayAgent SHARED
     overlay_renderer.h
     wndproc_hook.cpp
     wndproc_hook.h
+    tsf_candidates.cpp
+    tsf_candidates.h
+    gaussian_blur.cpp
+    gaussian_blur.h
     McOverlayAgent.def)
+
+# Keep the resource compiler isolated from the Agent's JNI include paths.
+# MinGW windres otherwise splits the JDK's "Program Files" path while
+# preprocessing an unrelated .rc file.
+add_library(mc_agent_assets OBJECT assets/kenney_input_prompts.rc)
+set_target_properties(mc_agent_assets PROPERTIES AUTOMOC OFF)
+target_sources(McOverlayAgent PRIVATE $<TARGET_OBJECTS:mc_agent_assets>)
 
 target_include_directories(McOverlayAgent
     PRIVATE
@@ -173,6 +184,9 @@ target_link_libraries(McOverlayAgent PRIVATE
     dwmapi
     gdi32
     imm32
+    ole32
+    oleaut32
+    uuid
     opengl32
     user32)
 

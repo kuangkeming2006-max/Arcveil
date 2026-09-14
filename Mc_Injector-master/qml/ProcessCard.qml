@@ -344,7 +344,7 @@ Item {
 
     SequentialAnimation {
         id: entryAnimation
-        PauseAnimation { duration: root.entryDelay }
+        PauseAnimation { duration: Math.max(0, root.entryDelay) }
         ParallelAnimation {
             NumberAnimation {
                 target: root

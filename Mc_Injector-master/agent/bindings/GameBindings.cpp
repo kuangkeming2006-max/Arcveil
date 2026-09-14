@@ -1,10 +1,13 @@
 #include "GameBindings.h"
+#include "TrajectoryMath.h"
+#include "SafeWalkPolicy.h"
 
 #include "src/AgentLog.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +20,25 @@
 #include <vector>
 
 namespace mcoverlay {
+
+namespace {
+struct LogicalMovementHookContext final {
+    jint entityId = -1;
+    jfloat originalYaw = 0.0F;
+    jfloat mappedForward = 0.0F;
+    bool sprintChanged = false;
+    bool applied = false;
+};
+thread_local LogicalMovementHookContext g_logicalMovementHook{};
+struct LogicalJumpHookContext final {
+    jint entityId=-1;
+    jfloat originalYaw=0.0F;
+    bool sprintChanged=false;
+    bool applied=false;
+};
+thread_local LogicalJumpHookContext g_logicalJumpHook{};
+thread_local bool g_syntheticLogicalAttack=false;
+} // namespace
 
 // Resolver-owned until publication. Every field is immutable after
 // m_resolutionPhase is release-stored as Resolved. The render thread performs
@@ -43,12 +65,56 @@ struct GameBindings::BindingCache final {
     jclass renderManagerClass = nullptr;
     jclass timerClass = nullptr;
     jclass gameSettingsClass = nullptr;
+    jclass entityRendererClass = nullptr;
+    jclass renderGlobalClass = nullptr;
     jclass keyBindingClass = nullptr;
     jclass playerControllerClass = nullptr;
     jclass serverDataClass = nullptr;
     jclass itemBlockClass = nullptr;
     jclass enumFacingClass = nullptr;
     jclass vec3Class = nullptr;
+    jclass rayVectorClass = nullptr;
+    jclass rayHitClass = nullptr;
+    jclass networkPacketClass = nullptr;
+    jclass movementPacketClass = nullptr;
+    jclass positionPacketClass = nullptr;
+    jclass lookPacketClass = nullptr;
+    jclass positionLookPacketClass = nullptr;
+    jclass packetNetHandlerClass = nullptr;
+    jmethodID rayVectorConstructor = nullptr;
+    jmethodID clickMouse = nullptr;
+    jmethodID sendClickBlock = nullptr;
+    jmethodID moveFlying = nullptr;
+    jmethodID isSprinting = nullptr;
+    jmethodID setSprinting = nullptr;
+    jmethodID swingItem = nullptr;
+    jmethodID rayTraceBlocks = nullptr;
+    jmethodID getEntityById = nullptr;
+    jmethodID getItemUseDuration = nullptr;
+    jmethodID isUsingItem = nullptr;
+    jmethodID getEyeHeight = nullptr;
+    jfieldID hitVector = nullptr;
+    jfieldID rayBlockPos = nullptr;
+    jfieldID raySideHit = nullptr;
+    jfieldID cameraMouseOver = nullptr; // read-only, never a redirected target
+    jfieldID cameraHitEntity = nullptr;
+    jfieldID cameraHitType = nullptr;
+    jfieldID entityTicks = nullptr;
+    jmethodID isSneaking = nullptr;
+    jclass diggingPacketClass = nullptr;
+    jmethodID diggingPosition = nullptr, diggingAction = nullptr, enumOrdinal = nullptr;
+    std::array<jmethodID, 3U> blockPosCoordinates{};
+    jmethodID facingIndex = nullptr;
+    jmethodID addToSendQueue = nullptr;
+    jmethodID movementPacketConstructor = nullptr;
+    jmethodID positionPacketConstructor = nullptr;
+    jmethodID lookPacketConstructor = nullptr;
+    jmethodID positionLookPacketConstructor = nullptr;
+    std::array<jfieldID, 3U> packetPosition{};
+    jfieldID packetYaw = nullptr;
+    jfieldID packetPitch = nullptr;
+    jfieldID packetOnGround = nullptr;
+    std::array<jfieldID, 3U> vectorFields{};
     jclass chatComponentClass = nullptr;
     jclass chatTextClass = nullptr;
     jclass chatSerializerClass = nullptr;
@@ -62,6 +128,7 @@ struct GameBindings::BindingCache final {
     jfieldID minecraftInstanceField = nullptr;
     jfieldID playerField = nullptr;
     jmethodID getHealth = nullptr;
+    jfieldID hurtTime = nullptr;
     jmethodID getMaxHealth = nullptr;
     jmethodID getEntityId = nullptr;
     jmethodID getBounds = nullptr;
@@ -106,6 +173,14 @@ struct GameBindings::BindingCache final {
     jfieldID timerField = nullptr;
     jfieldID renderPartialTicks = nullptr;
     jfieldID gameSettingsField = nullptr;
+    jfieldID thirdPersonView = nullptr;
+    jmethodID updateCameraAndRender = nullptr;
+    jmethodID orientCamera = nullptr;
+    jmethodID setAngles = nullptr;
+    jmethodID setupTerrain = nullptr;
+    jfieldID currentScreen = nullptr;
+    jmethodID aabbConstructor = nullptr;
+    jmethodID getCollidingBoxes = nullptr;
     jfieldID keyBindSneakField = nullptr;
     std::array<jfieldID, 5U> movementKeyFields{};
     jmethodID getKeyCode = nullptr;
@@ -113,6 +188,9 @@ struct GameBindings::BindingCache final {
     jfieldID mouseSensitivity = nullptr;
     jfieldID rotationYaw = nullptr;
     jfieldID rotationPitch = nullptr;
+    jfieldID previousRotationYaw = nullptr;
+    jfieldID previousRotationPitch = nullptr;
+    std::array<jfieldID, 2U> movementInputFields{};
     std::array<jfieldID, 3U> motionFields{};
     jfieldID onGround = nullptr;
     jmethodID jump = nullptr;
@@ -126,6 +204,11 @@ struct GameBindings::BindingCache final {
     jmethodID getIdFromBlock = nullptr;
     jmethodID getFacingByIndex = nullptr;
     jmethodID onPlayerRightClick = nullptr;
+    jmethodID clickBlock = nullptr;
+    jmethodID onPlayerDamageBlock = nullptr;
+    jmethodID resetBlockRemoving = nullptr;
+    jmethodID getBlockReachDistance = nullptr;
+    jmethodID getStrVsBlock = nullptr;
     jmethodID attackEntity = nullptr;
     jmethodID vec3Constructor = nullptr;
     jfieldID minX = nullptr;
@@ -296,6 +379,8 @@ void GameBindings::runResolver(JNIEnv* const env, HANDLE const stopEvent) noexce
     clearException(env);
     m_resolutionPhase.store(ResolutionPhase::Unsupported,
                             std::memory_order_release);
+    m_freeLookDiagnostics.event("MAPPING_UNSUPPORTED",
+        "resolver stopped after one class snapshot");
     log::info("Minecraft mappings are unsupported; resolver stopped after one class snapshot.");
 }
 
@@ -630,6 +715,8 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     jclass textureObject = nullptr;
     jclass uuid = nullptr;
     jclass gameSettings = nullptr;
+    jclass entityRenderer = nullptr;
+    jclass renderGlobal = nullptr;
     jclass keyBinding = nullptr;
     jclass playerController = nullptr;
     jclass hostile = nullptr;
@@ -637,6 +724,14 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     jclass itemBlock = nullptr;
     jclass enumFacing = nullptr;
     jclass vec3 = nullptr;
+    jclass rayVector = nullptr;
+    jclass rayHit = nullptr;
+    jclass networkPacket = nullptr;
+    jclass movementPacket = nullptr;
+    jclass positionPacket = nullptr;
+    jclass lookPacket = nullptr;
+    jclass positionLookPacket = nullptr;
+    jclass packetNetHandler = nullptr;
     // Only the long-standing game/render bindings are profile-critical.  The
     // BedWars sidebar and armor readers are optional capabilities: a missing or
     // stale auxiliary mapping must not invalidate an otherwise usable client.
@@ -686,7 +781,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     const bool fireballClassLoaded = loadFeatureClass(
         fireball, profile.fireballName, "Fireball ESP", "EntityFireball");
     const bool hostileClassLoaded = loadFeatureClass(
-        hostile, profile.hostileName, "Local combat", "IMob");
+        hostile, profile.hostileName, "Hostile entity", "IMob");
 
     const bool sidebarClassesLoaded =
         loadFeatureClass(scoreboard, profile.scoreboardName, "Sidebar", "Scoreboard") &&
@@ -724,6 +819,10 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     const bool gameSettingsClassLoaded = loadFeatureClass(
         gameSettings, profile.gameSettingsName, "Aim/Movement", "GameSettings");
+    const bool entityRendererClassLoaded = loadFeatureClass(
+        entityRenderer, profile.entityRendererName, "FreeLook", "EntityRenderer");
+    const bool renderGlobalClassLoaded = loadFeatureClass(
+        renderGlobal, profile.renderGlobalName, "FreeLook terrain", "RenderGlobal");
     const bool keyBindingClassLoaded = loadFeatureClass(
         keyBinding, profile.keyBindingName, "Safewalk", "KeyBinding");
     const bool safewalkClassesLoaded =
@@ -731,14 +830,21 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     const bool serverDataClassLoaded = loadFeatureClass(
         serverData, profile.serverDataName, "Server guard", "ServerData");
+    // These classes serve independent capabilities.  Never short-circuit their
+    // loading behind Scaffold: Silent Lock still needs PlayerControllerMP and
+    // EnumFacing when an ItemBlock/inventory mapping is unavailable on Lunar.
+    const bool playerControllerClassLoaded = loadFeatureClass(
+        playerController, profile.playerControllerName,
+        "Interaction", "PlayerControllerMP");
+    const bool itemBlockClassLoaded = loadFeatureClass(
+        itemBlock, profile.itemBlockName, "Scaffold", "ItemBlock");
+    const bool enumFacingClassLoaded = loadFeatureClass(
+        enumFacing, profile.enumFacingName, "Interaction", "EnumFacing");
+    const bool vec3ClassLoaded = loadFeatureClass(
+        vec3, profile.vec3Name, "Scaffold", "Vec3");
     const bool movementClassesLoaded = safewalkClassesLoaded && itemClassesLoaded &&
-        loadFeatureClass(playerController, profile.playerControllerName,
-                         "Movement", "PlayerControllerMP") &&
-        loadFeatureClass(itemBlock, profile.itemBlockName,
-                         "Scaffold", "ItemBlock") &&
-        loadFeatureClass(enumFacing, profile.enumFacingName,
-                         "Scaffold", "EnumFacing") &&
-        loadFeatureClass(vec3, profile.vec3Name, "Scaffold", "Vec3");
+        playerControllerClassLoaded && itemBlockClassLoaded &&
+        enumFacingClassLoaded && vec3ClassLoaded;
 
     if (lookupRequired(env, uuid, [&] { return env->FindClass("java/util/UUID"); })) {
         localReferences.add(uuid);
@@ -826,6 +932,11 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         return false;
     }
 
+    if (!profile.hurtTimeField.empty()) {
+        (void)lookupRequired(env, candidate.hurtTime, [&] {
+            return env->GetFieldID(living, profile.hurtTimeField.c_str(), "I");
+        });
+    }
     for (std::size_t index = 0U; index < candidate.renderPosition.size(); ++index) {
         if (!lookupRequired(env, candidate.renderPosition[index], [&] {
                 return env->GetFieldID(renderManager,
@@ -1184,6 +1295,58 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                     profile.rotationPitchField.c_str(), "F");
             });
     }
+    // Optional to movement, required to the frame-rate aim output. A missing
+    // historical-rotation mapping must never disable unrelated movement.
+    if (!profile.previousRotationYawField.empty())
+        (void)lookupRequired(env, candidate.previousRotationYaw, [&] {
+            return env->GetFieldID(entity, profile.previousRotationYawField.c_str(), "F");
+        });
+    if (!profile.previousRotationPitchField.empty())
+        (void)lookupRequired(env, candidate.previousRotationPitch, [&] {
+            return env->GetFieldID(entity, profile.previousRotationPitchField.c_str(), "F");
+        });
+    bool freeLookCapability=aimCapability&&entityRendererClassLoaded&&
+        candidate.previousRotationYaw&&candidate.previousRotationPitch&&
+        !profile.thirdPersonViewField.empty()&&
+        !profile.updateCameraAndRender.empty()&&!profile.orientCamera.empty()&&
+        !profile.setAngles.empty();
+    if(freeLookCapability) {
+        freeLookCapability=
+            lookupRequired(env,candidate.thirdPersonView,[&] {
+                return env->GetFieldID(gameSettings,
+                    profile.thirdPersonViewField.c_str(),"I");
+            })&&
+            lookupRequired(env,candidate.updateCameraAndRender,[&] {
+                return env->GetMethodID(entityRenderer,
+                    profile.updateCameraAndRender.c_str(),"(FJ)V");
+            })&&
+            lookupRequired(env,candidate.orientCamera,[&] {
+                return env->GetMethodID(entityRenderer,
+                    profile.orientCamera.c_str(),"(F)V");
+            })&&
+            lookupRequired(env,candidate.setAngles,[&] {
+                return env->GetMethodID(entity,profile.setAngles.c_str(),"(FF)V");
+            });
+    }
+    if(!freeLookCapability) {
+        candidate.thirdPersonView=nullptr;
+        candidate.updateCameraAndRender=nullptr;
+        candidate.orientCamera=nullptr;
+        candidate.setAngles=nullptr;
+        candidate.setupTerrain=nullptr;
+        log::info(std::string("FreeLook capability disabled for profile: ")+
+                  profile.label+" (camera mapping did not resolve).");
+    }
+    if(freeLookCapability&&renderGlobalClassLoaded&&
+       !profile.setupTerrain.empty()&&!profile.setupTerrainDescriptor.empty()) {
+        (void)lookupRequired(env,candidate.setupTerrain,[&] {
+            return env->GetMethodID(renderGlobal,profile.setupTerrain.c_str(),
+                profile.setupTerrainDescriptor.c_str());
+        });
+        if(!candidate.setupTerrain)
+            log::info(std::string("FreeLook terrain hook unavailable for profile: ")+
+                      profile.label+" (setupTerrain mapping did not resolve).");
+    }
     if (!aimCapability) {
         candidate.gameSettingsField = nullptr;
         candidate.mouseSensitivity = nullptr;
@@ -1193,6 +1356,22 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                   profile.label + " (minimal mapping did not resolve).");
     }
 
+    if (!profile.currentScreenField.empty() && !profile.guiScreenSignature.empty()) {
+        (void)lookupRequired(env, candidate.currentScreen, [&] {
+            return env->GetFieldID(minecraft, profile.currentScreenField.c_str(),
+                                   profile.guiScreenSignature.c_str());
+        });
+    }
+    (void)lookupRequired(env, candidate.aabbConstructor, [&] {
+        return env->GetMethodID(aabb, "<init>", "(DDDDDD)V");
+    });
+    if (!profile.getCollidingBoundingBoxes.empty()) {
+        (void)lookupRequired(env, candidate.getCollidingBoxes, [&] {
+            return env->GetMethodID(world, profile.getCollidingBoundingBoxes.c_str(),
+                (std::string("(") + profile.entitySignature + profile.aabbSignature +
+                 ")Ljava/util/List;").c_str());
+        });
+    }
     bool safewalkCapability = safewalkClassesLoaded && aimCapability &&
         !profile.keyBindSneakField.empty() && !profile.getKeyCode.empty() &&
         !profile.setKeyBindState.empty() && !profile.isAirBlock.empty();
@@ -1246,7 +1425,9 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                   profile.label + " (auxiliary mapping did not resolve).");
     }
 
-    bool movementCapability = movementClassesLoaded && safewalkCapability;
+    // Resolve locomotion independently: a missing placement/attack overload
+    // must not erase motion fields or disable edge protection and flight.
+    bool movementCapability = safewalkCapability;
     if (movementCapability) {
         for (std::size_t index = 0U;
              index < candidate.movementKeyFields.size(); ++index) {
@@ -1264,10 +1445,6 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                         profile.motionFields[index].c_str(), "D");
                 });
         }
-        const std::string rightClickSignature = std::string("(") +
-            profile.playerSignature + profile.worldClientSignature +
-            profile.itemStackSignature + profile.blockPosSignature +
-            profile.enumFacingSignature + profile.vec3Signature + ")Z";
         movementCapability = movementCapability &&
             lookupRequired(env, candidate.onGround, [&] {
                 return env->GetFieldID(entity,
@@ -1275,13 +1452,32 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             }) &&
             lookupRequired(env, candidate.jump, [&] {
                 return env->GetMethodID(living, profile.jump.c_str(), "()V");
-            }) &&
-            lookupRequired(env, candidate.playerControllerField, [&] {
-                return env->GetFieldID(minecraft,
-                    profile.playerControllerField.c_str(),
-                    profile.playerControllerSignature.c_str());
-            }) &&
-            lookupRequired(env, candidate.inventoryField, [&] {
+            });
+        for (std::size_t index = 0U;
+             index < candidate.movementInputFields.size(); ++index) {
+            movementCapability = movementCapability && lookupRequired(
+                env, candidate.movementInputFields[index], [&] {
+                    return env->GetFieldID(living,
+                        profile.movementInputFields[index].c_str(), "F");
+                });
+        }
+    }
+    // PlayerController is a shared binding for attacks, block interaction and
+    // placement.  Resolve it once, independently from all inventory methods.
+    const bool controllerFieldAvailable = playerControllerClassLoaded &&
+        !profile.playerControllerField.empty() &&
+        lookupRequired(env, candidate.playerControllerField, [&] {
+            return env->GetFieldID(minecraft,
+                profile.playerControllerField.c_str(),
+                profile.playerControllerSignature.c_str());
+        });
+    bool placementCapability = movementClassesLoaded && controllerFieldAvailable;
+    if (placementCapability) {
+        const std::string rightClickSignature = std::string("(") +
+            profile.playerSignature + profile.worldClientSignature +
+            profile.itemStackSignature + profile.blockPosSignature +
+            profile.enumFacingSignature + profile.vec3Signature + ")Z";
+        placementCapability = lookupRequired(env, candidate.inventoryField, [&] {
                 return env->GetFieldID(player, profile.inventoryField.c_str(),
                                        profile.inventoryPlayerSignature.c_str());
             }) &&
@@ -1320,32 +1516,93 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                 return env->GetMethodID(playerController,
                     profile.onPlayerRightClick.c_str(),
                     rightClickSignature.c_str());
-            }) &&
-            lookupRequired(env, candidate.attackEntity, [&] {
-                return env->GetMethodID(playerController,
-                    profile.attackEntity.c_str(),
-                    (std::string("(") + profile.entityPlayerSignature +
-                     profile.entitySignature + ")V").c_str());
             });
+    }
+    bool bedBreakerCapability = playerControllerClassLoaded &&
+        enumFacingClassLoaded && itemClassesLoaded && controllerFieldAvailable &&
+        !profile.clickBlock.empty() && !profile.onPlayerDamageBlock.empty() &&
+        !profile.resetBlockRemoving.empty() &&
+        !profile.getBlockReachDistance.empty() && !profile.getStrVsBlock.empty();
+    if (bedBreakerCapability) {
+        const std::string blockInteractionSignature = std::string("(") +
+            profile.blockPosSignature + profile.enumFacingSignature + ")Z";
+        bedBreakerCapability =
+            lookupRequired(env, candidate.clickBlock, [&] {
+                return env->GetMethodID(playerController,
+                    profile.clickBlock.c_str(), blockInteractionSignature.c_str());
+            }) &&
+            lookupRequired(env, candidate.onPlayerDamageBlock, [&] {
+                return env->GetMethodID(playerController,
+                    profile.onPlayerDamageBlock.c_str(),
+                    blockInteractionSignature.c_str());
+            }) &&
+            lookupRequired(env, candidate.resetBlockRemoving, [&] {
+                return env->GetMethodID(playerController,
+                    profile.resetBlockRemoving.c_str(), "()V");
+            }) &&
+            lookupRequired(env, candidate.getBlockReachDistance, [&] {
+                return env->GetMethodID(playerController,
+                    profile.getBlockReachDistance.c_str(), "()F");
+            }) &&
+            lookupRequired(env, candidate.getStrVsBlock, [&] {
+                return env->GetMethodID(itemStack, profile.getStrVsBlock.c_str(),
+                    (std::string("(") + profile.blockSignature + ")F").c_str());
+            });
+        bedBreakerCapability = bedBreakerCapability &&
+            candidate.playerControllerField != nullptr &&
+            candidate.inventoryField != nullptr && candidate.currentItem != nullptr &&
+            candidate.mainInventory != nullptr && candidate.getItem != nullptr &&
+            candidate.getFacingByIndex != nullptr;
+    }
+    if (playerControllerClassLoaded && !profile.attackEntity.empty()) {
+        (void)lookupRequired(env, candidate.attackEntity, [&] {
+            return env->GetMethodID(playerController, profile.attackEntity.c_str(),
+                (std::string("(") + profile.entityPlayerSignature +
+                 profile.entitySignature + ")V").c_str());
+        });
     }
     if (!movementCapability) {
         candidate.movementKeyFields.fill(nullptr);
         candidate.motionFields.fill(nullptr);
         candidate.onGround = nullptr;
         candidate.jump = nullptr;
-        candidate.playerControllerField = nullptr;
-        candidate.inventoryField = nullptr;
-        candidate.currentItem = nullptr;
-        candidate.mainInventory = nullptr;
+        log::info(std::string("Locomotion mapping unavailable: ") + profile.label);
+    }
+    if (!placementCapability) {
+        if (!bedBreakerCapability) {
+            candidate.currentItem = nullptr;
+            candidate.mainInventory = nullptr;
+            candidate.getFacingByIndex = nullptr;
+        }
         candidate.getBlockFromItem = nullptr;
         candidate.getIdFromBlock = nullptr;
-        candidate.getFacingByIndex = nullptr;
         candidate.vec3Constructor = nullptr;
         candidate.onPlayerRightClick = nullptr;
-        candidate.attackEntity = nullptr;
-        log::info(std::string("Movement capability disabled for profile: ") +
+        log::info(std::string("Scaffold capability disabled for profile: ") +
                   profile.label + " (auxiliary mapping did not resolve).");
     }
+    if (!bedBreakerCapability) {
+        candidate.clickBlock = nullptr;
+        candidate.onPlayerDamageBlock = nullptr;
+        candidate.resetBlockRemoving = nullptr;
+        candidate.getBlockReachDistance = nullptr;
+        candidate.getStrVsBlock = nullptr;
+        log::info(std::string("Local BedBreaker capability disabled for profile: ") +
+                  profile.label + " (block interaction mapping did not resolve).");
+    }
+
+    // Read-only movement telemetry must not depend on jump/key/scaffold
+    // methods resolving. Rendering/prediction also needs these on Lunar.
+    for (std::size_t axis = 0; axis < candidate.motionFields.size(); ++axis) {
+        if (!candidate.motionFields[axis] && !profile.motionFields[axis].empty())
+            (void)lookupRequired(env, candidate.motionFields[axis], [&] {
+                return env->GetFieldID(entity, profile.motionFields[axis].c_str(), "D");
+            });
+    }
+    if (!candidate.onGround && !profile.onGroundField.empty())
+        (void)lookupRequired(env, candidate.onGround, [&] {
+            return env->GetFieldID(entity, profile.onGroundField.c_str(), "Z");
+        });
 
     std::array<jfieldID, 6U> boundsFields{};
     for (std::size_t index = 0U; index < boundsFields.size(); ++index) {
@@ -1378,6 +1635,140 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         }
         return global != nullptr;
     };
+    // These optional IDs are independent of Scaffold/movement. Bow and silent
+    // targeting must work even if an unrelated inventory mapping is missing.
+    if (loadFeatureClass(rayVector, profile.vec3Name, "Ray trace", "Vec3") &&
+        loadFeatureClass(rayHit, profile.rayHitName, "Ray trace", "MovingObjectPosition") &&
+        makeGlobal(rayVector, candidate.rayVectorClass) &&
+        makeGlobal(rayHit, candidate.rayHitClass)) {
+        const auto method=[&](jmethodID& out,jclass type,const std::string& name,const std::string& signature) {
+            if(!name.empty()) (void)lookupRequired(env,out,[&] { return env->GetMethodID(type,name.c_str(),signature.c_str()); });
+        };
+        const auto field=[&](jfieldID& out,jclass type,const std::string& name,const std::string& signature) {
+            if(!name.empty()) (void)lookupRequired(env,out,[&] { return env->GetFieldID(type,name.c_str(),signature.c_str()); });
+        };
+        method(candidate.rayVectorConstructor,rayVector,"<init>","(DDD)V");
+        method(candidate.rayTraceBlocks,world,profile.rayTraceBlocks,
+            "("+profile.vec3Signature+profile.vec3Signature+"ZZZ)"+profile.rayHitSignature);
+        method(candidate.getEntityById,world,profile.getEntityById,"(I)"+profile.entitySignature);
+        method(candidate.isUsingItem,player,profile.isUsingItem,"()Z");
+        method(candidate.getItemUseDuration,player,profile.getItemUseDuration,"()I");
+        method(candidate.getEyeHeight,entity,profile.getEyeHeight,"()F");
+        field(candidate.hitVector,rayHit,profile.hitVectorField,profile.vec3Signature);
+        // Forge's 1.8.9 joined.srg: ave/s, auh/d and pk/W. Named/SRG clients
+        // use the first two alternatives; descriptors disambiguate Notch IDs.
+        for(const char* name:{"objectMouseOver","field_71476_x","s"}) {
+            field(candidate.cameraMouseOver,minecraft,name,profile.rayHitSignature);
+            if(candidate.cameraMouseOver) break;
+        }
+        for(const char* name:{"entityHit","field_72308_g","d"}) {
+            field(candidate.cameraHitEntity,rayHit,name,profile.entitySignature);
+            if(candidate.cameraHitEntity) break;
+        }
+        const bool notchHit=profile.rayHitName.find('.')==std::string::npos;
+        const std::string hitTypeSignature=notchHit ? "Lauh$a;" :
+            "Lnet/minecraft/util/MovingObjectPosition$MovingObjectType;";
+        for(const char* name:{"typeOfHit","field_72313_a","a"}) {
+            field(candidate.cameraHitType,rayHit,name,hitTypeSignature);
+            if(candidate.cameraHitType) break;
+        }
+        jclass enumClass=env->FindClass("java/lang/Enum");
+        if(enumClass) {method(candidate.enumOrdinal,enumClass,"ordinal","()I");env->DeleteLocalRef(enumClass);}
+        for(const char* name:{"ticksExisted","field_70173_aa","W"}) {
+            field(candidate.entityTicks,entity,name,"I"); if(candidate.entityTicks) break;
+        }
+        for(const char* name:{"isSneaking","func_70093_af","av"}) {
+            method(candidate.isSneaking,entity,name,"()Z"); if(candidate.isSneaking) break;
+        }
+        jclass digging=nullptr;
+        const bool notch=profile.movementPacketName.find('.')==std::string::npos;
+        const std::string digName=notch ? "ir" : "net.minecraft.network.play.client.C07PacketPlayerDigging";
+        if(loadFeatureClass(digging,digName,"Interaction diagnostics","C07PacketPlayerDigging") &&
+           makeGlobal(digging,candidate.diggingPacketClass)) {
+            const std::string actionSignature=notch ? "()Lir$a;" :
+                "()Lnet/minecraft/network/play/client/C07PacketPlayerDigging$Action;";
+            for(const char* name:{"getPosition","func_179715_a","a"}) {
+                method(candidate.diggingPosition,digging,name,"()"+profile.blockPosSignature);
+                if(candidate.diggingPosition) break;
+            }
+            for(const char* name:{"getStatus","func_180762_c","c"}) {
+                method(candidate.diggingAction,digging,name,actionSignature);
+                if(candidate.diggingAction) break;
+            }
+        }
+        method(candidate.clickMouse,minecraft,profile.clickMouse,"()V");
+        method(candidate.sendClickBlock,minecraft,profile.sendClickBlock,"(Z)V");
+        method(candidate.moveFlying,entity,profile.moveFlying,"(FFF)V");
+        method(candidate.isSprinting,entity,profile.isSprinting,"()Z");
+        method(candidate.setSprinting,entity,profile.setSprinting,"(Z)V");
+        method(candidate.swingItem,player,profile.swingItem,"()V");
+        field(candidate.rayBlockPos,rayHit,profile.rayBlockPosField,
+              profile.blockPosSignature);
+        field(candidate.raySideHit,rayHit,profile.raySideHitField,
+              profile.enumFacingSignature);
+        for(std::size_t i=0;i<candidate.blockPosCoordinates.size();++i)
+            method(candidate.blockPosCoordinates[i],blockPos,
+                   profile.blockPosCoordinateMethods[i],"()I");
+        if(enumFacingClassLoaded)
+            method(candidate.facingIndex,enumFacing,profile.facingIndexMethod,"()I");
+        for(std::size_t i=0;i<3;++i) field(candidate.vectorFields[i],rayVector,profile.vectorFields[i],"D");
+    }
+    // Silent Lock replaces the argument of addToSendQueue(Packet), before the
+    // concrete C05/C06 serializer is selected. C03/C04 become C05/C06 and an
+    // already rotating packet is copied with the silent angles. The local
+    // EntityPlayerSP yaw/pitch and render matrices are never written.
+    const bool silentPacketClassesLoaded =
+        loadFeatureClass(packetNetHandler, profile.netHandlerName,
+                         "Silent rotation", "NetHandlerPlayClient") &&
+        loadFeatureClass(networkPacket, profile.networkPacketName,
+                         "Silent rotation", "Packet") &&
+        loadFeatureClass(movementPacket, profile.movementPacketName,
+                         "Silent rotation", "C03PacketPlayer") &&
+        loadFeatureClass(positionPacket, profile.positionPacketName,
+                         "Silent rotation", "C04PacketPlayerPosition") &&
+        loadFeatureClass(lookPacket, profile.lookPacketName,
+                         "Silent rotation", "C05PacketPlayerLook") &&
+        loadFeatureClass(positionLookPacket, profile.positionLookPacketName,
+                         "Silent rotation", "C06PacketPlayerPosLook");
+    if (silentPacketClassesLoaded &&
+        makeGlobal(packetNetHandler, candidate.packetNetHandlerClass) &&
+        makeGlobal(networkPacket, candidate.networkPacketClass) &&
+        makeGlobal(movementPacket, candidate.movementPacketClass) &&
+        makeGlobal(positionPacket, candidate.positionPacketClass) &&
+        makeGlobal(lookPacket, candidate.lookPacketClass) &&
+        makeGlobal(positionLookPacket, candidate.positionLookPacketClass)) {
+        candidate.addToSendQueue = env->GetMethodID(
+            packetNetHandler, profile.addToSendQueue.c_str(),
+            (std::string("(") + profile.networkPacketSignature + ")V").c_str());
+        candidate.movementPacketConstructor = env->GetMethodID(
+            movementPacket, "<init>", "(Z)V");
+        candidate.positionPacketConstructor = env->GetMethodID(
+            positionPacket, "<init>", "(DDDZ)V");
+        candidate.lookPacketConstructor = env->GetMethodID(
+            lookPacket, "<init>", "(FFZ)V");
+        candidate.positionLookPacketConstructor = env->GetMethodID(
+            positionLookPacket, "<init>", "(DDDFFZ)V");
+        for (std::size_t i=0; i<candidate.packetPosition.size(); ++i)
+            candidate.packetPosition[i]=env->GetFieldID(
+                movementPacket,profile.packetPositionFields[i].c_str(),"D");
+        candidate.packetYaw = env->GetFieldID(
+            movementPacket, profile.packetYawField.c_str(), "F");
+        candidate.packetPitch = env->GetFieldID(
+            movementPacket, profile.packetPitchField.c_str(), "F");
+        candidate.packetOnGround = env->GetFieldID(
+            movementPacket, profile.packetOnGroundField.c_str(), "Z");
+        if (env->ExceptionCheck() == JNI_TRUE || !candidate.addToSendQueue ||
+            !candidate.movementPacketConstructor || !candidate.positionPacketConstructor ||
+            !candidate.lookPacketConstructor ||
+            !candidate.positionLookPacketConstructor || !candidate.packetYaw ||
+            !candidate.packetPitch || !candidate.packetOnGround ||
+            std::any_of(candidate.packetPosition.begin(),candidate.packetPosition.end(),
+                        [](jfieldID value){ return value==nullptr; })) {
+            clearException(env);
+            log::info(std::string("Silent rotation capability disabled for profile: ") +
+                      profile.label + " (send-queue packet members did not resolve).");
+        }
+    }
     if (!makeGlobal(minecraft, candidate.minecraftClass) ||
         !makeGlobal(player, candidate.playerClass) ||
         !makeGlobal(living, candidate.livingClass) ||
@@ -1458,6 +1849,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (aimCapability &&
         !makeGlobal(gameSettings, candidate.gameSettingsClass)) {
         aimCapability = false;
+        freeLookCapability = false;
         safewalkCapability = false;
         movementCapability = false;
         clearGlobal(candidate.gameSettingsClass);
@@ -1467,6 +1859,26 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         candidate.rotationPitch = nullptr;
         log::info(std::string("Aim capability disabled for profile: ") +
                   profile.label + " (failed to publish GameSettings class).");
+    }
+
+    if(freeLookCapability&&
+       !makeGlobal(entityRenderer,candidate.entityRendererClass)) {
+        freeLookCapability=false;
+        clearGlobal(candidate.entityRendererClass);
+        candidate.thirdPersonView=nullptr;
+        candidate.updateCameraAndRender=nullptr;
+        candidate.orientCamera=nullptr;
+        candidate.setAngles=nullptr;
+        candidate.setupTerrain=nullptr;
+        log::info(std::string("FreeLook capability disabled for profile: ")+
+                  profile.label+" (failed to publish EntityRenderer class).");
+    }
+    if(freeLookCapability&&candidate.setupTerrain&&
+       !makeGlobal(renderGlobal,candidate.renderGlobalClass)) {
+        candidate.setupTerrain=nullptr;
+        clearGlobal(candidate.renderGlobalClass);
+        log::info(std::string("FreeLook terrain hook unavailable for profile: ")+
+                  profile.label+" (failed to publish RenderGlobal class).");
     }
 
     if (safewalkCapability) {
@@ -1498,35 +1910,44 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         clearGlobal(candidate.itemStackClass);
         clearGlobal(candidate.itemClass);
         clearGlobal(candidate.inventoryPlayerClass);
-        movementCapability = false;
+        placementCapability = false;
+        bedBreakerCapability = false;
         armorCapability = false;
     }
 
-    if (movementCapability) {
-        movementCapability =
-            makeGlobal(playerController, candidate.playerControllerClass) &&
+    // Publish the interaction classes independently from Scaffold.  The old
+    // all-or-nothing block cleared attackEntity/playerControllerField when an
+    // unrelated placement class failed, which made Silent Lock disappear.
+    const bool playerControllerRefPublished = playerControllerClassLoaded &&
+        makeGlobal(playerController, candidate.playerControllerClass);
+    if (!playerControllerRefPublished) {
+        clearGlobal(candidate.playerControllerClass);
+        candidate.playerControllerField = nullptr;
+        candidate.attackEntity = nullptr;
+        placementCapability = false;
+        bedBreakerCapability = false;
+    }
+    const bool enumFacingRefPublished = enumFacingClassLoaded &&
+        makeGlobal(enumFacing, candidate.enumFacingClass);
+    if (!enumFacingRefPublished) {
+        clearGlobal(candidate.enumFacingClass);
+        candidate.facingIndex = nullptr;
+        candidate.getFacingByIndex = nullptr;
+        placementCapability = false;
+        bedBreakerCapability = false;
+    }
+
+    if (placementCapability) {
+        placementCapability =
             makeGlobal(itemBlock, candidate.itemBlockClass) &&
-            makeGlobal(enumFacing, candidate.enumFacingClass) &&
             makeGlobal(vec3, candidate.vec3Class);
-        if (!movementCapability) {
-            clearGlobal(candidate.playerControllerClass);
+        if (!placementCapability) {
             clearGlobal(candidate.itemBlockClass);
-            clearGlobal(candidate.enumFacingClass);
             clearGlobal(candidate.vec3Class);
-            candidate.movementKeyFields.fill(nullptr);
-            candidate.motionFields.fill(nullptr);
-            candidate.onGround = nullptr;
-            candidate.jump = nullptr;
-            candidate.playerControllerField = nullptr;
-            candidate.inventoryField = nullptr;
-            candidate.currentItem = nullptr;
-            candidate.mainInventory = nullptr;
             candidate.getBlockFromItem = nullptr;
             candidate.getIdFromBlock = nullptr;
-            candidate.getFacingByIndex = nullptr;
             candidate.vec3Constructor = nullptr;
             candidate.onPlayerRightClick = nullptr;
-            candidate.attackEntity = nullptr;
         }
     }
 
@@ -1736,8 +2157,10 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
         m_resolutionPhase.store(ResolutionPhase::Resolved, std::memory_order_release);
         try {
             log::info(std::string("Minecraft 1.8.9 bindings resolved: ") + profile->label);
+            m_freeLookDiagnostics.event("MAPPING_RESOLVED",profile->label);
         } catch (...) {
             log::info("Minecraft 1.8.9 bindings resolved.");
+            m_freeLookDiagnostics.event("MAPPING_RESOLVED","label unavailable");
         }
         return true;
     }
@@ -1906,11 +2329,42 @@ bool GameBindings::maintainInputReleased(JNIEnv* const env) noexcept
     return released;
 }
 
+bool GameBindings::gameScreenOpen(JNIEnv* const env) noexcept
+{
+    if (env == nullptr) return true;
+    BindingCache* const cache =
+        m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved
+        ? m_cache.get() : nullptr;
+    if (cache != nullptr && cache->currentScreen != nullptr) {
+        jobject minecraft = cache->minecraftInstanceField != nullptr
+            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
+            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        if (!env->ExceptionCheck() && minecraft != nullptr) {
+            jobject screen = env->GetObjectField(minecraft, cache->currentScreen);
+            const bool failed = env->ExceptionCheck() == JNI_TRUE;
+            clearException(env);
+            const bool open = screen != nullptr;
+            if (screen != nullptr) env->DeleteLocalRef(screen);
+            env->DeleteLocalRef(minecraft);
+            if (!failed) return open;
+        } else {
+            clearException(env);
+            if (minecraft != nullptr) env->DeleteLocalRef(minecraft);
+        }
+    }
+    // Mapping-independent fallback; released cursor is not gameplay input.
+    bool grabbed = false;
+    return !queryLwjglMouseGrabbed(env, grabbed) || !grabbed;
+}
+
 bool GameBindings::updateGameplay(JNIEnv* const env,
                                   const GameplaySettings& requested,
                                   const GameSnapshot& snapshot,
                                   const std::uint64_t tickMilliseconds) noexcept
 {
+    m_logicalController.debug().configure(requested.silentFileDebug,requested.silentChatDebug);
+    if(!m_logicalController.debug().enabled() && m_interactionObserver.ready())
+        m_interactionObserver.setEnabled(false);
     if (env == nullptr) return false;
 
     BindingCache* const cache =
@@ -1927,12 +2381,176 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         cache->minecraftClass != nullptr && cache->isMainThread != nullptr &&
         cache->playerField != nullptr && cache->gameSettingsField != nullptr &&
         cache->mouseSensitivity != nullptr && cache->rotationYaw != nullptr &&
-        cache->rotationPitch != nullptr;
+        cache->rotationPitch != nullptr && cache->previousRotationYaw != nullptr &&
+        cache->previousRotationPitch != nullptr;
+    const bool freeLookCapability=aimCapability&&
+        cache->entityRendererClass!=nullptr&&cache->thirdPersonView!=nullptr&&
+        cache->updateCameraAndRender!=nullptr&&cache->orientCamera!=nullptr&&
+        cache->setAngles!=nullptr&&cache->profile!=nullptr;
+    const int freeLookHotkey=std::clamp(requested.freeLookHotkey,0,254);
+    const bool freeLookHeld=freeLookHotkey>=8&&freeLookHotkey<=254&&
+        (::GetAsyncKeyState(freeLookHotkey)&0x8000)!=0;
+    const bool freeLookEnableEdge=requested.freeLookConfigured&&
+        (!m_freeLookObservationInitialized||!m_freeLookUiRequestedObserved);
+    const bool freeLookCapabilityRecovered=freeLookCapability&&
+        m_freeLookObservationInitialized&&!m_freeLookCapabilityObserved;
+    if(freeLookEnableEdge||freeLookCapabilityRecovered) {
+        m_freeLookHookAttemptCount=0U;
+        m_freeLookHookRetryLatched=false;
+        m_nextFreeLookHookAttemptTick=0U;
+        m_freeLookDiagnostics.event("HOOK_RETRY_RESET",
+            freeLookEnableEdge?"reason=explicit-enable":"reason=capability-recovered");
+    } else if(!requested.freeLookConfigured) {
+        m_freeLookHookAttemptCount=0U;
+        m_freeLookHookRetryLatched=false;
+        m_nextFreeLookHookAttemptTick=0U;
+    }
+    m_freeLookDiagnostics.setVerbose(requested.silentFileDebug);
+    m_freeLookHotkey.store(freeLookHotkey,
+                           std::memory_order_release);
+    if(!m_freeLookObservationInitialized||
+       requested.freeLookConfigured!=m_freeLookUiRequestedObserved||
+       requested.freeLook!=m_freeLookRuntimeRequestedObserved||
+       requested.freeLookGuiOpen!=m_freeLookGuiObserved||
+       requested.freeLookForeground!=m_freeLookForegroundObserved||
+       freeLookCapability!=m_freeLookCapabilityObserved||
+       m_freeLookHook.ready()!=m_freeLookReadyObserved||
+       freeLookHeld!=m_freeLookHeldObserved) {
+        char detail[320]{};
+        std::snprintf(detail,sizeof(detail),
+            "uiRequested=%d runtimeRequested=%d hotkey=%d held=%d foreground=%d guiOpen=%d capability=%d ready=%d",
+            requested.freeLookConfigured?1:0,requested.freeLook?1:0,
+            freeLookHotkey,freeLookHeld?1:0,
+            requested.freeLookForeground?1:0,requested.freeLookGuiOpen?1:0,
+            freeLookCapability?1:0,m_freeLookHook.ready()?1:0);
+        m_freeLookDiagnostics.event("REQUEST_STATE",detail);
+        if(!m_freeLookObservationInitialized||
+           freeLookCapability!=m_freeLookCapabilityObserved) {
+            char capability[512]{};
+            std::snprintf(capability,sizeof(capability),
+                "resolved=%d profile=%s minecraft=%d mainThread=%d player=%d settings=%d yaw=%d pitch=%d prevYaw=%d prevPitch=%d renderer=%d perspective=%d update=%d orient=%d setAngles=%d terrain=%d",
+                freeLookCapability?1:0,
+                cache&&cache->profile?cache->profile->label.c_str():"unresolved",
+                cache&&cache->minecraftClass?1:0,cache&&cache->isMainThread?1:0,
+                cache&&cache->playerField?1:0,cache&&cache->gameSettingsField?1:0,
+                cache&&cache->rotationYaw?1:0,cache&&cache->rotationPitch?1:0,
+                cache&&cache->previousRotationYaw?1:0,
+                cache&&cache->previousRotationPitch?1:0,
+                cache&&cache->entityRendererClass?1:0,
+                cache&&cache->thirdPersonView?1:0,
+                cache&&cache->updateCameraAndRender?1:0,
+                cache&&cache->orientCamera?1:0,cache&&cache->setAngles?1:0,
+                cache&&cache->setupTerrain?1:0);
+            m_freeLookDiagnostics.event("CAPABILITY",capability);
+        }
+        m_freeLookObservationInitialized=true;
+        m_freeLookUiRequestedObserved=requested.freeLookConfigured;
+        m_freeLookRuntimeRequestedObserved=requested.freeLook;
+        m_freeLookGuiObserved=requested.freeLookGuiOpen;
+        m_freeLookForegroundObserved=requested.freeLookForeground;
+        m_freeLookCapabilityObserved=freeLookCapability;
+        m_freeLookReadyObserved=m_freeLookHook.ready();
+        m_freeLookHeldObserved=freeLookHeld;
+    }
+    if(requested.freeLook&&freeLookCapability&&!m_freeLookHook.ready()&&
+       !m_freeLookHookRetryLatched&&
+       tickMilliseconds>=m_nextFreeLookHookAttemptTick) {
+        const std::uint64_t attemptStarted=::GetTickCount64();
+        ++m_freeLookHookAttemptCount;
+        char retry[192]{};
+        std::snprintf(retry,sizeof(retry),"tickMs=%llu attempt=%u profile=%s",
+            static_cast<unsigned long long>(tickMilliseconds),
+            static_cast<unsigned>(m_freeLookHookAttemptCount),
+            cache->profile->label.c_str());
+        m_freeLookDiagnostics.event("HOOK_INSTALL_BEGIN",retry);
+        std::string entityOwner=cache->profile->entityName;
+        std::replace(entityOwner.begin(),entityOwner.end(),'.','/');
+        const std::array<const char*,4> fields{
+            cache->profile->rotationYawField.c_str(),
+            cache->profile->rotationPitchField.c_str(),
+            cache->profile->previousRotationYawField.c_str(),
+            cache->profile->previousRotationPitchField.c_str()};
+        const bool installed=m_freeLookHook.install(m_vm,cache->updateCameraAndRender,
+            cache->orientCamera,cache->setAngles,cache->setupTerrain,
+            entityOwner.c_str(),
+            cache->profile->setAngles.c_str(),fields,this,
+            [](void* owner,JNIEnv* jni,jobject entity,jfloat yaw,
+               jfloat pitch) noexcept {
+                static_cast<GameBindings*>(owner)->rotateFreeLookCamera(
+                    jni,entity,yaw,pitch);
+            },
+            [](void* owner,JNIEnv* jni,jobject entity,
+               LiveFreeLookTransform::Angle angle) noexcept -> jfloat {
+                return static_cast<GameBindings*>(owner)->freeLookCameraAngle(
+                    jni,entity,angle);
+            },
+            [](void* owner,const char* event,const char* detail) noexcept {
+                static_cast<GameBindings*>(owner)->m_freeLookDiagnostics.event(
+                    event?event:"HOOK_EVENT",detail?detail:"");
+            });
+        const std::uint64_t duration=::GetTickCount64()-attemptStarted;
+        char result[224]{};
+        std::snprintf(result,sizeof(result),
+            "attempt=%u success=%d terrainReady=%d durationMs=%llu lastJvmtiError=%d",
+            static_cast<unsigned>(m_freeLookHookAttemptCount),installed?1:0,
+            m_freeLookHook.terrainReady()?1:0,
+            static_cast<unsigned long long>(duration),m_freeLookHook.lastError());
+        m_freeLookDiagnostics.event("HOOK_INSTALL_END",result);
+        if(m_freeLookHook.ready()) {
+            m_freeLookHookAttemptCount=0U;
+            m_nextFreeLookHookAttemptTick=0U;
+        } else if(m_freeLookHookAttemptCount>=3U) {
+            m_freeLookHookRetryLatched=true;
+            m_freeLookDiagnostics.event("HOOK_RETRY_LATCHED",
+                "retry requires explicit re-enable or capability recovery");
+        } else {
+            const std::uint64_t backoff=1500ULL<<
+                static_cast<unsigned>(m_freeLookHookAttemptCount-1U);
+            m_nextFreeLookHookAttemptTick=tickMilliseconds+backoff;
+        }
+        if(m_freeLookHook.ready()!=m_freeLookReadyObserved) {
+            char ready[96]{};
+            std::snprintf(ready,sizeof(ready),"ready=%d lastJvmtiError=%d",
+                m_freeLookHook.ready()?1:0,m_freeLookHook.lastError());
+            m_freeLookDiagnostics.event("READY_CHANGE",ready);
+            m_freeLookReadyObserved=m_freeLookHook.ready();
+        }
+    }
+    const bool freeLookRequested=requested.freeLook&&freeLookCapability&&
+        m_freeLookHook.ready();
+    m_freeLookRequested.store(freeLookRequested,std::memory_order_release);
+    const bool freeLookNotReady=requested.freeLookConfigured&&
+        !m_freeLookHook.ready();
+    if(freeLookNotReady&&!m_freeLookNotReadyObserved)
+        m_freeLookDiagnostics.event("REQUEST_NOT_READY",
+            freeLookCapability?"hook install incomplete":"mapping capability incomplete");
+    m_freeLookNotReadyObserved=freeLookNotReady;
+    if(!freeLookRequested&&m_freeLookActive) {
+        const char* reason=!requested.freeLookConfigured?"disabled":
+            requested.freeLookGuiOpen?"gui-open":
+            !requested.freeLookForeground?"window-unfocused":
+            !freeLookCapability?"capability-lost":"hook-not-ready";
+        endFreeLook(env,reason,true);
+    }
     const bool safewalkCapability = cache != nullptr &&
         cache->gameSettingsClass != nullptr && cache->keyBindingClass != nullptr &&
         cache->gameSettingsField != nullptr && cache->keyBindSneakField != nullptr &&
         cache->getKeyCode != nullptr && cache->setKeyBindState != nullptr &&
         cache->rotationPitch != nullptr && cache->isAirBlock != nullptr;
+    const bool logicalMovementCapability = cache != nullptr &&
+        cache->moveFlying != nullptr && cache->isSprinting != nullptr &&
+        cache->setSprinting != nullptr &&
+        cache->jump != nullptr &&
+        cache->getEntityId != nullptr && cache->getKeyCode != nullptr &&
+        cache->onGround != nullptr && cache->entityTicks != nullptr &&
+        std::all_of(cache->movementInputFields.begin(),
+                    cache->movementInputFields.end(),
+                    [](jfieldID field) { return field != nullptr; }) &&
+        std::all_of(cache->movementKeyFields.begin(),
+                    cache->movementKeyFields.begin() + 4,
+                    [](jfieldID field) { return field != nullptr; }) &&
+        std::all_of(cache->motionFields.begin(), cache->motionFields.end(),
+                    [](jfieldID field) { return field != nullptr; });
 
     const auto setSneakState = [&](const int keyCode, const bool down) noexcept {
         if (!safewalkCapability || keyCode <= 0) return false;
@@ -1958,17 +2576,48 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     };
 
     const bool movementCapability = safewalkCapability &&
-        cache->playerControllerClass != nullptr && cache->itemBlockClass != nullptr &&
-        cache->enumFacingClass != nullptr && cache->vec3Class != nullptr &&
-        cache->movementKeyFields[0U] != nullptr && cache->motionFields[0U] != nullptr &&
+        std::all_of(cache->movementKeyFields.begin(), cache->movementKeyFields.end(),
+                    [](jfieldID field) { return field != nullptr; }) &&
+        std::all_of(cache->motionFields.begin(), cache->motionFields.end(),
+                    [](jfieldID field) { return field != nullptr; }) &&
         cache->mouseSensitivity != nullptr && cache->rotationYaw != nullptr &&
         cache->onGround != nullptr && cache->jump != nullptr;
+    const bool placementCapability = movementCapability &&
+        cache->playerControllerClass != nullptr && cache->itemBlockClass != nullptr &&
+        cache->enumFacingClass != nullptr && cache->vec3Class != nullptr &&
+        cache->inventoryField != nullptr && cache->onPlayerRightClick != nullptr &&
+        cache->currentItem != nullptr && cache->mainInventory != nullptr &&
+        cache->getItem != nullptr && cache->getBlockFromItem != nullptr &&
+        cache->getIdFromBlock != nullptr && cache->getFacingByIndex != nullptr &&
+        cache->vec3Constructor != nullptr && cache->playerControllerField != nullptr;
+    const bool bedBreakerCapability = cache != nullptr &&
+        cache->playerControllerClass != nullptr && cache->itemStackClass != nullptr &&
+        cache->enumFacingClass != nullptr && cache->playerControllerField != nullptr &&
+        cache->inventoryField != nullptr && cache->currentItem != nullptr &&
+        cache->mainInventory != nullptr && cache->getItem != nullptr &&
+        cache->getFacingByIndex != nullptr && cache->clickBlock != nullptr &&
+        cache->onPlayerDamageBlock != nullptr &&
+        cache->resetBlockRemoving != nullptr &&
+        cache->getBlockReachDistance != nullptr && cache->getStrVsBlock != nullptr &&
+        cache->blockPosConstructor != nullptr && cache->getBlockState != nullptr &&
+        cache->getBlock != nullptr && cache->isAirBlock != nullptr;
+    const bool bedBreakerRequested = requested.bedBreaker && localWorld;
     const bool movementRequested = requested.safewalk || requested.scaffold ||
         requested.fly || requested.bhop || requested.longJump ||
         localMobAuraRequested || localVelocityRequested;
-    const bool anyRequested = movementRequested || requested.aimAssist;
+    // A pending logical restore/reset is work in its own right.  Keep this
+    // frame alive even after the feature toggle turns off so the authoritative
+    // controller can flush the real Minecraft state before the hooks stand
+    // down.
+    const bool anyRequested = movementRequested || requested.aimAssist ||
+        requested.silentFileDebug || requested.silentChatDebug ||
+        bedBreakerRequested || m_bedBreakerTargetValid ||
+        m_logicalController.requiresDrain() || freeLookRequested ||
+        m_freeLookActive;
     if ((!anyRequested && !m_aimSensitivityModified) ||
-        (!aimCapability && !movementCapability)) {
+        (!aimCapability && !movementCapability && !bedBreakerCapability &&
+         !freeLookCapability)) {
+        if(!aimCapability) deactivateSilentOutput();
         (void)releaseForcedSneak();
         m_scaffoldPlatformYValid = false;
         m_lastLocalHealth = -1.0F;
@@ -1985,8 +2634,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         return result;
     };
     const auto fail = [&]() noexcept {
+        deactivateSilentOutput();
         clearException(env);
         (void)releaseForcedSneak();
+        m_logicalController.deactivate();
+        m_bedBreakerTargetValid = false;
         return finish(false);
     };
 
@@ -2002,11 +2654,38 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
 
     jobject player = env->GetObjectField(minecraft, cache->playerField);
     jobject settings = env->GetObjectField(minecraft, cache->gameSettingsField);
+    jobject world = env->GetObjectField(minecraft, cache->worldField);
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr ||
-        settings == nullptr) return fail();
+        settings == nullptr || world == nullptr) return fail();
     const jfloat pitch = env->GetFloatField(player, cache->rotationPitch);
     const jfloat yaw = env->GetFloatField(player, cache->rotationYaw);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
+
+    silent::HeldItemPolicy heldItemPolicy=silent::HeldItemPolicy::Other;
+    if(cache->getEquipmentInSlot&&cache->getItem) {
+        jobject heldStack=env->CallObjectMethod(player,cache->getEquipmentInSlot,0);
+        jobject heldItem=!env->ExceptionCheck()&&heldStack
+            ?env->CallObjectMethod(heldStack,cache->getItem):nullptr;
+        if(!env->ExceptionCheck()&&heldItem) {
+            if(cache->itemBlockClass&&env->IsInstanceOf(
+                    heldItem,cache->itemBlockClass)==JNI_TRUE) {
+                heldItemPolicy=silent::HeldItemPolicy::BlockItem;
+            } else if(cache->itemClass&&cache->getIdFromItem) {
+                const jint id=env->CallStaticIntMethod(
+                    cache->itemClass,cache->getIdFromItem,heldItem);
+                // Legacy 1.8.9 IDs: pickaxes, axes and shears. These tools
+                // deliberately give the camera block priority on left-click.
+                constexpr std::array<int,11U> miningTools{{
+                    257,258,270,271,274,275,278,279,285,286,359}};
+                if(!env->ExceptionCheck()&&std::find(miningTools.begin(),
+                        miningTools.end(),static_cast<int>(id))!=miningTools.end())
+                    heldItemPolicy=silent::HeldItemPolicy::MiningTool;
+            }
+        }
+        clearException(env);
+        if(heldItem) env->DeleteLocalRef(heldItem);
+        if(heldStack) env->DeleteLocalRef(heldStack);
+    }
 
     if (localVelocityRequested && movementCapability) {
         const jfloat localHealth = env->CallFloatMethod(player, cache->getHealth);
@@ -2014,11 +2693,20 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         if (m_lastLocalEntityId == snapshot.entityId &&
             m_lastLocalHealth >= 0.0F &&
             localHealth + 0.01F < m_lastLocalHealth) {
-            const double scale = static_cast<double>(std::clamp(
+            const unsigned probability=static_cast<unsigned>(std::clamp(
+                requested.localVelocityProbability,0,100));
+            const unsigned roll=static_cast<unsigned>((tickMilliseconds ^
+                (static_cast<std::uint64_t>(snapshot.entityId)*0x9E3779B97F4A7C15ULL))%100ULL);
+            const double horizontalScale = static_cast<double>(std::clamp(
                 requested.localVelocityPercent, 0, 100)) / 100.0;
-            for (const jfieldID field : cache->motionFields) {
+            const double verticalScale=static_cast<double>(std::clamp(
+                requested.localVelocityVerticalPercent,0,100))/100.0;
+            for (std::size_t axis=0;axis<cache->motionFields.size();++axis) {
+                const jfieldID field=cache->motionFields[axis];
                 const jdouble motion = env->GetDoubleField(player, field);
-                env->SetDoubleField(player, field, motion * scale);
+                if(roll<probability)
+                    env->SetDoubleField(player,field,motion*
+                        (axis==1U ? verticalScale : horizontalScale));
             }
             if (env->ExceptionCheck() == JNI_TRUE) return fail();
         }
@@ -2029,245 +2717,553 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         m_lastLocalEntityId = snapshot.entityId;
     }
 
-    // Aim assistance needs only the player rotation and GameSettings
-    // sensitivity mappings. It must not inherit Safewalk/Scaffold's block,
-    // inventory or controller requirements: transformed clients commonly
-    // expose the former while renaming one of the latter.
-    if (!requested.aimAssist) {
-        m_aimFilterInitialized = false;
-        m_aimFilteredTargetEntityId = -1;
+    // Silent Lock is a Lock On output mode even if an older persisted config
+    // contains the contradictory Smooth+Silent combination.  Do not let a UI
+    // state mismatch silently disable the authoritative logical pipeline.
+    const aim::Mode mode = (requested.aimLockOnMode || requested.aimSilentLock)
+        ? aim::Mode::LockOn : aim::Mode::Smooth;
+    const bool wantsSilent = requested.aimAssist && requested.aimSilentLock;
+    if (wantsSilent || m_logicalController.debug().enabled()) {
+        if (!m_silentRotationHook.ready() &&
+            tickMilliseconds >= m_nextSilentRotationHookAttemptTick) {
+            m_nextSilentRotationHookAttemptTick = tickMilliseconds + 5000U;
+            if (cache->addToSendQueue && cache->profile) {
+                std::string packetInternal = cache->profile->networkPacketName;
+                std::replace(packetInternal.begin(), packetInternal.end(), '.', '/');
+                (void)m_silentRotationHook.install(
+                    m_vm, cache->addToSendQueue, packetInternal.c_str(), this,
+                    [](void* owner, JNIEnv* jni, jobject packet) noexcept -> jobject {
+                        return static_cast<GameBindings*>(owner)->serializeLogicalPacket(jni, packet);
+                    });
+            }
+        }
+        if ((!m_logicalMovementHook.ready()||!m_logicalJumpHook.ready()) &&
+            logicalMovementCapability &&
+            tickMilliseconds >= m_nextLogicalMovementHookAttemptTick) {
+            m_nextLogicalMovementHookAttemptTick = tickMilliseconds + 5000U;
+            if(!m_logicalMovementHook.ready()) {
+                (void)m_logicalMovementHook.install(
+                    m_vm, cache->moveFlying,cache->setSprinting,this,
+                    [](void* owner, JNIEnv* jni, jobject entity, jfloat strafe,
+                       jfloat forward) noexcept -> jfloat {
+                        return static_cast<GameBindings*>(owner)->beginLogicalMovement(
+                            jni, entity, strafe, forward);
+                    },
+                    [](void* owner, JNIEnv* jni, jobject entity,
+                       jfloat fallback) noexcept -> jfloat {
+                        return static_cast<GameBindings*>(owner)->logicalMovementForward(
+                            jni, entity, fallback);
+                    },
+                    [](void* owner, JNIEnv* jni, jobject entity) noexcept {
+                        static_cast<GameBindings*>(owner)->endLogicalMovement(jni, entity);
+                    },
+                    [](void* owner,JNIEnv* jni,jobject entity,
+                       bool sprintRequested) noexcept -> bool {
+                        return static_cast<GameBindings*>(owner)->arbitrateLogicalSprint(
+                            jni,entity,sprintRequested);
+                    });
+            }
+            if(!m_logicalJumpHook.ready()) {
+                (void)m_logicalJumpHook.install(
+                    m_vm,cache->jump,this,
+                    [](void* owner,JNIEnv* jni,jobject entity) noexcept {
+                        static_cast<GameBindings*>(owner)->beginLogicalJump(jni,entity);
+                    },
+                    [](void* owner,JNIEnv* jni,jobject entity) noexcept {
+                        static_cast<GameBindings*>(owner)->endLogicalJump(jni,entity);
+                    });
+            }
+        }
+        if (!m_logicalInteractionHook.ready() && cache->sendClickBlock &&
+            tickMilliseconds >= m_nextLogicalInteractionHookAttemptTick) {
+            m_nextLogicalInteractionHookAttemptTick = tickMilliseconds + 5000U;
+            // Lunar's transformed clickMouse is not a reliable retransformation
+            // target. Hook the per-tick held-left entry and let it consume only
+            // intents already released by the fixed-CPS monotonic scheduler.
+            (void)m_logicalInteractionHook.install(
+                m_vm, nullptr, cache->sendClickBlock, this,
+                [](void* owner, JNIEnv* jni, jobject mc,
+                   LiveInteractionTransform::Entry entry, bool down) noexcept {
+                    return static_cast<GameBindings*>(owner)->consumeLogicalInteraction(
+                        jni, mc, entry, down);
+                });
+        }
+        if(!m_attackOwnershipHook.ready()&&cache->attackEntity&&
+           tickMilliseconds>=m_nextAttackOwnershipHookAttemptTick) {
+            m_nextAttackOwnershipHookAttemptTick=tickMilliseconds+5000U;
+            (void)m_attackOwnershipHook.install(m_vm,cache->attackEntity,this,
+                [](void* owner,JNIEnv* jni,jobject original) noexcept -> jobject {
+                    return static_cast<GameBindings*>(owner)->arbitrateLogicalAttack(
+                        jni,original);
+                });
+        }
     }
-    if (aimCapability && (requested.aimAssist || m_aimSensitivityModified)) {
-        const EntityMarker* target = nullptr;
-        const double minimumDistance = static_cast<double>(std::clamp(
-            requested.aimMinimumDistance, 0, 64));
-        const double maximumDistance = static_cast<double>(std::clamp(
-            requested.aimMaximumDistance,
-            std::max(1, requested.aimMinimumDistance), 128));
-        const double maximumAngle = static_cast<double>(std::clamp(
-            requested.aimFovDegrees, 1, 360)) * 0.5;
-        double bestScore = std::numeric_limits<double>::max();
-        float desiredYaw = yaw;
-        float desiredPitch = pitch;
-        bool crosshairIntersectsTarget = false;
-        const auto wrap = [](double value) noexcept {
-            while (value > 180.0) value -= 360.0;
-            while (value < -180.0) value += 360.0;
-            return value;
-        };
-        constexpr double aimPi = 3.14159265358979323846;
-        const double partialTicks = std::clamp(
-            static_cast<double>(snapshot.camera.partialTicks), 0.0, 1.0);
-        // RenderManager's render position is already the current frame's
-        // interpolated camera origin. Falling back to the 20 TPS player sample
-        // keeps the capability usable when ActiveRenderInfo is unavailable.
-        const double eyeX = snapshot.camera.valid
-            ? snapshot.camera.renderX : snapshot.x;
-        const double eyeY = (snapshot.camera.valid
-            ? snapshot.camera.renderY : snapshot.y) + 1.62;
-        const double eyeZ = snapshot.camera.valid
-            ? snapshot.camera.renderZ : snapshot.z;
-        const double yawRadians = static_cast<double>(yaw) * aimPi / 180.0;
-        const double pitchRadians = static_cast<double>(pitch) * aimPi / 180.0;
-        const double rayX = -std::sin(yawRadians) * std::cos(pitchRadians);
-        const double rayY = -std::sin(pitchRadians);
-        const double rayZ = std::cos(yawRadians) * std::cos(pitchRadians);
-        const auto rayHitsBounds = [&](const AxisAlignedBox& bounds,
-                                       const double limit) noexcept {
-            double entry = 0.0;
-            double exit = limit;
-            const auto clip = [&](const double origin, const double direction,
-                                  const double minimum,
-                                  const double maximum) noexcept {
-                if (std::abs(direction) < 1.0e-9)
-                    return origin >= minimum && origin <= maximum;
-                double first = (minimum - origin) / direction;
-                double second = (maximum - origin) / direction;
-                if (first > second) std::swap(first, second);
-                entry = std::max(entry, first);
-                exit = std::min(exit, second);
-                return entry <= exit;
-            };
-            return clip(eyeX, rayX, bounds.minX, bounds.maxX) &&
-                   clip(eyeY, rayY, bounds.minY, bounds.maxY) &&
-                   clip(eyeZ, rayZ, bounds.minZ, bounds.maxZ) &&
-                   exit >= 0.0 && entry <= limit;
-        };
-        if (requested.aimAssist) {
-            for (std::uint32_t index = 0U;
-                 index < snapshot.entityMarkerCount; ++index) {
-                const EntityMarker& entity = snapshot.entityMarkers[index];
-                // TAB membership is authoritative on Hypixel and excludes NPCs.
-                // A real World.playerEntities member is sufficient in local and
-                // other non-match worlds where a persistent TAB roster may not exist.
-                const bool validPlayer = entity.confirmedPlayer ||
-                    (!snapshot.hypixelServer && !snapshot.matchActive && entity.player);
-                if (!validPlayer || entity.entityId == snapshot.entityId ||
-                    (snapshot.ownTeam != 'u' &&
-                     entity.teamColor == snapshot.ownTeam)) continue;
-                // Interpolate at the exact render partial tick, the same way
-                // the 240 Hz ESP path does. This removes the old 20 TPS stair
-                // step and keeps a 100% lock attached to one visual point.
-                const double targetX = entity.previousX +
-                    (entity.currentX - entity.previousX) * partialTicks;
-                const double targetY = entity.previousY +
-                    (entity.currentY - entity.previousY) * partialTicks;
-                const double targetZ = entity.previousZ +
-                    (entity.currentZ - entity.previousZ) * partialTicks;
-                const double shiftX = targetX - entity.currentX;
-                const double shiftY = targetY - entity.currentY;
-                const double shiftZ = targetZ - entity.currentZ;
-                const AxisAlignedBox renderBounds{
-                    entity.bounds.minX + shiftX, entity.bounds.minY + shiftY,
-                    entity.bounds.minZ + shiftZ, entity.bounds.maxX + shiftX,
-                    entity.bounds.maxY + shiftY, entity.bounds.maxZ + shiftZ};
-                const double dx = targetX - eyeX;
-                const double dz = targetZ - eyeZ;
-                const double entityHeight = std::clamp(
-                    entity.bounds.maxY - entity.bounds.minY, 0.6, 2.4);
-                // 0.90 * the standing 1.8-block player height is 1.62: target
-                // eye/head height exactly matches the local eye on level ground.
-                const double dy = targetY + entityHeight * 0.90 - eyeY;
-                const double horizontal = std::hypot(dx, dz);
-                if (horizontal < 0.1) continue;
-                const double distance = std::hypot(horizontal, dy);
-                if (distance < minimumDistance || distance > maximumDistance)
-                    continue;
-                if (rayHitsBounds(renderBounds, maximumDistance))
-                    crosshairIntersectsTarget = true;
-                const float targetYaw = static_cast<float>(
-                    std::atan2(dz, dx) * 180.0 / aimPi - 90.0);
-                const float targetPitch = static_cast<float>(
-                    -std::atan2(dy, horizontal) * 180.0 / aimPi);
-                const double angle = std::hypot(
-                    wrap(targetYaw - yaw),
-                    static_cast<double>(targetPitch - pitch));
-                if (angle <= maximumAngle) {
-                    // Nearest mode makes distance the primary key. The normal
-                    // mode remains crosshair-first with restrained stickiness.
-                    double score = requested.aimNearestPriority
-                        ? distance + angle * 0.001
-                        : angle + distance * 0.025;
-                    if (!requested.aimNearestPriority &&
-                        entity.entityId == m_aimTargetEntityId) score *= 0.46;
-                    if (score >= bestScore) continue;
-                    bestScore = score;
-                    target = &entity;
-                    desiredYaw = targetYaw;
-                    desiredPitch = targetPitch;
-                }
-            }
-        }
-        m_aimTargetEntityId = target == nullptr ? -1 : target->entityId;
-        if (requested.aimAssist && requested.aimSlowdownMode) {
-            // Slowdown is an actual ray/AABB gate, not merely "some target is
-            // inside the FOV". Mouse sensitivity changes only while the
-            // crosshair ray is physically inside an eligible hitbox.
-            if (crosshairIntersectsTarget && !m_aimSensitivityModified) {
-                m_originalMouseSensitivity = env->GetFloatField(
-                    settings, cache->mouseSensitivity);
-                m_aimSensitivityModified = env->ExceptionCheck() != JNI_TRUE;
-            }
-            if (crosshairIntersectsTarget && m_aimSensitivityModified) {
-                env->SetFloatField(settings, cache->mouseSensitivity,
-                    m_originalMouseSensitivity * static_cast<float>(std::clamp(
-                        requested.aimSlowdownPercent, 5, 95)) / 100.0F);
-            } else if (m_aimSensitivityModified) {
-                env->SetFloatField(settings, cache->mouseSensitivity,
-                                   m_originalMouseSensitivity);
-                m_aimSensitivityModified = false;
-            }
-        } else {
-            if (m_aimSensitivityModified) {
-                env->SetFloatField(settings, cache->mouseSensitivity,
-                                   m_originalMouseSensitivity);
-                m_aimSensitivityModified = false;
-            }
-            if (requested.aimAssist && target != nullptr) {
-                const double dt = m_lastGameplayTick == 0U ? 0.05 :
-                    std::clamp(static_cast<double>(tickMilliseconds -
-                        m_lastGameplayTick) / 1000.0, 0.001, 0.10);
-                const double speed = static_cast<double>(std::clamp(
-                    requested.aimSpeedPercent, 1, 100)) / 100.0;
-                if (requested.aimSpeedPercent >= 100) {
-                    // True lock-on: no exponential lag, dead zone or per-tick
-                    // cap. updateGameplay() is called from every SwapBuffers
-                    // frame, so a 240 Hz presentation produces 240 Hz rotation.
-                    env->SetFloatField(player, cache->rotationYaw, desiredYaw);
-                    env->SetFloatField(player, cache->rotationPitch,
-                        std::clamp(desiredPitch, -90.0F, 90.0F));
-                    m_aimFilteredYaw = desiredYaw;
-                    m_aimFilteredPitch = desiredPitch;
-                    m_aimFilteredTargetEntityId = target->entityId;
-                    m_aimFilterInitialized = true;
-                } else {
-                // Squared response makes low settings genuinely gentle. A
-                // per-second turn cap prevents any frame from snapping even
-                // after a hitch, while the exponential term stays frame-rate
-                // independent.
-                // Filter the target angle independently from the view angle.
-                // Entity updates arrive at 20 Hz while this method may be
-                // sampled at a different cadence; directly chasing every new
-                // sample produced the visible hitbox-edge oscillation.
-                if (!m_aimFilterInitialized ||
-                    m_aimFilteredTargetEntityId != target->entityId) {
-                    m_aimFilteredYaw = yaw;
-                    m_aimFilteredPitch = pitch;
-                    m_aimFilteredTargetEntityId = target->entityId;
-                    m_aimFilterInitialized = true;
-                }
-                const double targetFilter = 1.0 - std::exp(
-                    -(5.0 + 5.0 * speed) * dt);
-                m_aimFilteredYaw = static_cast<float>(yaw + wrap(
-                    static_cast<double>(m_aimFilteredYaw) - yaw));
-                m_aimFilteredYaw = static_cast<float>(m_aimFilteredYaw +
-                    wrap(desiredYaw - m_aimFilteredYaw) * targetFilter);
-                m_aimFilteredPitch = static_cast<float>(m_aimFilteredPitch +
-                    (desiredPitch - m_aimFilteredPitch) * targetFilter);
 
-                const double response = 0.28 + 5.20 * speed * speed;
-                const double alpha = 1.0 - std::exp(-response * dt);
-                const double maximumStep = (3.0 + 150.0 * speed * speed) * dt;
-                const double yawError = wrap(m_aimFilteredYaw - yaw);
-                const double pitchError = static_cast<double>(m_aimFilteredPitch - pitch);
-                // A small angular dead zone prevents quantized mouse/entity
-                // updates from bouncing between opposite corrections once the
-                // crosshair is already settled on the target.
-                constexpr double settleDeadZone = 0.035;
-                const double yawStep = std::clamp(
-                    std::abs(yawError) <= settleDeadZone ? 0.0 : yawError * alpha,
-                    -maximumStep, maximumStep);
-                const double pitchStep = std::clamp(
-                    std::abs(pitchError) <= settleDeadZone ? 0.0 : pitchError * alpha,
-                    -maximumStep, maximumStep);
-                env->SetFloatField(player, cache->rotationYaw,
-                    yaw + static_cast<float>(yawStep));
-                env->SetFloatField(player, cache->rotationPitch,
-                    std::clamp(pitch + static_cast<float>(pitchStep),
-                               -90.0F, 90.0F));
-                }
-            }
-            if (!requested.aimAssist || target == nullptr) {
-                m_aimFilterInitialized = false;
-                m_aimFilteredTargetEntityId = -1;
-            }
+    silent::MovementInput physicalMovement{};
+    if(m_logicalController.debug().enabled() && !m_interactionObserver.ready() &&
+       tickMilliseconds>=m_nextInteractionObserverAttempt) {
+        m_nextInteractionObserverAttempt=tickMilliseconds+5000;
+        const bool installed=m_interactionObserver.install(m_vm,
+            {cache->attackEntity,cache->clickBlock,cache->onPlayerDamageBlock,cache->resetBlockRemoving},
+            this,[](void* owner,JNIEnv* jni,LiveInteractionObserver::Event event,jobject argument) noexcept {
+                static_cast<GameBindings*>(owner)->observeActualInteraction(jni,event,argument);
+            });
+        char detail[80]{}; std::snprintf(detail,sizeof(detail),"ready=%d jvmtiError=%d",installed,m_interactionObserver.error());
+        m_logicalController.debug().event("ACTUAL_HOOK",m_logicalController.latest(),detail,true);
+    } else if(m_interactionObserver.ready()) {
+        m_interactionObserver.setEnabled(m_logicalController.debug().enabled());
+    }
+    silent::Vec3 currentVelocity{};
+    bool logicalOnGround = false;
+    bool logicalSprinting = false;
+    std::uint64_t logicalPhysicsTick = 0U;
+    if (logicalMovementCapability) {
+        std::array<bool, 4U> keys{};
+        for (std::size_t index = 0U; index < keys.size(); ++index) {
+            jobject binding = env->GetObjectField(settings,
+                                                  cache->movementKeyFields[index]);
+            if (!binding || env->ExceptionCheck() == JNI_TRUE) return fail();
+            const jint code = env->CallIntMethod(binding, cache->getKeyCode);
+            if (env->ExceptionCheck() == JNI_TRUE) return fail();
+            (void)queryLwjglKeyDown(env, code, keys[index]);
         }
+        physicalMovement = {keys[0], keys[1], keys[2], keys[3]};
+        currentVelocity = {
+            env->GetDoubleField(player, cache->motionFields[0]),
+            env->GetDoubleField(player, cache->motionFields[1]),
+            env->GetDoubleField(player, cache->motionFields[2])};
+        logicalOnGround = env->GetBooleanField(player, cache->onGround) == JNI_TRUE;
+        logicalSprinting = env->CallBooleanMethod(player, cache->isSprinting) == JNI_TRUE;
+        logicalPhysicsTick=cache->entityTicks
+            ? static_cast<std::uint64_t>(env->GetIntField(player,cache->entityTicks))
+            : 0U;
         if (env->ExceptionCheck() == JNI_TRUE) return fail();
     }
 
+    std::array<silent::TargetCandidate, GameSnapshot::MaxEntityMarkers> candidates{};
+    std::size_t candidateCount = 0U;
+    std::uint32_t playerMarkers = 0U;
+    std::uint32_t tabConfirmedMarkers = 0U;
+    std::uint32_t colouredPlayerMarkers = 0U;
+    std::uint32_t teammateMarkers = 0U;
+    const double eyeX = snapshot.camera.valid ? snapshot.camera.renderX : snapshot.x;
+    const double eyeY = (snapshot.camera.valid ? snapshot.camera.renderY : snapshot.y) + 1.62;
+    const double eyeZ = snapshot.camera.valid ? snapshot.camera.renderZ : snapshot.z;
+    const double renderTick = snapshot.entityRenderTick;
+    const auto identityHash = [](const EntityMarker& marker) noexcept {
+        std::uint64_t value = 1469598103934665603ULL;
+        const auto append = [&](const auto& text) noexcept {
+            for (const char character : text) {
+                if (!character) break;
+                value ^= static_cast<unsigned char>(character);
+                value *= 1099511628211ULL;
+            }
+        };
+        if (marker.uuid[0]) append(marker.uuid);
+        else append(marker.playerName);
+        return value;
+    };
+    for (std::uint32_t index = 0U;
+         index < std::min<std::uint32_t>(snapshot.entityMarkerCount,
+             static_cast<std::uint32_t>(snapshot.entityMarkers.size())); ++index) {
+        const EntityMarker& entity = snapshot.entityMarkers[index];
+        if (entity.player) ++playerMarkers;
+        if (entity.confirmedPlayer) ++tabConfirmedMarkers;
+        const bool colouredPlayer = entity.player && entity.teamColor != 'u' &&
+            entity.teamColor != '\0';
+        if (colouredPlayer) ++colouredPlayerMarkers;
+        if (colouredPlayer && snapshot.ownTeam != 'u' &&
+            entity.teamColor == snapshot.ownTeam) ++teammateMarkers;
+        // Hypixel may expose a nicked player's world-entity alias that differs
+        // from the chosen TAB nickname.  TAB/UUID confirmation remains the
+        // strongest signal, while a real player entity wearing a recognised
+        // Bed Wars team colour is the safe in-match fallback. Shop NPCs and
+        // opening robots have no recognised team colour and stay excluded.
+        const bool validPlayer = entity.confirmedPlayer ||
+            (snapshot.matchActive && colouredPlayer) ||
+            (!snapshot.hypixelServer && entity.player);
+        // Outside Hypixel Bed Wars, scoreboard/text colours are commonly ranks
+        // or chat decoration rather than team identity (especially on
+        // offline-mode servers). Applying the Bed Wars team filter globally
+        // made only same-colour players mysteriously untargetable.
+        const bool confirmedTeammate=silent::isConfirmedCombatTeammate(
+            snapshot.hypixelServer,snapshot.matchActive,
+            snapshot.ownTeam,entity.teamColor);
+        const bool eligible = validPlayer && entity.entityId != snapshot.entityId &&
+            std::isfinite(entity.health) && entity.health > 0.0F &&
+            !confirmedTeammate;
+        if (!eligible || candidateCount >= candidates.size()) continue;
+        const double tx = entity.previousX +
+            (entity.currentX - entity.previousX) * renderTick;
+        const double ty = entity.previousY +
+            (entity.currentY - entity.previousY) * renderTick;
+        const double tz = entity.previousZ +
+            (entity.currentZ - entity.previousZ) * renderTick;
+        const double offsetX = tx - entity.currentX;
+        const double offsetY = ty - entity.currentY;
+        const double offsetZ = tz - entity.currentZ;
+        const double height = std::clamp(
+            entity.bounds.maxY - entity.bounds.minY, 0.6, 2.4);
+        candidates[candidateCount++] = {
+            entity.entityId, identityHash(entity), {tx, ty + height * 0.90, tz},
+            {entity.bounds.minX + offsetX, entity.bounds.minY + offsetY,
+             entity.bounds.minZ + offsetZ, entity.bounds.maxX + offsetX,
+             entity.bounds.maxY + offsetY, entity.bounds.maxZ + offsetZ}, true,
+             requested.aimSequentialTargets && entity.hurtTime > 0};
+    }
+
+    const bool canAim = requested.aimAssist && aimCapability &&
+        snapshot.state == GameSnapshot::State::Ready && snapshot.health > 0.0F &&
+        std::isfinite(yaw) && std::isfinite(pitch);
+    const jfloat sensitivity = env->GetFloatField(settings, cache->mouseSensitivity);
+    if (env->ExceptionCheck() == JNI_TRUE) return fail();
+    const bool silentRotationReady = silentAvailable();
+    const bool silentAttackBindingsReady=silentAttackAvailable();
+    const silent::RuntimeCapabilities silentCapabilities{
+        silentRotationReady,silentAttackBindingsReady,
+        m_logicalInteractionHook.ready(),m_attackOwnershipHook.ready()};
+    const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    (void)observeLogicalCamera(env,minecraft,leftHeld);
+    const auto monotonicMicroseconds=static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    silent::LogicalFrameInput logicalInput{};
+    logicalInput.tick = tickMilliseconds;
+    logicalInput.physicsTick = logicalPhysicsTick;
+    logicalInput.worldGeneration = snapshot.worldGeneration;
+    logicalInput.localEntityId = snapshot.entityId;
+    // Target selection and the scanner are useful diagnostics even when a
+    // transformed client has not exposed an optional movement/interaction
+    // hook. Only packet serialization is gated by packet readiness below.
+    logicalInput.enabled = canAim&&(!wantsSilent||
+        silentCapabilities.logicalOutputReady());
+    logicalInput.silent = wantsSilent;
+    logicalInput.mode = mode;
+    logicalInput.nearestPriority = requested.aimNearestPriority;
+    logicalInput.enforceAttackAvailability = requested.aimAttackViability;
+    // Movement ownership is an explicit user policy. It is deliberately
+    // independent from ray/attack availability so losing an executable hit can
+    // never cause a one-tick movement or sprint direction pulse.
+    logicalInput.coordinateMovement = requested.silentControlAdaptation;
+    logicalInput.sequentialTargets = requested.aimSequentialTargets;
+    logicalInput.leftMouseDown = leftHeld;
+    logicalInput.heldItemPolicy = requested.silentControlAdaptation
+        ? heldItemPolicy : silent::HeldItemPolicy::Other;
+    logicalInput.minimumDistance = std::clamp(requested.aimMinimumDistance, 0, 64);
+    logicalInput.maximumDistance = std::clamp(requested.aimMaximumDistance,
+        std::max(1, requested.aimMinimumDistance), 128);
+    logicalInput.fovDegrees = std::clamp(requested.aimFovDegrees, 1, 360);
+    logicalInput.aimSpeedPercent = requested.aimSpeedPercent;
+    logicalInput.mouseSensitivity = sensitivity;
+    logicalInput.camera = {yaw, pitch};
+    logicalInput.eye = {eyeX, eyeY, eyeZ};
+    logicalInput.physicalMovement = physicalMovement;
+    logicalInput.currentVelocity = currentVelocity;
+    logicalInput.sprinting = logicalSprinting;
+    logicalInput.onGround = logicalOnGround;
+    logicalInput.candidates = {candidates.data(), candidateCount};
+    const silent::LogicalFramePlan logicalPlan =
+        m_logicalController.advance(logicalInput,
+            [&](const silent::LogicalFramePlan& pending) noexcept {
+                return traceLogicalBlock(env,world,pending);
+            });
+    // The fixed-CPS clock belongs to core Silent Lock, not to optional local
+    // control adaptation. Scheduling after the logical frame also ensures a
+    // new intent snapshots an already committed target/rotation on the next
+    // frame instead of racing target selection.
+    m_logicalController.updateAttackClock(leftHeld,
+        canAim&&wantsSilent&&silentCapabilities.attackSchedulerReady(),
+        monotonicMicroseconds,requested.aimAttackCps);
+
+    if (m_logicalController.debug().enabled() &&
+        tickMilliseconds >= m_nextAimCandidateDebugTick) {
+        m_nextAimCandidateDebugTick = tickMilliseconds + 5000U;
+        char detail[320]{};
+        std::snprintf(detail, sizeof(detail),
+            "markers=%u players=%u tabConfirmed=%u coloured=%u teammates=%u eligible=%zu match=%d own=%c packetReady=%d movementReady=%d interactionReady=%d requestedMode=%s effectiveMode=%s",
+            snapshot.entityMarkerCount, playerMarkers, tabConfirmedMarkers,
+            colouredPlayerMarkers, teammateMarkers, candidateCount,
+            snapshot.matchActive ? 1 : 0,
+            snapshot.ownTeam ? snapshot.ownTeam : 'u',
+            silentRotationReady ? 1 : 0,
+            (m_logicalMovementHook.ready()&&m_logicalJumpHook.ready()) ? 1 : 0,
+            silentAttackAvailable() ? 1 : 0,
+            requested.aimLockOnMode ? "lock" : "smooth",
+            mode == aim::Mode::LockOn ? "lock" : "smooth");
+        m_logicalController.debug().event("CANDIDATE_SCAN",
+            m_logicalController.latest(), detail, candidateCount == 0U);
+    }
+
+    if (logicalPlan.interactionTransition.kind !=
+            silent::InteractionCommandKind::None &&
+        !executeLogicalInteraction(env, minecraft,
+                                   logicalPlan.interactionTransition)) {
+        m_logicalController.deferInteraction(
+            logicalPlan.interactionTransition);
+        return fail();
+    }
+
+    // The transformed held-left entry is an optional low-latency consumer, not
+    // a prerequisite for Silent Lock.  Some Lunar/vanilla layouts do not expose
+    // that call site even though packet rotation and PlayerControllerMP attack
+    // bindings are valid.  Commit any rotation-confirmed scheduler intent here
+    // on the game's render/update thread.  click() atomically consumes one
+    // numbered intent, so an ownership/held hook racing this boundary can never
+    // emit a second attack.
+    if(logicalPlan.silentActive&&silentAttackBindingsReady) {
+        const silent::InteractionCommand scheduled=m_logicalController.click();
+        if(scheduled.kind!=silent::InteractionCommandKind::None)
+            (void)executeLogicalInteraction(env,minecraft,scheduled);
+    }
+
+    if (logicalPlan.writeVisibleRotation) {
+        const aim::Angles previous{
+            env->GetFloatField(player, cache->previousRotationYaw),
+            env->GetFloatField(player, cache->previousRotationPitch)};
+        if (env->ExceptionCheck() == JNI_TRUE) return fail();
+        const aim::Angles shifted = aim::shiftedPrevious(
+            previous, {yaw, pitch}, logicalPlan.visibleRotation);
+        env->SetFloatField(player, cache->previousRotationYaw,
+                           static_cast<jfloat>(shifted.yaw));
+        env->SetFloatField(player, cache->previousRotationPitch,
+                           static_cast<jfloat>(shifted.pitch));
+        env->SetFloatField(player, cache->rotationYaw,
+                           static_cast<jfloat>(logicalPlan.visibleRotation.yaw));
+        env->SetFloatField(player, cache->rotationPitch,
+                           static_cast<jfloat>(logicalPlan.visibleRotation.pitch));
+        if (env->ExceptionCheck() == JNI_TRUE) return fail();
+    }
+    const bool logicalMovementReady=m_logicalMovementHook.ready()&&
+        m_logicalJumpHook.ready();
+    const bool logicalMovementEnabled=logicalPlan.silentActive&&
+        requested.silentControlAdaptation&&logicalMovementReady;
+    m_logicalMovementHook.setEnabled(logicalMovementEnabled);
+    m_logicalJumpHook.setEnabled(logicalMovementEnabled);
+    const bool logicalAttackEnabled=logicalPlan.silentActive&&
+        silentAttackBindingsReady;
+    m_logicalInteractionHook.setEnabled(logicalAttackEnabled&&
+        silentCapabilities.heldArbitrationReady());
+    m_attackOwnershipHook.setEnabled(logicalAttackEnabled&&
+        silentCapabilities.ownershipArbitrationReady());
+    m_silentRotationHook.setEnabled(
+        (logicalPlan.silentActive && silentRotationReady) ||
+        m_logicalController.restoring() ||
+        m_logicalController.packetContinuityRequired() ||
+        m_logicalController.debug().enabled());
+
     // Aim-only operation intentionally stops here. The remainder reads block
     // support, movement keys and inventory/controller mappings.
+    if ((!movementRequested || !movementCapability) &&
+        ((!bedBreakerRequested && !m_bedBreakerTargetValid) ||
+         !bedBreakerCapability)) {
+        (void)releaseForcedSneak();
+        m_scaffoldPlatformYValid = false;
+        m_lastGameplayTick = tickMilliseconds;
+        return finish((requested.aimAssist && aimCapability)||freeLookRequested);
+    }
+
+    if (bedBreakerRequested && bedBreakerCapability &&
+        tickMilliseconds - m_lastBedBreakerTick >= 45U) {
+        m_lastBedBreakerTick = tickMilliseconds;
+        jobject controller = env->GetObjectField(minecraft,
+                                                  cache->playerControllerField);
+        jobject inventory = env->GetObjectField(player, cache->inventoryField);
+        const jfloat mappedReach = controller == nullptr ? 0.0F :
+            env->CallFloatMethod(controller, cache->getBlockReachDistance);
+        if (env->ExceptionCheck() == JNI_TRUE || controller == nullptr ||
+            inventory == nullptr || !std::isfinite(mappedReach)) return fail();
+        const double reach = std::clamp(static_cast<double>(mappedReach), 2.0, 8.0);
+        const double breakerEyeX = snapshot.x;
+        const double breakerEyeY = snapshot.y + 1.62;
+        const double breakerEyeZ = snapshot.z;
+
+        struct BlockCoordinate final { int x=0,y=0,z=0; };
+        struct PathChoice final {
+            BlockCoordinate target{};
+            int solidCount = std::numeric_limits<int>::max();
+            double length = std::numeric_limits<double>::max();
+            bool valid = false;
+        } bestPath;
+        const auto isOwnBed = [&](const BedMarker& bed) noexcept {
+            if (!snapshot.ownBedKnown) return false;
+            return bed.y == snapshot.ownBedY &&
+                ((bed.x == snapshot.ownBedX && bed.z == snapshot.ownBedZ) ||
+                 (bed.footX == snapshot.ownBedX && bed.footZ == snapshot.ownBedZ));
+        };
+        const auto sameCoordinate = [](const BlockCoordinate& a,
+                                       const BlockCoordinate& b) noexcept {
+            return a.x == b.x && a.y == b.y && a.z == b.z;
+        };
+        const auto blockKind = [&](const BlockCoordinate coordinate,
+                                   bool& air, bool& bed) noexcept {
+            jobject positionObject = env->NewObject(cache->blockPosClass,
+                cache->blockPosConstructor, coordinate.x, coordinate.y, coordinate.z);
+            if (positionObject == nullptr || env->ExceptionCheck() == JNI_TRUE) {
+                clearException(env); air = false; bed = false; return false;
+            }
+            const jboolean empty = env->CallBooleanMethod(world,
+                cache->isAirBlock, positionObject);
+            if (env->ExceptionCheck() == JNI_TRUE) {
+                clearException(env); env->DeleteLocalRef(positionObject);
+                air = false; bed = false; return false;
+            }
+            air = empty == JNI_TRUE;
+            bed = false;
+            if (!air) {
+                jobject state = env->CallObjectMethod(world, cache->getBlockState,
+                                                       positionObject);
+                jobject block = state == nullptr ? nullptr :
+                    env->CallObjectMethod(state, cache->getBlock);
+                if (env->ExceptionCheck() == JNI_TRUE) clearException(env);
+                else bed = block != nullptr &&
+                    env->IsInstanceOf(block, cache->bedClass) == JNI_TRUE;
+                if (block != nullptr) env->DeleteLocalRef(block);
+                if (state != nullptr) env->DeleteLocalRef(state);
+            }
+            env->DeleteLocalRef(positionObject);
+            return true;
+        };
+
+        constexpr std::array<std::array<double, 3U>, 5U> offsets{{
+            {{0.0,0.44,0.0}}, {{0.30,0.44,0.0}}, {{-0.30,0.44,0.0}},
+            {{0.0,0.44,0.30}}, {{0.0,0.44,-0.30}}}};
+        for (std::uint32_t bedIndex = 0U;
+             bedIndex < std::min(snapshot.bedMarkerCount,
+                 static_cast<std::uint32_t>(snapshot.bedMarkers.size())); ++bedIndex) {
+            const BedMarker& bedMarker = snapshot.bedMarkers[bedIndex];
+            if (isOwnBed(bedMarker)) continue;
+            const std::array<BlockCoordinate, 2U> halves{{
+                {bedMarker.x, bedMarker.y, bedMarker.z},
+                {bedMarker.footX, bedMarker.y, bedMarker.footZ}}};
+            for (const BlockCoordinate half : halves) {
+                for (const auto& offset : offsets) {
+                    const double goalX = half.x + 0.5 + offset[0];
+                    const double goalY = half.y + offset[1];
+                    const double goalZ = half.z + 0.5 + offset[2];
+                    const double dx = goalX-breakerEyeX;
+                    const double dy = goalY-breakerEyeY;
+                    const double dz = goalZ-breakerEyeZ;
+                    const double length = std::sqrt(dx*dx+dy*dy+dz*dz);
+                    if (!std::isfinite(length) || length > reach || length < 0.2) continue;
+                    const int samples = std::clamp(
+                        static_cast<int>(std::ceil(length / 0.16)), 2, 64);
+                    BlockCoordinate previous{std::numeric_limits<int>::min(),0,0};
+                    BlockCoordinate firstSolid{};
+                    int solids = 0;
+                    bool reachedBed = false;
+                    bool validRay = true;
+                    for (int sampleIndex = 1; sampleIndex <= samples; ++sampleIndex) {
+                        const double t = static_cast<double>(sampleIndex) /
+                                         static_cast<double>(samples);
+                        const BlockCoordinate coordinate{
+                            static_cast<int>(std::floor(breakerEyeX + dx*t)),
+                            static_cast<int>(std::floor(breakerEyeY + dy*t)),
+                            static_cast<int>(std::floor(breakerEyeZ + dz*t))};
+                        if (sameCoordinate(coordinate, previous)) continue;
+                        previous = coordinate;
+                        bool air = false, isBedBlock = false;
+                        if (!blockKind(coordinate, air, isBedBlock)) {
+                            validRay = false; break;
+                        }
+                        if (air) continue;
+                        if (solids == 0) firstSolid = coordinate;
+                        ++solids;
+                        if (isBedBlock) { reachedBed = true; break; }
+                    }
+                    if (!validRay || !reachedBed || solids <= 0) continue;
+                    if (!bestPath.valid || solids < bestPath.solidCount ||
+                        (solids == bestPath.solidCount && length < bestPath.length)) {
+                        bestPath = {firstSolid, solids, length, true};
+                    }
+                }
+            }
+        }
+
+        if (!bestPath.valid) {
+            if (m_bedBreakerTargetValid) {
+                env->CallVoidMethod(controller, cache->resetBlockRemoving);
+                clearException(env);
+                m_bedBreakerTargetValid = false;
+            }
+        } else {
+            jobject targetPosition = env->NewObject(cache->blockPosClass,
+                cache->blockPosConstructor, bestPath.target.x,
+                bestPath.target.y, bestPath.target.z);
+            jobject targetState = targetPosition == nullptr ? nullptr :
+                env->CallObjectMethod(world, cache->getBlockState, targetPosition);
+            jobject targetBlock = targetState == nullptr ? nullptr :
+                env->CallObjectMethod(targetState, cache->getBlock);
+            jobjectArray hotbar = static_cast<jobjectArray>(env->GetObjectField(
+                inventory, cache->mainInventory));
+            if (env->ExceptionCheck() == JNI_TRUE || targetPosition == nullptr ||
+                targetBlock == nullptr || hotbar == nullptr) return fail();
+            int selectedSlot = std::clamp(static_cast<int>(
+                env->GetIntField(inventory, cache->currentItem)), 0, 8);
+            float bestStrength = -1.0F;
+            const jsize hotbarLength = std::min<jsize>(env->GetArrayLength(hotbar), 9);
+            for (jsize slot = 0; slot < hotbarLength; ++slot) {
+                jobject stack = env->GetObjectArrayElement(hotbar, slot);
+                if (stack == nullptr) continue;
+                const jfloat strength = env->CallFloatMethod(
+                    stack, cache->getStrVsBlock, targetBlock);
+                if (env->ExceptionCheck() == JNI_TRUE) return fail();
+                if (std::isfinite(strength) && strength > bestStrength) {
+                    bestStrength = strength; selectedSlot = static_cast<int>(slot);
+                }
+                env->DeleteLocalRef(stack);
+            }
+            env->SetIntField(inventory, cache->currentItem, selectedSlot);
+            const double centreX = bestPath.target.x + 0.5;
+            const double centreY = bestPath.target.y + 0.5;
+            const double centreZ = bestPath.target.z + 0.5;
+            const double faceX = breakerEyeX-centreX;
+            const double faceY = breakerEyeY-centreY;
+            const double faceZ = breakerEyeZ-centreZ;
+            int facingIndex = 1;
+            if (std::abs(faceY) >= std::abs(faceX) &&
+                std::abs(faceY) >= std::abs(faceZ)) facingIndex = faceY >= 0 ? 1 : 0;
+            else if (std::abs(faceX) >= std::abs(faceZ)) facingIndex = faceX >= 0 ? 5 : 4;
+            else facingIndex = faceZ >= 0 ? 3 : 2;
+            jobject facing = env->CallStaticObjectMethod(cache->enumFacingClass,
+                cache->getFacingByIndex, facingIndex);
+            if (env->ExceptionCheck() == JNI_TRUE || facing == nullptr) return fail();
+            const bool sameTarget = m_bedBreakerTargetValid &&
+                m_bedBreakerTargetX == bestPath.target.x &&
+                m_bedBreakerTargetY == bestPath.target.y &&
+                m_bedBreakerTargetZ == bestPath.target.z;
+            if (!sameTarget) {
+                if (m_bedBreakerTargetValid)
+                    env->CallVoidMethod(controller, cache->resetBlockRemoving);
+                env->CallBooleanMethod(controller, cache->clickBlock,
+                                       targetPosition, facing);
+                m_bedBreakerTargetX = bestPath.target.x;
+                m_bedBreakerTargetY = bestPath.target.y;
+                m_bedBreakerTargetZ = bestPath.target.z;
+                m_bedBreakerTargetValid = true;
+            } else {
+                env->CallBooleanMethod(controller, cache->onPlayerDamageBlock,
+                                       targetPosition, facing);
+            }
+            if (env->ExceptionCheck() == JNI_TRUE) return fail();
+        }
+    } else if (m_bedBreakerTargetValid && bedBreakerCapability) {
+        jobject controller = env->GetObjectField(minecraft,
+                                                  cache->playerControllerField);
+        if (controller != nullptr)
+            env->CallVoidMethod(controller, cache->resetBlockRemoving);
+        clearException(env);
+        m_bedBreakerTargetValid = false;
+    }
+
     if (!movementRequested || !movementCapability) {
         (void)releaseForcedSneak();
         m_scaffoldPlatformYValid = false;
         m_lastGameplayTick = tickMilliseconds;
-        return finish(requested.aimAssist && aimCapability);
+        return finish(bedBreakerRequested && bedBreakerCapability);
     }
 
-    jobject world = env->GetObjectField(minecraft, cache->worldField);
-    if (env->ExceptionCheck() == JNI_TRUE || world == nullptr) return fail();
-
-    if (localMobAuraRequested && cache->hostileClass != nullptr &&
+    if (localMobAuraRequested && cache->playerControllerField != nullptr &&
+        cache->hostileClass != nullptr &&
         cache->attackEntity != nullptr &&
         tickMilliseconds - m_lastLocalAttackTick >=
             static_cast<std::uint64_t>(std::clamp(
@@ -2381,54 +3377,40 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         player, cache->motionFields[2U]);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
 
-    const double edgeTiming = static_cast<double>(std::clamp(
-        requested.safewalkEdgeSensitivity, 0, 100)) / 100.0;
-    // Mirror vanilla's maybeBackOffFromEdge idea: test a horizontally inset
-    // version of the player's *whole* AABB one step below, rather than four
-    // independent corners. Any remaining overlap is valid support. A larger
-    // inset lets the player move closer to the real 0.6-block body edge before
-    // crouching, while never waiting until the live AABB is unsupported.
-    const double inset = 0.035 + edgeTiming * 0.245;
-    // Sample the movement Minecraft already calculated for the imminent tick.
-    // At the latest setting a slightly shorter preview avoids the old overly
-    // conservative feel; at the early setting one full tick is protected.
-    const double preview = 1.0 - edgeTiming * 0.35;
-    const double fallback = magnitude > 0.001 ? 0.018 : 0.0;
-    const double projectedX = std::abs(actualMotionX) > 0.001
-        ? actualMotionX * preview : directionX * fallback;
-    const double projectedZ = std::abs(actualMotionZ) > 0.001
-        ? actualMotionZ * preview : directionZ * fallback;
-    const double probeMinX = minX + projectedX + inset;
-    const double probeMaxX = maxX + projectedX - inset;
-    const double probeMinZ = minZ + projectedZ + inset;
-    const double probeMaxZ = maxZ + projectedZ - inset;
-    const int supportY = static_cast<int>(std::floor(minY - 0.06));
-    const int firstX = static_cast<int>(std::floor(probeMinX + 1.0e-6));
-    const int lastX = static_cast<int>(std::floor(probeMaxX - 1.0e-6));
-    const int firstZ = static_cast<int>(std::floor(probeMinZ + 1.0e-6));
-    const int lastZ = static_cast<int>(std::floor(probeMaxZ - 1.0e-6));
-    bool hasProjectedSupport = false;
-    for (int x = firstX; x <= lastX && !hasProjectedSupport; ++x) {
-        for (int z = firstZ; z <= lastZ; ++z) {
-            jobject position = env->NewObject(cache->blockPosClass,
-                cache->blockPosConstructor, static_cast<jint>(x),
-                static_cast<jint>(supportY), static_cast<jint>(z));
-            if (env->ExceptionCheck() == JNI_TRUE || position == nullptr)
-                return fail();
-            const jboolean air = env->CallBooleanMethod(
-                world, cache->isAirBlock, position);
-            if (env->ExceptionCheck() == JNI_TRUE) return fail();
-            if (air != JNI_TRUE) {
-                hasProjectedSupport = true;
-                break;
-            }
+    bool collisionQueryFailed = false;
+    const auto hasSupport = [&](double dx, double dz, double inset) noexcept {
+        if (cache->getCollidingBoxes == nullptr || cache->aabbConstructor == nullptr) {
+            collisionQueryFailed = true;
+            return false;
         }
-    }
-    const bool supportRestored = hasProjectedSupport;
-    const bool atEdge = !hasProjectedSupport && onGround;
+        // Query real collision geometry, not "non-air": grass/water are not
+        // support, whereas slabs/stairs have partial-height collision shapes.
+        jobject probe = env->NewObject(cache->aabbClass, cache->aabbConstructor,
+            minX + dx + inset, minY - 0.60, minZ + dz + inset,
+            maxX + dx - inset, minY + 0.001, maxZ + dz - inset);
+        jobject collisions = probe != nullptr && !env->ExceptionCheck()
+            ? env->CallObjectMethod(world, cache->getCollidingBoxes, player, probe)
+            : nullptr;
+        const jint count = collisions != nullptr && !env->ExceptionCheck()
+            ? env->CallIntMethod(collisions, cache->listSize) : 0;
+        if (env->ExceptionCheck() || probe == nullptr || collisions == nullptr) {
+            collisionQueryFailed = true;
+            clearException(env);
+        }
+        if (collisions != nullptr) env->DeleteLocalRef(collisions);
+        if (probe != nullptr) env->DeleteLocalRef(probe);
+        return count > 0;
+    };
+    const bool guardActive = requested.safewalk && onGround && !requested.fly &&
+        !input[4U]; // jumping deliberately suspends vanilla ledge protection
+    const bool atEdge = guardActive && safewalk::needsSneak(
+        requested.safewalkEdgeSensitivity, actualMotionX, actualMotionZ,
+        directionX, directionZ, hasSupport);
+    if (collisionQueryFailed) return fail();
+    const bool supportRestored = guardActive && !atEdge;
     const bool pitchAllowsSafewalk = pitch >= static_cast<float>(std::clamp(
         requested.safewalkMinimumPitch, -90, 90));
-    m_safewalkSupportMask = hasProjectedSupport ? 0U : 0x0FU;
+    m_safewalkSupportMask = atEdge ? 0x0FU : 0U;
 
     if (m_safewalkSneakForced && supportRestored &&
         m_safewalkReleaseAt == 0U) {
@@ -2442,7 +3424,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         if (!movementCapability) return finish(released);
     }
 
-    if (!requested.safewalk) {
+    if (!guardActive) {
         (void)releaseForcedSneak();
     } else if (!m_safewalkSneakForced && atEdge && pitchAllowsSafewalk) {
         if (setSneakState(keyCode, true)) {
@@ -2455,6 +3437,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         const bool released = releaseForcedSneak();
         if (!movementCapability) return finish(released);
     }
+    // LWJGL/KeyBinding updates may replace the synthetic state between frames.
+    // Reassert it while owned; release restores the user's physical Shift key.
+    if (m_safewalkSneakForced) (void)setSneakState(keyCode, true);
 
     if (!movementCapability) return finish(m_safewalkSneakForced);
 
@@ -2500,7 +3485,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         m_lastLongJumpTick = tickMilliseconds;
     }
 
-    if (requested.scaffold &&
+    if (requested.scaffold && placementCapability &&
         tickMilliseconds - m_lastScaffoldPlacementTick >= 35U) {
         const int supportLayer = static_cast<int>(std::floor(minY - 0.06));
         if (!m_scaffoldPlatformYValid || onGround) {
@@ -2768,7 +3753,7 @@ void GameBindings::publishDebugChat(JNIEnv* const env, const bool enabled) noexc
         m_debugBedOwnershipGeneration;
     if (env == nullptr ||
         (!probeChanged && !rosterChanged && !bedChanged && pendingCount == 0U &&
-         warningCount == 0U) ||
+         warningCount == 0U && !m_logicalController.debug().hasChat()) ||
         m_resolutionPhase.load(std::memory_order_acquire) != ResolutionPhase::Resolved ||
         m_cache == nullptr) {
         return;
@@ -2796,6 +3781,17 @@ void GameBindings::publishDebugChat(JNIEnv* const env, const bool enabled) noexc
     // object exist. This avoids silently discarding the exact diagnostics that
     // are needed when a transformed client temporarily exposes an incomplete
     // game state.
+    for(int i=0;i<8;++i) {
+        std::string text;
+        if(!m_logicalController.debug().popChat(text)) break;
+        text="\xC2\xA7" "b"+text;
+        jstring string=env->NewStringUTF(text.c_str());
+        jobject component=string ? env->NewObject(cache->chatTextClass,cache->chatTextConstructor,string) : nullptr;
+        if(component && !env->ExceptionCheck()) env->CallVoidMethod(player,cache->addChatMessage,component);
+        if(component) env->DeleteLocalRef(component);
+        if(string) env->DeleteLocalRef(string);
+        clearException(env);
+    }
     if (enabled) {
         m_debugMatchProbeGeneration = m_matchProbeGeneration;
         m_debugRosterGeneration = m_snapshot.playerRosterGeneration;
@@ -3481,6 +4477,989 @@ void GameBindings::requestBedRescan() noexcept
     }
 }
 
+bool GameBindings::silentAvailable() const noexcept
+{
+    const auto* c=m_cache.get();
+    const bool packetReady = m_silentRotationHook.ready() && c &&
+        c->networkPacketClass && c->movementPacketClass &&
+        c->positionPacketClass && c->lookPacketClass &&
+        c->positionLookPacketClass && c->addToSendQueue &&
+        c->movementPacketConstructor && c->positionPacketConstructor &&
+        c->lookPacketConstructor &&
+        c->positionLookPacketConstructor && c->packetYaw && c->packetPitch &&
+        c->packetOnGround &&
+        std::none_of(c->packetPosition.begin(),c->packetPosition.end(),
+                     [](jfieldID value){ return value==nullptr; });
+    // This public capability describes the feature's defining promise: can
+    // logical yaw/pitch reach the outgoing C03/C05/C06 stream while the camera
+    // stays untouched? Movement compensation and click redirection have their
+    // own optional hooks and must never suppress target acquisition or packet
+    // rotation on a transformed client.
+    return packetReady;
+}
+
+bool GameBindings::silentAttackAvailable() const noexcept
+{
+    const auto* c=m_cache.get();
+    // These JNI bindings are sufficient for the single scheduler-owned
+    // game-thread dispatch path.  Held-left and lower attack retransforms only
+    // arbitrate vanilla call sites when a client exposes them; making either
+    // optional hook part of this capability used to disable Silent Lock
+    // completely on otherwise supported clients.
+    return c && c->attackEntity && c->getEntityById && c->swingItem &&
+        c->playerControllerField && c->playerField && c->worldField;
+}
+
+void GameBindings::deactivateSilentOutput() noexcept
+{
+    m_logicalController.deactivate();
+    m_silentRotationHook.setEnabled(m_logicalController.restoring()||
+        m_logicalController.packetContinuityRequired());
+    m_logicalMovementHook.setEnabled(false);
+    m_logicalJumpHook.setEnabled(false);
+    m_attackOwnershipHook.setEnabled(false);
+    m_logicalInteractionHook.setEnabled(false);
+}
+
+jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcept
+{
+    if(!env || !packet) return packet;
+    observeDigPacket(env,packet);
+    const auto* c=m_cache.get();
+    if(!c || !c->movementPacketClass || !c->lookPacketClass ||
+       !c->positionPacketClass || !c->positionLookPacketClass ||
+       !c->movementPacketConstructor || !c->positionPacketConstructor ||
+       !c->lookPacketConstructor || !c->positionLookPacketConstructor ||
+       !c->packetOnGround || !c->packetYaw || !c->packetPitch ||
+       std::any_of(c->packetPosition.begin(),c->packetPosition.end(),
+                   [](jfieldID value){ return value==nullptr; })) return packet;
+    if(!env->IsInstanceOf(packet,c->movementPacketClass) ||
+       env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
+    const jboolean onGround=env->GetBooleanField(packet,c->packetOnGround);
+    if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
+    jclass packetClass=env->GetObjectClass(packet);
+    const bool exactBase=packetClass &&
+        env->IsSameObject(packetClass,c->movementPacketClass)==JNI_TRUE;
+    const bool exactPosition=packetClass &&
+        env->IsSameObject(packetClass,c->positionPacketClass)==JNI_TRUE;
+    const bool exactLook=packetClass &&
+        env->IsSameObject(packetClass,c->lookPacketClass)==JNI_TRUE;
+    const bool exactPositionLook=packetClass &&
+        env->IsSameObject(packetClass,c->positionLookPacketClass)==JNI_TRUE;
+    if(packetClass) env->DeleteLocalRef(packetClass);
+    if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
+    const bool hasPosition=exactPosition || exactPositionLook;
+    const bool hasRotation=exactLook || exactPositionLook;
+    const silent::PacketKind original=exactPositionLook ? silent::PacketKind::PositionLook :
+        exactPosition ? silent::PacketKind::Position : exactLook ? silent::PacketKind::Look :
+        exactBase ? silent::PacketKind::Ground : silent::PacketKind::Unknown;
+    aim::Angles originalRotation{};
+    bool originalRotationValid=false;
+    if(hasRotation) {
+        originalRotation={env->GetFloatField(packet,c->packetYaw),
+                          env->GetFloatField(packet,c->packetPitch)};
+        originalRotationValid=env->ExceptionCheck()==JNI_FALSE&&
+            std::isfinite(originalRotation.yaw)&&
+            std::isfinite(originalRotation.pitch);
+        if(env->ExceptionCheck()==JNI_TRUE) {
+            clearException(env);
+            return packet;
+        }
+    }
+    const auto record=[&](jobject value,silent::PacketKind finalKind,
+                          const bool rotation,const bool restore,
+                          const bool vanillaHandoff=false) noexcept {
+        double x=0,y=0,z=0; float rawYaw=0,rawPitch=0;
+        if(hasPosition) {
+            x=env->GetDoubleField(value,c->packetPosition[0]);
+            y=env->GetDoubleField(value,c->packetPosition[1]);
+            z=env->GetDoubleField(value,c->packetPosition[2]);
+        }
+        if(rotation) {
+            rawYaw=env->GetFloatField(value,c->packetYaw); rawPitch=env->GetFloatField(value,c->packetPitch);
+        }
+        if(env->ExceptionCheck()) {clearException(env);return;}
+        const auto before=m_logicalController.latest();
+        char detail[280]{};
+        std::snprintf(detail,sizeof(detail),"originalType=%u finalType=%u hasPosition=%d hasRotation=%d pos=(%.8f,%.8f,%.8f) yaw=%.6f pitch=%.6f",
+            static_cast<unsigned>(original),static_cast<unsigned>(finalKind),hasPosition,rotation,x,y,z,rawYaw,rawPitch);
+        m_logicalController.debug().event("PACKET",before,detail);
+        if(rotation) m_logicalController.acknowledgePacket({rawYaw,rawPitch},original,finalKind,hasPosition,true);
+        if(restore) {
+            m_waitingVanillaResume=true;
+            m_logicalController.debug().event("RESTORE_PACKET",m_logicalController.latest(),detail,true);
+        }
+        if(vanillaHandoff) {
+            m_waitingVanillaResume=false;
+            m_logicalController.debug().event("VANILLA_ROTATION_RESUME",m_logicalController.latest(),detail,true);
+        }
+    };
+    const silent::PacketSerializationPlan plan=
+        m_logicalController.packetPlan(hasPosition,hasRotation,
+            originalRotation,originalRotationValid);
+    if(plan.mutation==silent::PacketMutation::Pass) {
+        record(packet,original,hasRotation,false);
+        if(plan.restoring&&!hasRotation) {
+            m_logicalController.acknowledgeSuppressedPacket(
+                original,original,hasPosition);
+            m_waitingVanillaResume=true;
+            m_logicalController.debug().event("RESTORE_PACKET",
+                m_logicalController.latest(),"duplicate rotation suppressed",true);
+        }
+        return packet;
+    }
+    const float yaw=static_cast<float>(plan.rotation.yaw);
+    const float pitch=static_cast<float>(plan.rotation.pitch);
+    if(!std::isfinite(yaw) || !std::isfinite(pitch)) return packet;
+    jobject replacement=nullptr;
+    if(plan.mutation==silent::PacketMutation::RemoveRotation) {
+        if(hasPosition) {
+            const jdouble x=env->GetDoubleField(packet,c->packetPosition[0]);
+            const jdouble y=env->GetDoubleField(packet,c->packetPosition[1]);
+            const jdouble z=env->GetDoubleField(packet,c->packetPosition[2]);
+            if(env->ExceptionCheck()==JNI_FALSE)
+                replacement=env->NewObject(c->positionPacketClass,
+                    c->positionPacketConstructor,x,y,z,onGround);
+        } else {
+            replacement=env->NewObject(c->movementPacketClass,
+                c->movementPacketConstructor,onGround);
+        }
+        if(env->ExceptionCheck()==JNI_TRUE || !replacement) {
+            clearException(env); return packet;
+        }
+        const silent::PacketKind replacementKind=hasPosition
+            ? silent::PacketKind::Position : silent::PacketKind::Ground;
+        record(replacement,replacementKind,false,false);
+        m_logicalController.acknowledgeSuppressedPacket(
+            original,replacementKind,hasPosition);
+        if(plan.restoring) {
+            m_waitingVanillaResume=true;
+            m_logicalController.debug().event("RESTORE_PACKET",
+                m_logicalController.latest(),"duplicate rotation suppressed",true);
+        }
+        return replacement;
+    }
+    if(hasPosition) {
+        const jdouble x=env->GetDoubleField(packet,c->packetPosition[0]);
+        const jdouble y=env->GetDoubleField(packet,c->packetPosition[1]);
+        const jdouble z=env->GetDoubleField(packet,c->packetPosition[2]);
+        if(env->ExceptionCheck()==JNI_FALSE)
+            replacement=env->NewObject(c->positionLookPacketClass,
+                c->positionLookPacketConstructor,x,y,z,yaw,
+                std::clamp(pitch,-90.0F,90.0F),onGround);
+    } else {
+        replacement=env->NewObject(c->lookPacketClass,c->lookPacketConstructor,
+            yaw,std::clamp(pitch,-90.0F,90.0F),onGround);
+    }
+    if(env->ExceptionCheck()==JNI_TRUE || !replacement) {
+        clearException(env);
+        return packet;
+    }
+    const silent::PacketKind replacementKind=hasPosition
+        ? silent::PacketKind::PositionLook : silent::PacketKind::Look;
+    record(replacement,replacementKind,true,plan.restoring,
+           plan.vanillaHandoff);
+    return replacement;
+}
+
+bool GameBindings::setFreeLookPerspective(JNIEnv* env,const int perspective,
+                                          int* previous) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!c||!c->minecraftClass||!c->gameSettingsField||
+       !c->thirdPersonView) return false;
+    jobject minecraft=c->minecraftInstanceField
+        ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
+        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    if(env->ExceptionCheck()||!minecraft) {
+        clearException(env);
+        if(minecraft) env->DeleteLocalRef(minecraft);
+        return false;
+    }
+    jobject settings=env->GetObjectField(minecraft,c->gameSettingsField);
+    if(env->ExceptionCheck()||!settings) {
+        clearException(env);
+        if(settings) env->DeleteLocalRef(settings);
+        env->DeleteLocalRef(minecraft);
+        return false;
+    }
+    if(previous) *previous=env->GetIntField(settings,c->thirdPersonView);
+    if(!env->ExceptionCheck())
+        env->SetIntField(settings,c->thirdPersonView,
+                         static_cast<jint>(perspective));
+    const bool succeeded=env->ExceptionCheck()!=JNI_TRUE;
+    clearException(env);
+    env->DeleteLocalRef(settings);
+    env->DeleteLocalRef(minecraft);
+    return succeeded;
+}
+
+void GameBindings::endFreeLook(JNIEnv* env,const char* reason,
+                               const bool forced) noexcept
+{
+    if(!m_freeLookActive&&!m_freeLookPerspectiveSaved&&!m_freeLookEntity) return;
+    char release[320]{};
+    std::snprintf(release,sizeof(release),
+        "reason=%s perspectiveSaved=%d perspective=%d cameraYaw=%.4f cameraPitch=%.4f bridgeMask=0x%02x",
+        reason?reason:"unknown",m_freeLookPerspectiveSaved?1:0,
+        m_freeLookPreviousPerspective,m_freeLookYaw,m_freeLookPitch,
+        static_cast<unsigned int>(m_freeLookBridgeMask));
+    m_freeLookDiagnostics.event(forced?"FORCED_RELEASE":"RELEASE",release);
+    bool perspectiveRestored=!m_freeLookPerspectiveSaved;
+    if(env&&m_freeLookPerspectiveSaved)
+        perspectiveRestored=setFreeLookPerspective(env,m_freeLookPreviousPerspective);
+    char restore[144]{};
+    std::snprintf(restore,sizeof(restore),
+        "requestedPerspective=%d restored=%d jniAvailable=%d",
+        m_freeLookPreviousPerspective,perspectiveRestored?1:0,env?1:0);
+    m_freeLookDiagnostics.event(perspectiveRestored?"PERSPECTIVE_RESTORE":"JNI_ERROR",
+                                restore);
+    if(env&&m_freeLookEntity) env->DeleteGlobalRef(m_freeLookEntity);
+    m_freeLookEntity=nullptr;
+    m_freeLookPerspectiveSaved=false;
+    m_freeLookActive=false;
+    m_freeLookActiveEventLogged=false;
+    m_freeLookBridgeMask=0U;
+    m_nextFreeLookVerboseTick=0U;
+}
+
+void GameBindings::rotateFreeLookCamera(JNIEnv* env,jobject entity,
+                                        const jfloat yawDelta,
+    const jfloat pitchDelta) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!entity||!c||!c->rotationYaw||!c->rotationPitch||
+       !c->previousRotationYaw||!c->previousRotationPitch) return;
+    const auto applyVanillaAngles=[&]() noexcept {
+        const jfloat oldYaw=env->GetFloatField(entity,c->rotationYaw);
+        const jfloat oldPitch=env->GetFloatField(entity,c->rotationPitch);
+        const jfloat oldPreviousYaw=env->GetFloatField(
+            entity,c->previousRotationYaw);
+        const jfloat oldPreviousPitch=env->GetFloatField(
+            entity,c->previousRotationPitch);
+        if(env->ExceptionCheck()) { clearException(env); return; }
+        const jfloat newYaw=oldYaw+yawDelta*0.15F;
+        const jfloat newPitch=std::clamp(
+            oldPitch-pitchDelta*0.15F,-90.0F,90.0F);
+        env->SetFloatField(entity,c->rotationYaw,newYaw);
+        env->SetFloatField(entity,c->rotationPitch,newPitch);
+        env->SetFloatField(entity,c->previousRotationYaw,
+            oldPreviousYaw+(newYaw-oldYaw));
+        env->SetFloatField(entity,c->previousRotationPitch,
+            oldPreviousPitch+(newPitch-oldPitch));
+        clearException(env);
+    };
+    const int hotkey=m_freeLookHotkey.load(std::memory_order_acquire);
+    const bool held=hotkey>=8&&hotkey<=254&&
+        (::GetAsyncKeyState(hotkey)&0x8000)!=0;
+    const bool requested=m_freeLookRequested.load(std::memory_order_acquire)&&held;
+    if(!requested) {
+        if(m_freeLookActive) endFreeLook(env,"hotkey-released",false);
+        applyVanillaAngles();
+        return;
+    }
+    // Method-level interception sees every Entity.setAngles invocation. Only
+    // the actual local render-view entity may transfer its mouse deltas to the
+    // free camera; all other entities retain exact vanilla field semantics.
+    bool localCameraEntity=false;
+    if(c->minecraftClass&&c->playerField) {
+        jobject minecraft=c->minecraftInstanceField
+            ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
+            : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+        jobject player=!env->ExceptionCheck()&&minecraft
+            ? env->GetObjectField(minecraft,c->playerField):nullptr;
+        localCameraEntity=!env->ExceptionCheck()&&player&&
+            env->IsSameObject(entity,player)==JNI_TRUE;
+        if(player)env->DeleteLocalRef(player);
+        if(minecraft)env->DeleteLocalRef(minecraft);
+        clearException(env);
+    }
+    if(!localCameraEntity) {
+        applyVanillaAngles();
+        return;
+    }
+    if(m_freeLookActive&&m_freeLookEntity&&
+       env->IsSameObject(entity,m_freeLookEntity)!=JNI_TRUE)
+        endFreeLook(env,"camera-entity-changed",true);
+    if((m_freeLookBridgeMask&0x01U)==0U) {
+        m_freeLookBridgeMask|=0x01U;
+        m_freeLookDiagnostics.event("BRIDGE_CALL","rotateCamera reached native");
+    }
+    if(!m_freeLookActive) {
+        const jfloat yaw=env->GetFloatField(entity,c->rotationYaw);
+        const jfloat pitch=env->GetFloatField(entity,c->rotationPitch);
+        const jfloat previousYaw=env->GetFloatField(entity,c->previousRotationYaw);
+        const jfloat previousPitch=env->GetFloatField(entity,c->previousRotationPitch);
+        jobject retained=env->NewGlobalRef(entity);
+        int perspective=0;
+        if(env->ExceptionCheck()||!retained||
+           !std::isfinite(yaw)||!std::isfinite(pitch)||
+           !std::isfinite(previousYaw)||!std::isfinite(previousPitch)||
+           !setFreeLookPerspective(env,1,&perspective)) {
+            clearException(env);
+            if(retained) env->DeleteGlobalRef(retained);
+            m_freeLookDiagnostics.event("JNI_ERROR",
+                "ENTER failed while reading camera state or forcing perspective");
+            applyVanillaAngles();
+            return;
+        }
+        m_freeLookEntity=retained;
+        m_freeLookYaw=yaw;
+        m_freeLookPitch=pitch;
+        m_freeLookPreviousYaw=previousYaw;
+        m_freeLookPreviousPitch=previousPitch;
+        m_freeLookPreviousPerspective=perspective;
+        m_freeLookPerspectiveSaved=true;
+        m_freeLookActive=true;
+        m_freeLookActiveEventLogged=false;
+        char enter[320]{};
+        std::snprintf(enter,sizeof(enter),
+            "savedPerspective=%d forcedPerspective=1 yaw=%.4f pitch=%.4f previousYaw=%.4f previousPitch=%.4f",
+            perspective,yaw,pitch,previousYaw,previousPitch);
+        m_freeLookDiagnostics.event("ENTER",enter);
+    } else {
+        // Perspective cycling while held cannot turn the camera back into a
+        // player-owned view. The exact previous perspective is restored later.
+        if(!setFreeLookPerspective(env,1))
+            m_freeLookDiagnostics.event("JNI_ERROR",
+                "failed to retain third-person perspective while active");
+    }
+    const float oldYaw=m_freeLookYaw;
+    const float oldPitch=m_freeLookPitch;
+    m_freeLookYaw+=yawDelta*0.15F;
+    m_freeLookPitch=std::clamp(m_freeLookPitch-pitchDelta*0.15F,-90.0F,90.0F);
+    m_freeLookPreviousYaw+=m_freeLookYaw-oldYaw;
+    m_freeLookPreviousPitch+=m_freeLookPitch-oldPitch;
+    if(!m_freeLookActiveEventLogged) {
+        char active[224]{};
+        std::snprintf(active,sizeof(active),
+            "yaw=%.4f pitch=%.4f inputYaw=%.4f inputPitch=%.4f",
+            m_freeLookYaw,m_freeLookPitch,yawDelta,pitchDelta);
+        m_freeLookDiagnostics.event("ACTIVE",active);
+        m_freeLookActiveEventLogged=true;
+    }
+    const std::uint64_t now=GetTickCount64();
+    if(m_freeLookDiagnostics.verbose()&&now>=m_nextFreeLookVerboseTick) {
+        m_nextFreeLookVerboseTick=now+500U;
+        char sample[224]{};
+        std::snprintf(sample,sizeof(sample),
+            "yaw=%.4f pitch=%.4f previousYaw=%.4f previousPitch=%.4f",
+            m_freeLookYaw,m_freeLookPitch,m_freeLookPreviousYaw,
+            m_freeLookPreviousPitch);
+        m_freeLookDiagnostics.event("ACTIVE_SAMPLE",sample);
+    }
+}
+
+jfloat GameBindings::freeLookCameraAngle(
+    JNIEnv* env,jobject entity,const LiveFreeLookTransform::Angle angle) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!entity||!c) return 0.0F;
+    jfieldID field=nullptr;
+    switch(angle) {
+    case LiveFreeLookTransform::Yaw: field=c->rotationYaw; break;
+    case LiveFreeLookTransform::Pitch: field=c->rotationPitch; break;
+    case LiveFreeLookTransform::PreviousYaw: field=c->previousRotationYaw; break;
+    case LiveFreeLookTransform::PreviousPitch: field=c->previousRotationPitch; break;
+    }
+    if(!field) return 0.0F;
+    const jfloat original=env->GetFloatField(entity,field);
+    if(env->ExceptionCheck()) { clearException(env); return 0.0F; }
+    if(!m_freeLookActive||!m_freeLookEntity||
+       env->IsSameObject(entity,m_freeLookEntity)!=JNI_TRUE) return original;
+    const std::uint8_t bit=static_cast<std::uint8_t>(1U<<(
+        static_cast<unsigned int>(angle)+1U));
+    if((m_freeLookBridgeMask&bit)==0U) {
+        m_freeLookBridgeMask|=bit;
+        const char* name="unknown";
+        switch(angle) {
+        case LiveFreeLookTransform::Yaw: name="cameraYaw"; break;
+        case LiveFreeLookTransform::Pitch: name="cameraPitch"; break;
+        case LiveFreeLookTransform::PreviousYaw: name="previousCameraYaw"; break;
+        case LiveFreeLookTransform::PreviousPitch: name="previousCameraPitch"; break;
+        }
+        m_freeLookDiagnostics.event("BRIDGE_CALL",name);
+    }
+    switch(angle) {
+    case LiveFreeLookTransform::Yaw: return m_freeLookYaw;
+    case LiveFreeLookTransform::Pitch: return m_freeLookPitch;
+    case LiveFreeLookTransform::PreviousYaw: return m_freeLookPreviousYaw;
+    case LiveFreeLookTransform::PreviousPitch: return m_freeLookPreviousPitch;
+    }
+    return original;
+}
+
+jfloat GameBindings::beginLogicalMovement(JNIEnv* env,jobject entity,
+                                          const jfloat strafe,
+                                          const jfloat forward) noexcept
+{
+    g_logicalMovementHook={};
+    g_logicalMovementHook.mappedForward=forward;
+    if(!env || !entity) return strafe;
+    const auto* c=m_cache.get();
+    if(!c || !c->getEntityId || !c->rotationYaw) return strafe;
+    const jint entityId=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return strafe; }
+    if(entityId!=m_logicalController.localPlayerId()) return strafe;
+    const auto tick=c->entityTicks ? static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks)) : 0U;
+    if(env->ExceptionCheck()) { clearException(env); return strafe; }
+    // The values arriving here are the inputs Minecraft will use in this exact
+    // moveFlying invocation.  Resolving from them (instead of a render-frame
+    // key snapshot) makes MovementCoordinator the authoritative source for the
+    // current movement computation, including low-TPS/high-FPS timing gaps.
+    const silent::MovementCommand command=m_logicalController.movementCommand(
+        static_cast<double>(strafe),static_cast<double>(forward),tick);
+    if(!command.enabled || entityId!=m_logicalController.localPlayerId()) return strafe;
+    g_logicalMovementHook.entityId=entityId;
+    g_logicalMovementHook.originalYaw=env->GetFloatField(entity,c->rotationYaw);
+    g_logicalMovementHook.mappedForward=static_cast<jfloat>(
+        command.forward);
+    env->SetFloatField(entity,c->rotationYaw,
+                       static_cast<jfloat>(command.logicalRotation.yaw));
+    g_logicalMovementHook.sprintChanged=
+        command.physicalSprinting!=command.sprinting;
+    if(g_logicalMovementHook.sprintChanged)
+        env->CallVoidMethod(entity,c->setSprinting,
+                            command.sprinting?JNI_TRUE:JNI_FALSE);
+    if(env->ExceptionCheck()==JNI_TRUE) {
+        clearException(env);
+        env->SetFloatField(entity,c->rotationYaw,
+                           g_logicalMovementHook.originalYaw);
+        clearException(env); g_logicalMovementHook={};
+        g_logicalMovementHook.mappedForward=forward; return strafe;
+    }
+    g_logicalMovementHook.applied=true;
+    if(g_logicalMovementHook.sprintChanged) {
+        char detail[120]{};
+        std::snprintf(detail,sizeof(detail),"consumer=MOVE snapshot=%llu allowed=%d",
+            static_cast<unsigned long long>(command.snapshotVersion),
+            command.sprinting?1:0);
+        m_logicalController.debug().event("SPRINT",m_logicalController.latest(),
+            detail,true);
+    }
+    return static_cast<jfloat>(command.strafe);
+}
+
+jfloat GameBindings::logicalMovementForward(JNIEnv*,jobject,
+                                            const jfloat fallback) noexcept
+{
+    return g_logicalMovementHook.applied
+        ? g_logicalMovementHook.mappedForward : fallback;
+}
+
+void GameBindings::endLogicalMovement(JNIEnv* env,jobject entity) noexcept
+{
+    if(!env || !entity || !g_logicalMovementHook.applied) return;
+    const auto* c=m_cache.get();
+    if(c && c->getEntityId && c->rotationYaw) {
+        const jint entityId=env->CallIntMethod(entity,c->getEntityId);
+        if(env->ExceptionCheck()==JNI_FALSE &&
+           entityId==g_logicalMovementHook.entityId) {
+            env->SetFloatField(entity,c->rotationYaw,
+                               g_logicalMovementHook.originalYaw);
+        }
+    }
+    clearException(env);
+    g_logicalMovementHook={};
+}
+
+bool GameBindings::arbitrateLogicalSprint(JNIEnv* env,jobject entity,
+                                          const bool requested) noexcept
+{
+    if(!env||!entity) return requested;
+    const auto* c=m_cache.get();
+    if(!c||!c->getEntityId) return requested;
+    const jint entityId=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()==JNI_TRUE) {
+        clearException(env);
+        return requested;
+    }
+    if(entityId!=m_logicalController.localPlayerId()) return requested;
+    const bool allowed=m_logicalController.arbitrateSprint(requested);
+    if(requested&&!allowed) {
+        m_logicalController.debug().event("SPRINT_VETO",
+            m_logicalController.latest(),"source=setSprinting",true);
+    }
+    return allowed;
+}
+
+void GameBindings::beginLogicalJump(JNIEnv* env,jobject entity) noexcept
+{
+    g_logicalJumpHook={};
+    if(!env||!entity) return;
+    const auto* c=m_cache.get();
+    if(!c||!c->getEntityId||!c->rotationYaw||!c->isSprinting||
+       !c->setSprinting||
+       std::any_of(c->movementInputFields.begin(),c->movementInputFields.end(),
+                   [](jfieldID field){return field==nullptr;})) return;
+    const jint entityId=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()==JNI_TRUE) {clearException(env);return;}
+    if(entityId!=m_logicalController.localPlayerId()) return;
+    const bool physicalSprinting=
+        env->CallBooleanMethod(entity,c->isSprinting)==JNI_TRUE;
+    // EntityLivingBase scales both action-state axes by 0.98F between jump()
+    // and moveFlying(). Snapshot the current fields now and use the exact
+    // values the subsequent movement hook will receive.
+    constexpr jfloat VanillaTravelScale=0.98F;
+    const jfloat physicalStrafe=
+        env->GetFloatField(entity,c->movementInputFields[0])*VanillaTravelScale;
+    const jfloat physicalForward=
+        env->GetFloatField(entity,c->movementInputFields[1])*VanillaTravelScale;
+    const auto tick=c->entityTicks
+        ? static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks))
+        : 0U;
+    if(env->ExceptionCheck()==JNI_TRUE) {clearException(env);return;}
+    const silent::MovementCommand command=m_logicalController.jumpCommand(
+        physicalStrafe,physicalForward,physicalSprinting,tick);
+    if(!command.enabled) return;
+    g_logicalJumpHook.entityId=entityId;
+    g_logicalJumpHook.originalYaw=env->GetFloatField(entity,c->rotationYaw);
+    env->SetFloatField(entity,c->rotationYaw,
+                       static_cast<jfloat>(command.logicalRotation.yaw));
+    g_logicalJumpHook.sprintChanged=
+        command.physicalSprinting!=command.sprinting;
+    if(g_logicalJumpHook.sprintChanged)
+        env->CallVoidMethod(entity,c->setSprinting,
+                            command.sprinting?JNI_TRUE:JNI_FALSE);
+    if(env->ExceptionCheck()==JNI_TRUE) {
+        clearException(env);
+        env->SetFloatField(entity,c->rotationYaw,g_logicalJumpHook.originalYaw);
+        clearException(env);g_logicalJumpHook={};return;
+    }
+    g_logicalJumpHook.applied=true;
+    if(g_logicalJumpHook.sprintChanged) {
+        char detail[120]{};
+        std::snprintf(detail,sizeof(detail),"consumer=JUMP snapshot=%llu allowed=%d",
+            static_cast<unsigned long long>(command.snapshotVersion),
+            command.sprinting?1:0);
+        m_logicalController.debug().event("SPRINT",m_logicalController.latest(),
+            detail,true);
+    }
+}
+
+void GameBindings::endLogicalJump(JNIEnv* env,jobject entity) noexcept
+{
+    if(!env||!entity||!g_logicalJumpHook.applied) return;
+    const auto* c=m_cache.get();
+    if(c&&c->getEntityId&&c->rotationYaw) {
+        const jint entityId=env->CallIntMethod(entity,c->getEntityId);
+        if(env->ExceptionCheck()==JNI_FALSE&&
+           entityId==g_logicalJumpHook.entityId) {
+            env->SetFloatField(entity,c->rotationYaw,
+                               g_logicalJumpHook.originalYaw);
+        }
+    }
+    clearException(env);
+    g_logicalJumpHook={};
+}
+
+silent::BlockRayHit GameBindings::traceLogicalBlock(
+    JNIEnv* env,jobject world,const silent::LogicalFramePlan& plan) noexcept
+{
+    silent::BlockRayHit result{};
+    const auto* c=m_cache.get();
+    if(!env || !world || !c || !c->rayTraceBlocks || !c->rayVectorClass ||
+       !c->rayVectorConstructor || !c->hitVector ||
+       std::any_of(c->vectorFields.begin(),c->vectorFields.end(),
+                   [](jfieldID value){return value==nullptr;})) return result;
+    const double reach=std::min(3.0,std::max(0.0,plan.rayLimit));
+    jobject from=env->NewObject(c->rayVectorClass,c->rayVectorConstructor,
+        plan.rayOrigin.x,plan.rayOrigin.y,plan.rayOrigin.z);
+    jobject to=env->NewObject(c->rayVectorClass,c->rayVectorConstructor,
+        plan.rayOrigin.x+plan.rayDirection.x*reach,
+        plan.rayOrigin.y+plan.rayDirection.y*reach,
+        plan.rayOrigin.z+plan.rayDirection.z*reach);
+    jobject hit=from&&to&&env->ExceptionCheck()==JNI_FALSE
+        ? env->CallObjectMethod(world,c->rayTraceBlocks,from,to,
+                                JNI_FALSE,JNI_TRUE,JNI_FALSE) : nullptr;
+    if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return result; }
+    result.querySucceeded=true;
+    if(!hit) return result;
+    jobject point=env->GetObjectField(hit,c->hitVector);
+    jobject position=c->rayBlockPos ? env->GetObjectField(hit,c->rayBlockPos) : nullptr;
+    jobject facing=c->raySideHit ? env->GetObjectField(hit,c->raySideHit) : nullptr;
+    if(point && env->ExceptionCheck()==JNI_FALSE) {
+        const double x=env->GetDoubleField(point,c->vectorFields[0]);
+        const double y=env->GetDoubleField(point,c->vectorFields[1]);
+        const double z=env->GetDoubleField(point,c->vectorFields[2]);
+        if(env->ExceptionCheck()==JNI_FALSE)
+            result.distance=std::hypot(
+                std::hypot(x-plan.rayOrigin.x,y-plan.rayOrigin.y),
+                z-plan.rayOrigin.z);
+    }
+    const bool blockMetadataReady=c->facingIndex &&
+        std::none_of(c->blockPosCoordinates.begin(),c->blockPosCoordinates.end(),
+                     [](jmethodID value){return value==nullptr;});
+    if(blockMetadataReady && position && facing && env->ExceptionCheck()==JNI_FALSE) {
+        result.target.x=env->CallIntMethod(position,c->blockPosCoordinates[0]);
+        result.target.y=env->CallIntMethod(position,c->blockPosCoordinates[1]);
+        result.target.z=env->CallIntMethod(position,c->blockPosCoordinates[2]);
+        result.target.face=env->CallIntMethod(facing,c->facingIndex);
+        result.target.valid=env->ExceptionCheck()==JNI_FALSE;
+    }
+    if(env->ExceptionCheck()==JNI_TRUE) {
+        clearException(env); return {};
+    }
+    return result;
+}
+
+bool GameBindings::executeLogicalInteraction(
+    JNIEnv* env,jobject minecraft,
+    const silent::InteractionCommand& command) noexcept
+{
+    if(command.kind==silent::InteractionCommandKind::None) return true;
+    const auto* c=m_cache.get();
+    const auto fail=[&](const char* reason) noexcept {
+        if(command.kind==silent::InteractionCommandKind::AttackEntity) {
+            // attackDispatched is the single authoritative completion record;
+            // logging here as well used to emit two ATTACK_FAILED rows for one
+            // intent and made dispatch counts ambiguous.
+            m_logicalController.attackDispatched(command,false,reason);
+        }
+        if(env) clearException(env);
+        return false;
+    };
+    if(!env || !minecraft || !c) return fail("bindings_unavailable");
+    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject world=env->GetObjectField(minecraft,c->worldField);
+    jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
+    if(!player || !world || !controller || env->ExceptionCheck()==JNI_TRUE) {
+        return fail("interaction_context_unavailable");
+    }
+    if(command.kind==silent::InteractionCommandKind::AttackEntity) {
+        jobject target=env->CallObjectMethod(
+            world,c->getEntityById,static_cast<jint>(command.entityId));
+        if(!target||env->ExceptionCheck()==JNI_TRUE)
+            return fail("logical_target_unavailable");
+        g_syntheticLogicalAttack=true;
+        env->CallVoidMethod(controller,c->attackEntity,player,target);
+        g_syntheticLogicalAttack=false;
+        if(env->ExceptionCheck()==JNI_TRUE)
+            return fail("attack_entity_jni_exception");
+        m_logicalController.attackDispatched(command,true);
+        env->CallVoidMethod(player,c->swingItem);
+        if(env->ExceptionCheck()==JNI_TRUE) {
+            // The attack already reached Minecraft's lower dispatch boundary.
+            // Retrying this command would duplicate damage merely because the
+            // cosmetic arm swing failed.
+            clearException(env);
+            char detail[96]{};
+            std::snprintf(detail,sizeof(detail),"target=%d reason=swing_jni_exception",
+                          command.entityId);
+            m_logicalController.debug().event("SWING_FAILED",
+                m_logicalController.latest(),detail,true);
+            return true;
+        }
+    } else if(command.kind==silent::InteractionCommandKind::ResetBlock) {
+        env->CallVoidMethod(controller,c->resetBlockRemoving);
+    } else {
+        jobject position=env->NewObject(c->blockPosClass,c->blockPosConstructor,
+            command.block.x,command.block.y,command.block.z);
+        jobject facing=position ? env->CallStaticObjectMethod(
+            c->enumFacingClass,c->getFacingByIndex,command.block.face) : nullptr;
+        if(!position || !facing || env->ExceptionCheck()==JNI_TRUE) {
+            clearException(env); return false;
+        }
+        const jboolean accepted=command.kind==
+                silent::InteractionCommandKind::StartBlock
+            ? env->CallBooleanMethod(controller,c->clickBlock,position,facing)
+            : env->CallBooleanMethod(controller,c->onPlayerDamageBlock,position,facing);
+        if(command.kind==silent::InteractionCommandKind::StartBlock &&
+           env->ExceptionCheck()==JNI_FALSE && accepted!=JNI_TRUE)
+            m_logicalController.blockRejected();
+        if(env->ExceptionCheck()==JNI_FALSE &&
+           (command.kind==silent::InteractionCommandKind::StartBlock ||
+            accepted==JNI_TRUE))
+            env->CallVoidMethod(player,c->swingItem);
+        if(command.kind==silent::InteractionCommandKind::ContinueBlock &&
+           env->ExceptionCheck()==JNI_FALSE &&
+           env->CallBooleanMethod(world,c->isAirBlock,position)==JNI_TRUE)
+            m_logicalController.blockFinished();
+    }
+    const bool succeeded=env->ExceptionCheck()!=JNI_TRUE;
+    if(!succeeded&&command.kind==silent::InteractionCommandKind::AttackEntity)
+        return fail("interaction_jni_exception");
+    clearException(env);
+    return succeeded;
+}
+
+jobject GameBindings::arbitrateLogicalAttack(
+    JNIEnv* env,jobject originalTarget) noexcept
+{
+    if(!env||!originalTarget||g_syntheticLogicalAttack||
+       !m_logicalController.active()) return originalTarget;
+    const auto* c=m_cache.get();
+    if(!c||!c->getEntityId||!c->minecraftClass||!c->worldField||
+       !c->getEntityById) return originalTarget;
+
+    // Only the monotonic hold scheduler may create an attack intent. This
+    // lower hook merely consumes that already-numbered intent and substitutes
+    // its committed target once.
+    const silent::InteractionCommand command=m_logicalController.click();
+    if(command.kind!=silent::InteractionCommandKind::AttackEntity) return nullptr;
+
+    const jint originalId=env->CallIntMethod(originalTarget,c->getEntityId);
+    if(env->ExceptionCheck()) {clearException(env);m_logicalController.attackDispatched(command,false);return nullptr;}
+    jobject selected=originalTarget;
+    if(originalId!=command.entityId) {
+        jobject minecraft=c->minecraftInstanceField
+            ?env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
+            :env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+        jobject world=!env->ExceptionCheck()&&minecraft
+            ?env->GetObjectField(minecraft,c->worldField):nullptr;
+        selected=!env->ExceptionCheck()&&world
+            ?env->CallObjectMethod(world,c->getEntityById,
+                static_cast<jint>(command.entityId)):nullptr;
+        if(world)env->DeleteLocalRef(world);
+        if(minecraft)env->DeleteLocalRef(minecraft);
+        if(env->ExceptionCheck()) {clearException(env);selected=nullptr;}
+    }
+    m_logicalController.attackDispatched(command,selected!=nullptr);
+    return selected;
+}
+
+bool GameBindings::consumeLogicalInteraction(
+    JNIEnv* env,jobject minecraft,const LiveInteractionTransform::Entry entry,
+    const bool heldDown) noexcept
+{
+    const bool down=entry==LiveInteractionTransform::Entry::Click || heldDown;
+    if(!observeLogicalCamera(env,minecraft,down)) return false;
+    m_logicalController.debug().event(entry==LiveInteractionTransform::Entry::Click
+        ? "CLICK_PULSE" : "HELD_PULSE",
+        m_logicalController.latest());
+    if(m_logicalController.routeManualInput(down)) {
+        m_silentRotationHook.setEnabled(m_logicalController.restoring()||
+            m_logicalController.packetContinuityRequired()||
+            m_logicalController.debug().enabled());
+        // Original click / held-left owns block damage. A combat action already
+        // emitted in this real tick defers digging until the next native tick.
+        return !m_logicalController.manualBlockInputAllowed();
+    }
+    if(!m_logicalController.active()) return false;
+    if(env->PushLocalFrame(32)<0) { clearException(env); return true; }
+    silent::InteractionCommand command=m_logicalController.click();
+    if(command.kind==silent::InteractionCommandKind::None)
+        command=m_logicalController.held(heldDown);
+    (void)executeLogicalInteraction(env,minecraft,command);
+    env->PopLocalFrame(nullptr);
+    // Once active, InteractionCoordinator is the sole source for both Java
+    // entry points.  Even a deliberate no-op is consumed so vanilla cannot
+    // produce an entity attack and block-damage event in the same logical tick.
+    return true;
+}
+
+bool GameBindings::observeLogicalCamera(JNIEnv* env,jobject minecraft,bool down) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env || !minecraft || !c || !c->playerField || !c->rotationYaw ||
+       !c->rotationPitch ||
+       env->PushLocalFrame(16)<0) { clearException(env); return false; }
+    const auto failed=[&] {clearException(env);env->PopLocalFrame(nullptr);return false;};
+    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject hit=c->cameraMouseOver
+        ? env->GetObjectField(minecraft,c->cameraMouseOver) : nullptr;
+    silent::BlockTarget block{}; int id=-1;
+    if(hit && c->cameraHitEntity && !env->ExceptionCheck()) {
+        jobject entity=env->GetObjectField(hit,c->cameraHitEntity);
+        if(entity && c->getEntityId) id=env->CallIntMethod(entity,c->getEntityId);
+        if(env->ExceptionCheck()) return failed();
+        int hitKind=-1;
+        const bool typedHit=c->cameraHitType && c->enumOrdinal;
+        if(typedHit) {
+            jobject type=env->GetObjectField(hit,c->cameraHitType);
+            hitKind=type ? env->CallIntMethod(type,c->enumOrdinal) : -1;
+            if(env->ExceptionCheck()) return failed();
+        }
+        jobject position=c->rayBlockPos ? env->GetObjectField(hit,c->rayBlockPos) : nullptr;
+        jobject face=c->raySideHit ? env->GetObjectField(hit,c->raySideHit) : nullptr;
+        // When typeOfHit is available, a MISS carrying a BlockPos is rejected.
+        // On transformed Lunar descriptors, fall back to the unambiguous
+        // position + face + no-entity shape so camera observation remains live.
+        const bool blockHit=typedHit ? hitKind==1 : position && face && !entity;
+        const bool blockMetadataReady=c->facingIndex &&
+            std::none_of(c->blockPosCoordinates.begin(),c->blockPosCoordinates.end(),
+                         [](jmethodID value){return value==nullptr;});
+        if(blockMetadataReady && blockHit && position && face && !entity &&
+           !env->ExceptionCheck()) {
+            block.x=env->CallIntMethod(position,c->blockPosCoordinates[0]);
+            if(env->ExceptionCheck()) return failed();
+            block.y=env->CallIntMethod(position,c->blockPosCoordinates[1]);
+            if(env->ExceptionCheck()) return failed();
+            block.z=env->CallIntMethod(position,c->blockPosCoordinates[2]);
+            if(env->ExceptionCheck()) return failed();
+            block.face=env->CallIntMethod(face,c->facingIndex); block.valid=true;
+        }
+    }
+    if(player && !env->ExceptionCheck()) {
+        const aim::Angles camera{env->GetFloatField(player,c->rotationYaw),env->GetFloatField(player,c->rotationPitch)};
+        const auto tick=c->entityTicks
+            ? static_cast<std::uint64_t>(env->GetIntField(player,c->entityTicks))
+            : 0U;
+        const bool sneaking=c->isSneaking && env->CallBooleanMethod(player,c->isSneaking)==JNI_TRUE;
+        const bool rightDown=(GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0;
+        if(!env->ExceptionCheck()) m_logicalController.observeCameraInput(
+            camera,block,id,down,tick,sneaking,rightDown);
+    }
+    const bool ok=player && !env->ExceptionCheck();
+    clearException(env); env->PopLocalFrame(nullptr); return ok;
+}
+
+void GameBindings::observeActualInteraction(JNIEnv* env,LiveInteractionObserver::Event event,jobject argument) noexcept
+{
+    const auto* c=m_cache.get(); if(!c || !env) return;
+    char detail[180]{};
+    const char* name="RESET_BLOCK";
+    if(event==LiveInteractionObserver::Event::Attack) {
+        const int id=argument ? env->CallIntMethod(argument,c->getEntityId) : -1;
+        if(env->ExceptionCheck()) {clearException(env);return;}
+        // This observer is composed at method entry and therefore sees the
+        // vanilla/original argument before LiveAttackTransform substitutes the
+        // committed target. The lower ownership hook records final target and
+        // dispatch count; treating this entry argument as final would create a
+        // false mismatch exactly when substitution is working.
+        std::snprintf(detail,sizeof(detail),"entryEntity=%d arbitrationReady=%d",
+            id,m_attackOwnershipHook.ready()?1:0);
+        name=m_attackOwnershipHook.ready()?"ATTACK_ENTRY":"ACTUAL_ATTACK";
+    } else if(argument) {
+        const int x=env->CallIntMethod(argument,c->blockPosCoordinates[0]);
+        if(env->ExceptionCheck()) {clearException(env);return;}
+        const int y=env->CallIntMethod(argument,c->blockPosCoordinates[1]);
+        if(env->ExceptionCheck()) {clearException(env);return;}
+        const int z=env->CallIntMethod(argument,c->blockPosCoordinates[2]);
+        if(env->ExceptionCheck()) {clearException(env);return;}
+        std::snprintf(detail,sizeof(detail),"block=(%d,%d,%d)",x,y,z);
+        name=event==LiveInteractionObserver::Event::StartBlock ? "CLICK_BLOCK_ENTRY" : "CONTINUE_DIGGING";
+    }
+    if(!env->ExceptionCheck()) m_logicalController.debug().event(name,m_logicalController.latest(),detail,
+        event==LiveInteractionObserver::Event::Attack);
+    clearException(env);
+}
+
+void GameBindings::observeDigPacket(JNIEnv* env,jobject packet) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!c || !c->diggingPacketClass || !c->diggingAction || !c->diggingPosition || !c->enumOrdinal ||
+       !env->IsInstanceOf(packet,c->diggingPacketClass)) return;
+    if(env->PushLocalFrame(8)<0) { clearException(env); return; }
+    const auto done=[&] {clearException(env);env->PopLocalFrame(nullptr);};
+    jobject action=env->CallObjectMethod(packet,c->diggingAction);
+    if(env->ExceptionCheck()) {done();return;}
+    jobject position=env->CallObjectMethod(packet,c->diggingPosition);
+    if(action && position && !env->ExceptionCheck()) {
+        const int kind=env->CallIntMethod(action,c->enumOrdinal);
+        if(env->ExceptionCheck()) {done();return;}
+        const int x=env->CallIntMethod(position,c->blockPosCoordinates[0]);
+        if(env->ExceptionCheck()) {done();return;}
+        const int y=env->CallIntMethod(position,c->blockPosCoordinates[1]);
+        if(env->ExceptionCheck()) {done();return;}
+        const int z=env->CallIntMethod(position,c->blockPosCoordinates[2]);
+        if(kind>=0 && kind<=2 && !env->ExceptionCheck()) {
+            const char* names[]{"START_DIGGING","ABORT_DIGGING","STOP_DIGGING"};
+            char detail[100]{}; std::snprintf(detail,sizeof(detail),"block=(%d,%d,%d) source=C07",x,y,z);
+            m_logicalController.debug().event(names[kind],m_logicalController.latest(),detail,true);
+            if(kind==1 || kind==2) m_logicalController.manualBlockEnded();
+        }
+    }
+    clearException(env); env->PopLocalFrame(nullptr);
+}
+
+void GameBindings::sampleBow(JNIEnv* env, GameSnapshot& snapshot, bool enabled) noexcept
+{
+    snapshot.bowTrajectory = {};
+    const BindingCache* c=m_cache.get();
+    if(!enabled || !env || !c || !c->isMainThread || snapshot.state!=GameSnapshot::State::Ready ||
+       !snapshot.camera.valid || !c->rayTraceBlocks || !c->rayVectorClass ||
+       !c->rayVectorConstructor || !c->hitVector || !c->getItemUseDuration ||
+       !c->isUsingItem || !c->getEyeHeight || !c->rotationYaw || !c->rotationPitch ||
+       !c->getEquipmentInSlot || !c->getItem || !c->getIdFromItem || !c->itemClass ||
+       std::any_of(c->vectorFields.begin(),c->vectorFields.end(),[](jfieldID f){return !f;})) return;
+    if(env->PushLocalFrame(24)<0) { clearException(env); return; }
+    const auto done=[&] { clearException(env); env->PopLocalFrame(nullptr); };
+    jobject mc=c->minecraftInstanceField ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
+        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    if(!mc || env->ExceptionCheck() || !env->CallBooleanMethod(mc,c->isMainThread)) { done(); return; }
+    jobject player=env->GetObjectField(mc,c->playerField);
+    jobject world=env->GetObjectField(mc,c->worldField);
+    if(!player || !world || env->ExceptionCheck() || !env->CallBooleanMethod(player,c->isUsingItem)) { done(); return; }
+    jobject stack=env->CallObjectMethod(player,c->getEquipmentInSlot,0);
+    jobject item=stack && !env->ExceptionCheck() ? env->CallObjectMethod(stack,c->getItem) : nullptr;
+    if(!item || env->ExceptionCheck() || env->CallStaticIntMethod(c->itemClass,c->getIdFromItem,item)!=261) { done(); return; }
+    const int ticks=env->CallIntMethod(player,c->getItemUseDuration);
+    const double charge=trajectory::bowStrength(static_cast<double>(ticks)+snapshot.camera.partialTicks);
+    const double eye=env->CallFloatMethod(player,c->getEyeHeight);
+    constexpr double radians=3.14159265358979323846/180;
+    const double yaw=env->GetFloatField(player,c->rotationYaw)*radians;
+    const double pitch=env->GetFloatField(player,c->rotationPitch)*radians;
+    if(env->ExceptionCheck() || charge<0.1 || !std::isfinite(yaw) || !std::isfinite(pitch) ||
+       !std::isfinite(eye)) { done(); return; }
+    // Same interpolated origin as the current rendered world, with the vanilla
+    // bow's lateral 0.16 and vertical 0.1 offsets. No visual easing of the path.
+    WorldPoint position{snapshot.camera.renderX-std::cos(yaw)*0.16,
+                        snapshot.camera.renderY+eye-0.1,
+                        snapshot.camera.renderZ-std::sin(yaw)*0.16};
+    WorldPoint velocity{-std::sin(yaw)*std::cos(pitch)*charge*3,
+                        -std::sin(pitch)*charge*3,
+                        std::cos(yaw)*std::cos(pitch)*charge*3};
+    BowTrajectory result; result.active=true;
+    result.points[result.pointCount++]=position;
+    const auto started=std::chrono::steady_clock::now();
+    for(std::size_t step=1;step<result.points.size();++step) {
+        const WorldPoint next{position.x+velocity.x,position.y+velocity.y,position.z+velocity.z};
+        double closest=std::numeric_limits<double>::infinity();
+        const EntityMarker* hitEntity=nullptr;
+        for(std::size_t i=0;i<std::min<std::size_t>(snapshot.entityMarkerCount,snapshot.entityMarkers.size());++i) {
+            const auto& marker=snapshot.entityMarkers[i];
+            if(marker.entityId==snapshot.entityId || !std::isfinite(marker.health) || marker.health<=0 || marker.fireball) continue;
+            const double t=snapshot.entityRenderTick;
+            const WorldPoint offset{marker.previousX+(marker.currentX-marker.previousX)*t-marker.currentX,
+                                    marker.previousY+(marker.currentY-marker.previousY)*t-marker.currentY,
+                                    marker.previousZ+(marker.currentZ-marker.previousZ)*t-marker.currentZ};
+            auto box=marker.bounds;
+            box.minX+=offset.x; box.maxX+=offset.x; box.minY+=offset.y; box.maxY+=offset.y;
+            box.minZ+=offset.z; box.maxZ+=offset.z;
+            const double fraction=trajectory::segmentBox(position,next,box,0.3);
+            if(fraction<closest) { closest=fraction; hitEntity=&marker; }
+        }
+        // Vanilla rayTraceBlocks respects slabs, fences and non-colliding
+        // blocks; a solid-voxel test cannot produce the same impact point.
+        if(env->PushLocalFrame(8)<0) { result={}; break; }
+        jobject from=env->NewObject(c->rayVectorClass,c->rayVectorConstructor,position.x,position.y,position.z);
+        jobject to=env->NewObject(c->rayVectorClass,c->rayVectorConstructor,next.x,next.y,next.z);
+        jobject blockHit=nullptr;
+        if(from && to && !env->ExceptionCheck())
+            blockHit=env->CallObjectMethod(world,c->rayTraceBlocks,from,to,JNI_FALSE,JNI_TRUE,JNI_FALSE);
+        if(blockHit && !env->ExceptionCheck()) {
+            jobject hit=env->GetObjectField(blockHit,c->hitVector);
+            if(hit && !env->ExceptionCheck()) {
+                WorldPoint point{env->GetDoubleField(hit,c->vectorFields[0]),env->GetDoubleField(hit,c->vectorFields[1]),
+                                 env->GetDoubleField(hit,c->vectorFields[2])};
+                const double length=trajectory::distanceSquared(position,next);
+                const double fraction=length>1e-12 ? std::sqrt(trajectory::distanceSquared(position,point)/length) : 0;
+                if(fraction<=closest) { closest=std::clamp(fraction,0.0,1.0); hitEntity=nullptr; }
+            }
+        }
+        const bool failed=env->ExceptionCheck()==JNI_TRUE;
+        clearException(env); env->PopLocalFrame(nullptr);
+        if(failed) { result={}; break; }
+        if(std::isfinite(closest)) {
+            result.hasImpact=true; result.impactLiving=hitEntity!=nullptr;
+            result.impactPlayer=hitEntity && hitEntity->player;
+            result.impactEntityId=hitEntity ? hitEntity->entityId : -1;
+            result.impact=trajectory::interpolate(position,next,closest);
+            result.points[result.pointCount++]=result.impact;
+            break;
+        }
+        result.points[result.pointCount++]=next; position=next;
+        velocity.x*=0.99; velocity.y=velocity.y*0.99-0.05; velocity.z*=0.99;
+        if(std::chrono::steady_clock::now()-started>std::chrono::microseconds(1500)) {
+            // Do not invent a landing point if this frame exhausts the budget.
+            result.budgetLimited=true; break;
+        }
+    }
+    snapshot.bowTrajectory=result;
+    done();
+}
+
 const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                                          const std::uint64_t tickMilliseconds) noexcept
 {
@@ -3612,6 +5591,10 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
     // match-derived value. No translated server text or /rejoin command needs
     // to be recognized, and stale team/bed state cannot leak into the next map.
     if (m_lastWorld == nullptr || env->IsSameObject(m_lastWorld, world) != JNI_TRUE) {
+        m_snapshot.worldGeneration = ++m_worldGeneration;
+        m_knockbackTracks = {};
+        m_snapshot.knockbackDamageEvents = m_snapshot.knockbackImpulseEvents =
+            m_snapshot.knockbackConfirmedEvents = 0;
         if (m_lastWorld != nullptr) env->DeleteWeakGlobalRef(m_lastWorld);
         m_lastWorld = env->NewWeakGlobalRef(world);
         m_sidebarCandidateTeam = bedwars::Team::Unknown;
@@ -3696,6 +5679,10 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                 marker.health = 0.0F;
                 marker.maxHealth = 0.0F;
             }
+            if (cache->hurtTime != nullptr) {
+                marker.hurtTime = env->GetIntField(entity, cache->hurtTime);
+                if (env->ExceptionCheck()) { clearException(env); marker.hurtTime = -1; }
+            }
         }
         if (cache->isInvisible != nullptr) {
             marker.invisible = env->CallBooleanMethod(entity, cache->isInvisible) == JNI_TRUE;
@@ -3728,8 +5715,10 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
             marker.motionY = env->GetDoubleField(entity, cache->motionFields[1U]);
             marker.motionZ = env->GetDoubleField(entity, cache->motionFields[2U]);
         }
-        if (cache->onGround != nullptr)
+        if (cache->onGround != nullptr) {
             marker.onGround = env->GetBooleanField(entity, cache->onGround) == JNI_TRUE;
+            marker.groundKnown = !env->ExceptionCheck();
+        }
         const bool failed = env->ExceptionCheck() == JNI_TRUE;
         if (failed) env->ExceptionClear();
         env->DeleteLocalRef(entityBounds);
@@ -3899,12 +5888,8 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
     // fixed 128-marker cap and 20 Hz cadence are both deterministic; smooth
     // motion is reconstructed in OverlayRenderer from previous/current tick
     // coordinates and the per-frame Timer.renderPartialTicks value.
-    // Preserve the previous 20 TPS sample before replacing the marker array.
-    // Knockback prediction uses the transition (health loss + new airborne
-    // impulse), never a single velocity threshold, so ordinary jumping and
-    // whiffed attacks cannot create a trajectory.
-    const auto previousEntityMarkers = m_snapshot.entityMarkers;
-    const std::uint32_t previousEntityMarkerCount = m_snapshot.entityMarkerCount;
+    // Knockback evidence keeps a bounded per-identity history so asynchronous
+    // hurt/status and movement updates can be correlated across snapshots.
     if (singlePlayer == JNI_TRUE && loadedEntities != nullptr && loadedEntityCount > 0) {
         jobject playerList = env->GetObjectField(world, cache->playerEntities);
         jobjectArray playerObjects = playerList == nullptr ? nullptr :
@@ -4064,10 +6049,10 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
         m_snapshot.entityMarkerCount = 0U;
     }
 
-    // Trajectory sampling deliberately stays on Minecraft's 20 TPS thread.
-    // Rendering consumes only immutable POD arrays and therefore performs no
-    // JNI work at monitor refresh rate.
+    // Knockback evidence stays on the bounded 20 TPS sampler. Bow aiming is
+    // different: sampleBow traces the current view once per presented frame.
     m_snapshot.knockbackTrajectoryCount = 0U;
+    m_snapshot.knockbackHurtAvailable = cache->hurtTime != nullptr;
     const bool trajectoryBlocksAvailable = cache->isAirBlock != nullptr &&
         cache->blockPosClass != nullptr && cache->blockPosConstructor != nullptr;
     const auto blockIsAir = [&](const double x, const double y,
@@ -4095,62 +6080,126 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
              m_snapshot.knockbackTrajectoryCount <
                  GameSnapshot::MaxKnockbackTrajectories; ++markerIndex) {
             const EntityMarker& marker = m_snapshot.entityMarkers[markerIndex];
-            const double horizontalImpulse = std::hypot(marker.motionX,
-                                                        marker.motionZ);
-            const EntityMarker* previous = nullptr;
-            for (std::uint32_t previousIndex = 0U;
-                 previousIndex < previousEntityMarkerCount; ++previousIndex) {
-                if (previousEntityMarkers[previousIndex].entityId == marker.entityId) {
-                    previous = &previousEntityMarkers[previousIndex];
-                    break;
-                }
+            if (!marker.player || (m_snapshot.hypixelServer && !marker.confirmedPlayer)) continue;
+            auto trackIt = std::find_if(m_knockbackTracks.begin(), m_knockbackTracks.end(),
+                [&](const KnockbackTrack& track) {
+                    return track.entityId == marker.entityId &&
+                        (marker.uuid[0] ? track.uuid == marker.uuid : track.name == marker.playerName);
+                });
+            if (trackIt == m_knockbackTracks.end()) {
+                trackIt = std::min_element(m_knockbackTracks.begin(), m_knockbackTracks.end(),
+                    [](const KnockbackTrack& a, const KnockbackTrack& b) { return a.lastSeen < b.lastSeen; });
+                *trackIt = {};
+                trackIt->entityId = marker.entityId;
+                trackIt->uuid = marker.uuid; trackIt->name = marker.playerName;
             }
-            if (!marker.player || previous == nullptr) continue;
-            const double previousHorizontal = std::hypot(previous->motionX,
-                                                          previous->motionZ);
-            const bool healthConfirmed = marker.health > 0.0F &&
-                previous->health > marker.health + 0.01F;
-            const bool airborneImpulse = !marker.onGround &&
-                marker.motionY >= 0.075 && horizontalImpulse >= 0.055 &&
-                (previous->onGround ||
-                 marker.motionY > previous->motionY + 0.045 ||
-                 horizontalImpulse > previousHorizontal + 0.045);
-            // Fail closed on uncertainty. In particular, a jump, an empty
-            // swing, horizontal walking, and a grounded zero-knockback damage
-            // event all lack one of these two independent confirmations.
-            if (!healthConfirmed || !airborneImpulse) continue;
+            auto& track = *trackIt;
+            prediction::Velocity velocity{marker.motionX, marker.motionY, marker.motionZ};
+            // EntityOtherPlayerMP may interpolate server positions without
+            // useful motion fields. Use measured displacement only for a
+            // recent sample; never extrapolate an unloaded/teleported player.
+            const auto elapsed = tickMilliseconds - track.lastSeen;
+            prediction::Velocity measured{};
+            const bool measuredValid=track.lastSeen&&elapsed>=15&&elapsed<=150;
+            if(measuredValid) {
+                const double samplesPerTick=50.0/static_cast<double>(elapsed);
+                measured={(marker.currentX-track.position.x)*samplesPerTick,
+                          (marker.currentY-track.position.y)*samplesPerTick,
+                          (marker.currentZ-track.position.z)*samplesPerTick};
+            }
+            if (measuredValid &&
+                std::hypot(velocity.x, velocity.z) < 0.001 && std::abs(velocity.y) < 0.001) {
+                velocity=measured;
+            }
+            track.position = {marker.currentX, marker.currentY, marker.currentZ};
+            track.lastSeen = tickMilliseconds;
+            const bool plausible = std::hypot(velocity.x, velocity.z) < 4.0 && std::abs(velocity.y) < 4.0;
+            const auto evidence = track.evidence.update({marker.health, marker.hurtTime,
+                marker.onGround, marker.groundKnown && plausible, velocity}, tickMilliseconds);
+            m_snapshot.knockbackDamageEvents += evidence.damage ? 1U : 0U;
+            m_snapshot.knockbackImpulseEvents += evidence.impulse ? 1U : 0U;
+            if(evidence.triggered) {
+                // One edge pair is enough to nominate a knockback event, but
+                // not enough to extrapolate a remote interpolated player.
+                track.pendingImpulse=velocity;
+                track.pendingAt=tickMilliseconds;
+                track.pendingPrediction=true;
+                continue;
+            }
+            if(!track.pendingPrediction) continue;
+            if(marker.onGround||tickMilliseconds<=track.pendingAt||
+               tickMilliseconds-track.pendingAt>160U) {
+                track.pendingPrediction=false;
+                continue;
+            }
+            const prediction::VelocityConfidence confidence=measuredValid
+                ?prediction::confirmVelocity(track.pendingImpulse,measured,elapsed)
+                :prediction::VelocityConfidence{};
+            if(!confidence.confident) {
+                if(tickMilliseconds-track.pendingAt>=90U)
+                    track.pendingPrediction=false;
+                continue;
+            }
+            track.pendingPrediction=false;
+            velocity=confidence.residual;
+            ++m_snapshot.knockbackConfirmedEvents;
             KnockbackTrajectory prediction;
             prediction.entityId = marker.entityId;
             prediction.startBounds = marker.bounds;
             double simulatedX = marker.currentX;
             double simulatedY = marker.bounds.minY;
             double simulatedZ = marker.currentZ;
-            double velocityX = marker.motionX;
-            double velocityY = marker.motionY;
-            double velocityZ = marker.motionZ;
+            double velocityX = velocity.x;
+            double velocityY = velocity.y;
+            double velocityZ = velocity.z;
             prediction.points[prediction.pointCount++] = {
                 simulatedX, simulatedY, simulatedZ};
+            const double halfWidth=std::clamp(
+                (marker.bounds.maxX-marker.bounds.minX)*0.5,0.20,0.60);
+            const double height=std::clamp(
+                marker.bounds.maxY-marker.bounds.minY,0.6,2.4);
             for (std::size_t step = 1U;
-                 step < prediction.points.size(); ++step) {
+                 step < std::min<std::size_t>(prediction.points.size(),7U); ++step) {
                 simulatedX += velocityX;
                 simulatedY += velocityY;
                 simulatedZ += velocityZ;
-                prediction.points[prediction.pointCount++] = {
-                    simulatedX, simulatedY, simulatedZ};
-
-                if (velocityY <= 0.0) {
-                    bool airBelow = true;
-                    const double probeY = simulatedY - 0.06;
-                    if (blockIsAir(simulatedX, probeY, simulatedZ, airBelow) &&
-                        !airBelow) {
-                        const double blockTop = std::floor(probeY) + 1.0;
-                        if (simulatedY <= blockTop + 0.16) {
-                            prediction.points[prediction.pointCount - 1U].y = blockTop;
-                            prediction.landed = true;
+                if(velocityY<=0.0) {
+                    bool airBelow=true;
+                    const double probeY=simulatedY-0.06;
+                    if(blockIsAir(simulatedX,probeY,simulatedZ,airBelow)&&
+                       !airBelow) {
+                        const double blockTop=std::floor(probeY)+1.0;
+                        if(simulatedY<=blockTop+0.16) {
+                            simulatedY=blockTop;
+                            prediction.points[prediction.pointCount++]={
+                                simulatedX,simulatedY,simulatedZ};
+                            prediction.landed=true;
                             break;
                         }
                     }
                 }
+                bool volumeClear=true;
+                bool volumeKnown=true;
+                constexpr std::array<double,3> verticalFractions{0.04,0.50,0.94};
+                const std::array<double,2> horizontalOffsets{
+                    -halfWidth*0.88,halfWidth*0.88};
+                for(const double fraction:verticalFractions) {
+                    for(const double offsetX:horizontalOffsets) {
+                        for(const double offsetZ:horizontalOffsets) {
+                            bool air=true;
+                            if(!blockIsAir(simulatedX+offsetX,
+                                simulatedY+height*fraction,simulatedZ+offsetZ,air))
+                                volumeKnown=false;
+                            else if(!air) volumeClear=false;
+                        }
+                    }
+                }
+                // Unknown or occupied volume ends the high-confidence horizon;
+                // never draw through a wall or unloaded collision query.
+                if(!volumeKnown||!volumeClear) break;
+                prediction.points[prediction.pointCount++] = {
+                    simulatedX, simulatedY, simulatedZ};
+
                 // 1.8 living-entity airborne approximation. The visual is a
                 // client prediction; server corrections naturally replace it
                 // on the next immutable entity snapshot.
@@ -4158,190 +6207,13 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                 velocityZ *= 0.91;
                 velocityY = (velocityY - 0.08) * 0.98;
             }
-            m_snapshot.knockbackTrajectories[
-                m_snapshot.knockbackTrajectoryCount++] = prediction;
+            if(prediction.pointCount>=2U)
+                m_snapshot.knockbackTrajectories[
+                    m_snapshot.knockbackTrajectoryCount++] = prediction;
         }
     }
 
-    // Bow draw strength follows ItemBow 1.8.9: t/20, transformed by
-    // (t^2 + 2t) / 3 and capped at one. We track the focused right-button hold
-    // because it avoids another fragile transformed-client method mapping.
-    int localHeldItemId = -1;
-    if (cache->getEquipmentInSlot != nullptr && cache->getItem != nullptr &&
-        cache->getIdFromItem != nullptr && cache->itemClass != nullptr) {
-        jobject heldStack = env->CallObjectMethod(player,
-            cache->getEquipmentInSlot, 0);
-        if (env->ExceptionCheck() != JNI_TRUE && heldStack != nullptr) {
-            jobject heldItem = env->CallObjectMethod(heldStack, cache->getItem);
-            if (env->ExceptionCheck() != JNI_TRUE && heldItem != nullptr) {
-                localHeldItemId = env->CallStaticIntMethod(cache->itemClass,
-                    cache->getIdFromItem, heldItem);
-            }
-            clearException(env);
-            if (heldItem != nullptr) env->DeleteLocalRef(heldItem);
-            env->DeleteLocalRef(heldStack);
-        } else {
-            clearException(env);
-        }
-    }
-    DWORD foregroundProcess = 0U;
-    const HWND foregroundWindow = ::GetForegroundWindow();
-    if (foregroundWindow != nullptr)
-        (void)::GetWindowThreadProcessId(foregroundWindow, &foregroundProcess);
-    const bool bowButtonDown = foregroundProcess == ::GetCurrentProcessId() &&
-        (::GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    if (localHeldItemId == 261 && bowButtonDown) {
-        if (m_bowDrawStartedAt == 0U) m_bowDrawStartedAt = tickMilliseconds;
-    } else {
-        m_bowDrawStartedAt = 0U;
-        m_snapshot.bowTrajectory = {};
-    }
-    if (m_bowDrawStartedAt != 0U && trajectoryBlocksAvailable) {
-        m_lastBowTrajectoryAt = tickMilliseconds;
-        BowTrajectory trajectory;
-        const double useTicks = static_cast<double>(
-            tickMilliseconds - m_bowDrawStartedAt) / 50.0;
-        double draw = useTicks / 20.0;
-        draw = std::clamp((draw * draw + draw * 2.0) / 3.0, 0.0, 1.0);
-        if (draw >= 0.10) {
-            constexpr double trajectoryPi = 3.14159265358979323846;
-            const double playerYaw = static_cast<double>(
-                env->GetFloatField(player, cache->rotationYaw)) *
-                trajectoryPi / 180.0;
-            const double playerPitch = static_cast<double>(
-                env->GetFloatField(player, cache->rotationPitch)) *
-                trajectoryPi / 180.0;
-            if (env->ExceptionCheck() == JNI_TRUE) return failJni();
-            double arrowX = positionX - std::cos(playerYaw) * 0.16;
-            double arrowY = positionY + 1.52;
-            double arrowZ = positionZ - std::sin(playerYaw) * 0.16;
-            const double speed = draw * 3.0;
-            double velocityX = -std::sin(playerYaw) * std::cos(playerPitch) * speed;
-            double velocityY = -std::sin(playerPitch) * speed;
-            double velocityZ =  std::cos(playerYaw) * std::cos(playerPitch) * speed;
-            trajectory.active = true;
-            trajectory.points[trajectory.pointCount++] = {arrowX, arrowY, arrowZ};
-            for (std::size_t tick = 0U;
-                 tick + 1U < trajectory.points.size() && !trajectory.hasImpact; ++tick) {
-                const double nextX = arrowX + velocityX;
-                const double nextY = arrowY + velocityY;
-                const double nextZ = arrowZ + velocityZ;
-                // Exact segment-vs-expanded-AABB test avoids point-sampling
-                // misses when a fully charged arrow crosses several blocks in
-                // one tick.
-                double entityHitT = std::numeric_limits<double>::infinity();
-                jint entityHitId = -1;
-                for (std::uint32_t markerIndex = 0U;
-                     markerIndex < m_snapshot.entityMarkerCount; ++markerIndex) {
-                    const EntityMarker& marker =
-                        m_snapshot.entityMarkers[markerIndex];
-                    if (!marker.player) continue;
-                    constexpr double padding = 0.30;
-                    double entry = 0.0;
-                    double exit = 1.0;
-                    const auto clipAxis = [&](const double origin,
-                                              const double direction,
-                                              const double minimum,
-                                              const double maximum) noexcept {
-                        if (std::abs(direction) < 1.0e-9)
-                            return origin >= minimum && origin <= maximum;
-                        double first = (minimum - origin) / direction;
-                        double second = (maximum - origin) / direction;
-                        if (first > second) std::swap(first, second);
-                        entry = std::max(entry, first);
-                        exit = std::min(exit, second);
-                        return entry <= exit;
-                    };
-                    if (clipAxis(arrowX, velocityX,
-                                 marker.bounds.minX - padding,
-                                 marker.bounds.maxX + padding) &&
-                        clipAxis(arrowY, velocityY,
-                                 marker.bounds.minY - padding,
-                                 marker.bounds.maxY + padding) &&
-                        clipAxis(arrowZ, velocityZ,
-                                 marker.bounds.minZ - padding,
-                                 marker.bounds.maxZ + padding) &&
-                        entry >= 0.0 && entry <= 1.0 && entry < entityHitT) {
-                        entityHitT = entry;
-                        entityHitId = marker.entityId;
-                    }
-                }
-
-                // Traverse only the voxels actually crossed by this segment.
-                // This is both exact at block boundaries and an order of
-                // magnitude cheaper than issuing JNI isAirBlock calls every
-                // fraction of a block.
-                int voxelX = static_cast<int>(std::floor(arrowX));
-                int voxelY = static_cast<int>(std::floor(arrowY));
-                int voxelZ = static_cast<int>(std::floor(arrowZ));
-                const int endX = static_cast<int>(std::floor(nextX));
-                const int endY = static_cast<int>(std::floor(nextY));
-                const int endZ = static_cast<int>(std::floor(nextZ));
-                const int stepX = velocityX > 0.0 ? 1 : velocityX < 0.0 ? -1 : 0;
-                const int stepY = velocityY > 0.0 ? 1 : velocityY < 0.0 ? -1 : 0;
-                const int stepZ = velocityZ > 0.0 ? 1 : velocityZ < 0.0 ? -1 : 0;
-                const double infinity = std::numeric_limits<double>::infinity();
-                double maxTX = stepX > 0 ? (voxelX + 1.0 - arrowX) / velocityX
-                    : stepX < 0 ? (arrowX - voxelX) / -velocityX : infinity;
-                double maxTY = stepY > 0 ? (voxelY + 1.0 - arrowY) / velocityY
-                    : stepY < 0 ? (arrowY - voxelY) / -velocityY : infinity;
-                double maxTZ = stepZ > 0 ? (voxelZ + 1.0 - arrowZ) / velocityZ
-                    : stepZ < 0 ? (arrowZ - voxelZ) / -velocityZ : infinity;
-                const double deltaTX = stepX == 0 ? infinity : 1.0 / std::abs(velocityX);
-                const double deltaTY = stepY == 0 ? infinity : 1.0 / std::abs(velocityY);
-                const double deltaTZ = stepZ == 0 ? infinity : 1.0 / std::abs(velocityZ);
-                double blockHitT = infinity;
-                for (int crossing = 0; crossing < 32 &&
-                     (voxelX != endX || voxelY != endY || voxelZ != endZ);
-                     ++crossing) {
-                    double crossingT = 0.0;
-                    if (maxTX <= maxTY && maxTX <= maxTZ) {
-                        crossingT = maxTX;
-                        maxTX += deltaTX;
-                        voxelX += stepX;
-                    } else if (maxTY <= maxTZ) {
-                        crossingT = maxTY;
-                        maxTY += deltaTY;
-                        voxelY += stepY;
-                    } else {
-                        crossingT = maxTZ;
-                        maxTZ += deltaTZ;
-                        voxelZ += stepZ;
-                    }
-                    if (crossingT > 1.0) break;
-                    bool air = true;
-                    if (blockIsAir(voxelX + 0.5, voxelY + 0.5,
-                                   voxelZ + 0.5, air) && !air) {
-                        blockHitT = std::clamp(crossingT, 0.0, 1.0);
-                        break;
-                    }
-                }
-                const double hitT = std::min(entityHitT, blockHitT);
-                if (std::isfinite(hitT)) {
-                    trajectory.hasImpact = true;
-                    trajectory.impactPlayer = entityHitT <= blockHitT;
-                    trajectory.impactEntityId = trajectory.impactPlayer
-                        ? entityHitId : -1;
-                    trajectory.impact = {
-                        arrowX + velocityX * hitT,
-                        arrowY + velocityY * hitT,
-                        arrowZ + velocityZ * hitT};
-                }
-                if (trajectory.hasImpact) {
-                    trajectory.points[trajectory.pointCount++] = trajectory.impact;
-                    break;
-                }
-                arrowX = nextX;
-                arrowY = nextY;
-                arrowZ = nextZ;
-                trajectory.points[trajectory.pointCount++] = {arrowX, arrowY, arrowZ};
-                velocityX *= 0.99;
-                velocityY = velocityY * 0.99 - 0.05;
-                velocityZ *= 0.99;
-            }
-        }
-        m_snapshot.bowTrajectory = trajectory;
-    }
+    // Bow physics is sampled separately at render cadence, not this 20 TPS sampler.
     m_snapshot.entitySampleGeneration = ++m_entitySampleGeneration;
 
     // Multiplayer discovery is metadata-only and independent of ESP. At 2 Hz,
@@ -4951,6 +6823,19 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
         return;
     }
     if (cache.minecraftClass != nullptr) env->DeleteGlobalRef(cache.minecraftClass);
+    if (cache.rayVectorClass != nullptr) env->DeleteGlobalRef(cache.rayVectorClass);
+    if (cache.rayHitClass != nullptr) env->DeleteGlobalRef(cache.rayHitClass);
+    if (cache.diggingPacketClass != nullptr) env->DeleteGlobalRef(cache.diggingPacketClass);
+    if (cache.networkPacketClass != nullptr) env->DeleteGlobalRef(cache.networkPacketClass);
+    if (cache.movementPacketClass != nullptr) env->DeleteGlobalRef(cache.movementPacketClass);
+    if (cache.positionPacketClass != nullptr) env->DeleteGlobalRef(cache.positionPacketClass);
+    if (cache.lookPacketClass != nullptr) env->DeleteGlobalRef(cache.lookPacketClass);
+    if (cache.positionLookPacketClass != nullptr) env->DeleteGlobalRef(cache.positionLookPacketClass);
+    if (cache.packetNetHandlerClass != nullptr) env->DeleteGlobalRef(cache.packetNetHandlerClass);
+    cache.rayVectorClass=nullptr; cache.rayHitClass=nullptr;
+    cache.networkPacketClass=nullptr; cache.movementPacketClass=nullptr;
+    cache.positionPacketClass=nullptr; cache.lookPacketClass=nullptr;
+    cache.positionLookPacketClass=nullptr; cache.packetNetHandlerClass=nullptr;
     if (cache.playerClass != nullptr) env->DeleteGlobalRef(cache.playerClass);
     if (cache.livingClass != nullptr) env->DeleteGlobalRef(cache.livingClass);
     if (cache.hostileClass != nullptr) env->DeleteGlobalRef(cache.hostileClass);
@@ -4971,6 +6856,10 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
     if (cache.timerClass != nullptr) env->DeleteGlobalRef(cache.timerClass);
     if (cache.gameSettingsClass != nullptr)
         env->DeleteGlobalRef(cache.gameSettingsClass);
+    if (cache.entityRendererClass != nullptr)
+        env->DeleteGlobalRef(cache.entityRendererClass);
+    if (cache.renderGlobalClass != nullptr)
+        env->DeleteGlobalRef(cache.renderGlobalClass);
     if (cache.keyBindingClass != nullptr)
         env->DeleteGlobalRef(cache.keyBindingClass);
     if (cache.playerControllerClass != nullptr)
@@ -5035,6 +6924,8 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
     cache.renderManagerClass = nullptr;
     cache.timerClass = nullptr;
     cache.gameSettingsClass = nullptr;
+    cache.entityRendererClass = nullptr;
+    cache.renderGlobalClass = nullptr;
     cache.keyBindingClass = nullptr;
     cache.playerControllerClass = nullptr;
     cache.serverDataClass = nullptr;
@@ -5070,11 +6961,27 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
 
 void GameBindings::release(JNIEnv* const env) noexcept
 {
-    // AgentRuntime guarantees the resolver has joined and all other frame
-    // callbacks have drained before this method can destroy published globals.
-    if (env != nullptr && (m_safewalkSneakForced || m_aimSensitivityModified)) {
+    // Drain an authoritative block reset while the bindings and transformed
+    // entry points are still valid.  Stopping the hooks first would clear only
+    // native bookkeeping and could leave PlayerControllerMP mid-dig.
+    if (env != nullptr &&
+        (m_logicalController.requiresDrain() || m_safewalkSneakForced ||
+         m_aimSensitivityModified)) {
         (void)updateGameplay(env, GameplaySettings{}, m_snapshot, 0U);
     }
+    m_freeLookRequested.store(false,std::memory_order_release);
+    endFreeLook(env,"detach",true);
+    m_freeLookHook.stop();
+    deactivateSilentOutput();
+    m_attackOwnershipHook.stop();
+    m_interactionObserver.stop();
+    m_logicalInteractionHook.stop();
+    m_logicalJumpHook.stop();
+    m_logicalMovementHook.stop();
+    m_silentRotationHook.stop();
+    m_logicalController.reset();
+    // AgentRuntime guarantees the resolver has joined and all other frame
+    // callbacks have drained before this method can destroy published globals.
     m_resolutionPhase.store(ResolutionPhase::Stopped, std::memory_order_release);
     if (env != nullptr && m_cache != nullptr) {
         deleteGlobalRefs(env, *m_cache);
@@ -5135,14 +7042,35 @@ void GameBindings::release(JNIEnv* const env) noexcept
     m_safewalkSneakKeyCode = 0;
     m_safewalkSupportMask = 0U;
     m_safewalkReleaseAt = 0U;
+    m_nextFreeLookHookAttemptTick = 0U;
+    m_freeLookHookAttemptCount=0U;
+    m_freeLookHookRetryLatched=false;
+    m_freeLookObservationInitialized=false;
+    m_nextAttackOwnershipHookAttemptTick = 0U;
     m_lastScaffoldPlacementTick = 0U;
     m_lastGameplayTick = 0U;
+    m_lastBedBreakerTick = 0U;
+    m_bedBreakerTargetValid = false;
     m_originalMouseSensitivity = 0.5F;
     m_aimSensitivityModified = false;
+    m_freeLookDiagnostics.stop("release");
 }
 
 void GameBindings::abandon() noexcept
 {
+    m_freeLookRequested.store(false,std::memory_order_relaxed);
+    endFreeLook(nullptr,"detach-no-jni",true);
+    m_freeLookHook.abandon();
+    m_freeLookEntity=nullptr;
+    m_freeLookPerspectiveSaved=false;
+    m_freeLookActive=false;
+    m_interactionObserver.abandon();
+    m_attackOwnershipHook.abandon();
+    m_logicalInteractionHook.abandon();
+    m_logicalJumpHook.abandon();
+    m_logicalMovementHook.abandon();
+    m_silentRotationHook.abandon();
+    m_logicalController.reset();
     // Used only when the JVM is already shutting down and no JNIEnv can be
     // obtained. The VM owns and releases its reference table at process exit.
     m_resolutionPhase.store(ResolutionPhase::Stopped, std::memory_order_release);
@@ -5168,10 +7096,18 @@ void GameBindings::abandon() noexcept
     m_safewalkSneakKeyCode = 0;
     m_safewalkSupportMask = 0U;
     m_safewalkReleaseAt = 0U;
+    m_nextFreeLookHookAttemptTick = 0U;
+    m_freeLookHookAttemptCount=0U;
+    m_freeLookHookRetryLatched=false;
+    m_freeLookObservationInitialized=false;
+    m_nextAttackOwnershipHookAttemptTick = 0U;
     m_lastScaffoldPlacementTick = 0U;
     m_lastGameplayTick = 0U;
+    m_lastBedBreakerTick = 0U;
+    m_bedBreakerTargetValid = false;
     m_originalMouseSensitivity = 0.5F;
     m_aimSensitivityModified = false;
+    m_freeLookDiagnostics.stop("abandon");
 }
 
 } // namespace mcoverlay

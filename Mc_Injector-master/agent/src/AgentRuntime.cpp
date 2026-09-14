@@ -102,7 +102,7 @@ std::uint32_t packFeatures(const FeatureSettings& settings) noexcept
         (settings.bhopEnabled ? 0x4000000U : 0U) |
         (settings.bhopAutoJump ? 0x8000000U : 0U) |
         (settings.aimAssistEnabled ? 0x10000000U : 0U) |
-        (settings.aimSlowdownMode ? 0x20000000U : 0U) |
+        (settings.aimLockOnMode ? 0x20000000U : 0U) |
         (settings.textGuiEnabled ? 0x40000000U : 0U) |
         (settings.allowHypixelMovement ? 0x80000000U : 0U));
 }
@@ -117,7 +117,27 @@ std::uint32_t packExtraFeatures(const FeatureSettings& settings) noexcept
         (settings.localMobAuraEnabled ? 0x10U : 0U) |
         (settings.localVelocityEnabled ? 0x20U : 0U) |
         (settings.scaffoldSameLayerOnly ? 0x40U : 0U) |
-        (settings.fullscreenImeFixEnabled ? 0x80U : 0U));
+        (settings.fullscreenImeFixEnabled ? 0x80U : 0U)) |
+        packUiPreferences({settings.clickGuiBlur, settings.imePanelX, settings.imePanelY});
+}
+
+std::uint32_t packAimOptions(const FeatureSettings& settings) noexcept
+{
+    return (settings.aimSilentLock ? 0x01U : 0U) |
+        (settings.aimScannerEnabled ? 0x02U : 0U) |
+        (settings.bedBreakerEnabled ? 0x04U : 0U) |
+        (settings.aimAttackViability ? 0x08U : 0U) |
+        (settings.textGuiShowModes ? 0x10U : 0U) |
+        (settings.silentControlAdaptation ? 0x40000000U : 0U) |
+        (settings.aimSequentialTargets ? 0x20000000U : 0U) |
+        (settings.silentFileDebug ? 0x08000000U : 0U) |
+        (settings.silentChatDebug ? 0x10000000U : 0U) |
+        (static_cast<std::uint32_t>(std::clamp(
+            settings.localVelocityProbability,0,100)) << 5U) |
+        (static_cast<std::uint32_t>(std::clamp(
+            settings.localVelocityVerticalPercent,0,100)) << 12U) |
+        (static_cast<std::uint32_t>(std::clamp(
+            settings.featureHotkeys[16U],0,254)) << 19U);
 }
 
 std::uint64_t packFeatureHotkeys(const FeatureSettings& settings,
@@ -132,6 +152,15 @@ std::uint64_t packFeatureHotkeys(const FeatureSettings& settings,
         packed |= key << (offset * 8U);
     }
     return packed;
+}
+
+std::uint32_t packFeatureHotkeysExtra(const FeatureSettings& settings) noexcept
+{
+    return static_cast<std::uint32_t>(
+        std::clamp(settings.featureHotkeys[16U],0,254)) |
+        (static_cast<std::uint32_t>(
+            std::clamp(settings.featureHotkeys[17U],0,254))<<8U) |
+        (settings.freeLookEnabled ? 0x10000U : 0U);
 }
 
 FeatureSettings unpackFeatures(const std::uint32_t bits,
@@ -186,7 +215,8 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
                                 const int textGuiAlignment = 2,
                                 const int localMobReach = 4,
                                 const int localAttackDelayMs = 500,
-                                const int localVelocityPercent = 100) noexcept
+                                const int localVelocityPercent = 100,
+                                const std::uint32_t hotkeysPackedC = 0U) noexcept
 {
     FeatureSettings s;
     s.espEnabled = (bits & 0x01U) != 0U;
@@ -218,14 +248,14 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.bhopEnabled = (bits & 0x4000000U) != 0U;
     s.bhopAutoJump = (bits & 0x8000000U) != 0U;
     s.aimAssistEnabled = (bits & 0x10000000U) != 0U;
-    s.aimSlowdownMode = (bits & 0x20000000U) != 0U;
+    s.aimLockOnMode = (bits & 0x20000000U) != 0U;
     s.textGuiEnabled = (bits & 0x40000000U) != 0U;
     s.allowHypixelMovement = (bits & 0x80000000U) != 0U;
     s.bedDefenseRadius = std::clamp(defenseRadius, 3, 10);
     s.bedThreatRadius = std::clamp(threatRadius, 3, 32);
-    s.bedDefenseHotkey = std::clamp(bedHotkey, 8, 254);
+    s.bedDefenseHotkey = std::clamp(bedHotkey, 0, 254);
     s.bedDefensePanelOpacity = std::clamp(panelOpacity, 0, 100);
-    s.hypixelPanelHotkey = std::clamp(hypixelHotkey, 8, 254);
+    s.hypixelPanelHotkey = std::clamp(hypixelHotkey, 0, 254);
     s.hypixelPanelOpacity = std::clamp(hypixelOpacity, 0, 100);
     s.hypixelPanelScale = std::clamp(hypixelScale, 70, 160);
     s.hypixelPanelHeight = std::clamp(hypixelHeight, 60, 400);
@@ -247,7 +277,7 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.safewalkReleaseDelayMs = std::clamp(safewalkReleaseDelayMs, 0, 750);
     s.safewalkEdgeSensitivity = std::clamp(safewalkEdgeSensitivity, 0, 100);
     s.safewalkMinimumPitch = std::clamp(safewalkMinimumPitch, -90, 90);
-    s.safewalkHotkey = std::clamp(safewalkHotkey, 8, 254);
+    s.safewalkHotkey = std::clamp(safewalkHotkey, 0, 254);
     s.flySpeedPercent = std::clamp(flySpeedPercent, 10, 500);
     s.aimSlowdownPercent = std::clamp(aimSlowdownPercent, 5, 95);
     s.aimSpeedPercent = std::clamp(aimSpeedPercent, 1, 100);
@@ -255,11 +285,15 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.textGuiX = std::clamp(textGuiX, -1, 1000);
     s.textGuiY = std::clamp(textGuiY, -1, 1000);
     s.bhopAirSpeedPercent = std::clamp(bhopAirSpeedPercent, 10, 300);
-    for (std::size_t index = 0U; index < s.featureHotkeys.size(); ++index) {
-        const std::uint64_t packed = index < 8U ? hotkeysPackedA : hotkeysPackedB;
-        const std::size_t offset = index < 8U ? index : index - 8U;
-        s.featureHotkeys[index] = static_cast<int>((packed >> (offset * 8U)) & 0xFFU);
+    for (std::size_t index = 0U; index < 16U; ++index) {
+        const std::uint64_t packed=index<8U?hotkeysPackedA:hotkeysPackedB;
+        const std::size_t offset=index<8U?index:index-8U;
+        s.featureHotkeys[index]=static_cast<int>(
+            (packed>>(offset*8U))&0xFFU);
     }
+    s.featureHotkeys[16U]=static_cast<int>(hotkeysPackedC&0xFFU);
+    s.featureHotkeys[17U]=static_cast<int>((hotkeysPackedC>>8U)&0xFFU);
+    s.freeLookEnabled=(hotkeysPackedC&0x10000U)!=0U;
     // Preserve the legacy Safewalk binding as a migration source. New builds
     // keep both fields synchronized, while old settings remain usable.
     if (s.featureHotkeys[4U] == 0) s.featureHotkeys[4U] = s.safewalkHotkey;
@@ -284,6 +318,10 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.localVelocityEnabled = (extraBits & 0x20U) != 0U;
     s.scaffoldSameLayerOnly = (extraBits & 0x40U) != 0U;
     s.fullscreenImeFixEnabled = (extraBits & 0x80U) != 0U;
+    const auto ui = unpackUiPreferences(extraBits);
+    s.clickGuiBlur = ui.blur;
+    s.imePanelX = ui.imeX;
+    s.imePanelY = ui.imeY;
     s.textGuiAlignment = std::clamp(textGuiAlignment, 0, 2);
     s.localMobReach = std::clamp(localMobReach, 3, 10);
     s.localAttackDelayMs = std::clamp(localAttackDelayMs, 100, 1500);
@@ -703,6 +741,8 @@ void AgentRuntime::telemetryMain() noexcept
     std::uint32_t sentFeatureChangedRevision = 0U;
     std::uint32_t sentBindChangedRevision = 0U;
     std::uint32_t sentGuiScaleChangedRevision = 0U;
+    std::uint32_t sentMediaSettingsChangedRevision = 0U;
+    std::uint32_t sentMediaActionRevision = 0U;
     std::uint64_t sentHypixelQueryRevision = 0U;
     std::uint64_t sentPlayerRosterGeneration = 0U;
     std::uint32_t sentBlacklistActionRevision = 0U;
@@ -797,9 +837,10 @@ void AgentRuntime::telemetryMain() noexcept
                 m_featureChangedTextGuiAlignment.load(std::memory_order_acquire),
                 m_featureChangedLocalMobReach.load(std::memory_order_acquire),
                 m_featureChangedLocalAttackDelayMs.load(std::memory_order_acquire),
-                m_featureChangedLocalVelocityPercent.load(std::memory_order_acquire));
+                m_featureChangedLocalVelocityPercent.load(std::memory_order_acquire),
+                m_featureChangedHotkeysPackedC.load(std::memory_order_acquire));
             FixedLine<960U> line;
-            if (line.append("FEATURE_STATE_CHANGED ") &&
+            if (line.append("FEATURE_STATE_CHANGED_V3 ") &&
                 line.appendInteger(settings.espEnabled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.entityEspEnabled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.bedEspEnabled ? 1 : 0) && line.append(' ') &&
@@ -829,7 +870,7 @@ void AgentRuntime::telemetryMain() noexcept
                 line.appendInteger(settings.bhopEnabled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.bhopAutoJump ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.aimAssistEnabled ? 1 : 0) && line.append(' ') &&
-                line.appendInteger(settings.aimSlowdownMode ? 1 : 0) && line.append(' ') &&
+                line.appendInteger(settings.aimLockOnMode ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.textGuiEnabled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.allowHypixelMovement ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.bedDefenseRadius) && line.append(' ') &&
@@ -868,6 +909,7 @@ void AgentRuntime::telemetryMain() noexcept
                 line.appendInteger(settings.bhopAirSpeedPercent) && line.append(' ') &&
                 line.appendInteger(packFeatureHotkeys(settings, 0U)) && line.append(' ') &&
                 line.appendInteger(packFeatureHotkeys(settings, 8U)) && line.append(' ') &&
+                line.appendInteger(packFeatureHotkeysExtra(settings)) && line.append(' ') &&
                 line.appendInteger(settings.fireballEspEnabled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.fireballEspFilled ? 1 : 0) && line.append(' ') &&
                 line.appendInteger(settings.longJumpEnabled ? 1 : 0) && line.append(' ') &&
@@ -885,7 +927,16 @@ void AgentRuntime::telemetryMain() noexcept
                 line.appendInteger(settings.localAttackDelayMs) && line.append(' ') &&
                 line.appendInteger(settings.localVelocityPercent) &&
                 m_ipc->sendLine(line.view())) {
-                sentFeatureChangedRevision = featureRevision;
+                FixedLine<48U> options;
+                if(options.append("AIM_OPTIONS_CHANGED ") &&
+                   options.appendInteger(m_featureChangedAimOptions.load(std::memory_order_acquire)) &&
+                   m_ipc->sendLine(options.view())) {
+                    FixedLine<48U> cps;
+                    if(cps.append("AIM_ATTACK_CPS_CHANGED ")&&
+                       cps.appendInteger(m_featureChangedAimAttackCps.load(
+                           std::memory_order_acquire))&&m_ipc->sendLine(cps.view()))
+                        sentFeatureChangedRevision=featureRevision;
+                }
             }
         }
 
@@ -908,6 +959,49 @@ void AgentRuntime::telemetryMain() noexcept
                 line.appendInteger(m_guiScaleChangedIndex.load(std::memory_order_acquire)) &&
                 m_ipc->sendLine(line.view())) {
                 sentGuiScaleChangedRevision = guiScaleRevision;
+            }
+        }
+
+        const std::uint32_t mediaSettingsRevision =
+            m_mediaSettingsChangedRevision.load(std::memory_order_acquire);
+        if (mediaSettingsRevision != sentMediaSettingsChangedRevision) {
+            const std::uint32_t bits =
+                m_mediaSettingsChangedBits.load(std::memory_order_acquire);
+            FixedLine<192U> line;
+            if (line.append("MEDIA_SETTINGS_CHANGED ") &&
+                line.appendInteger((bits & 0x100U) != 0U ? 1 : 0) && line.append(' ') &&
+                line.appendInteger(bits & 0xFFU) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedPrevious.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedToggle.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedNext.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedColor.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedX.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedY.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedSpectrum.load(
+                    std::memory_order_acquire)) && line.append(' ') &&
+                line.appendInteger(m_mediaSettingsChangedScale.load(
+                    std::memory_order_acquire)) && m_ipc->sendLine(line.view())) {
+                sentMediaSettingsChangedRevision = mediaSettingsRevision;
+            }
+        }
+
+        const std::uint32_t mediaActionRevision =
+            m_mediaActionRevision.load(std::memory_order_acquire);
+        if (mediaActionRevision != sentMediaActionRevision) {
+            const MediaAction action = static_cast<MediaAction>(
+                m_mediaAction.load(std::memory_order_acquire));
+            const char* token = action == MediaAction::Previous ? "PREVIOUS" :
+                action == MediaAction::Toggle ? "TOGGLE" :
+                action == MediaAction::Next ? "NEXT" : nullptr;
+            if (token != nullptr && m_ipc->sendLine(
+                    std::string("MEDIA_ACTION ") + token)) {
+                sentMediaActionRevision = mediaActionRevision;
             }
         }
 
@@ -953,6 +1047,7 @@ void AgentRuntime::telemetryMain() noexcept
                     actionLine.appendInteger(action.showWithClickGui ? 1 : 0) && actionLine.append(' ') &&
                     actionLine.appendInteger(action.collapsed ? 1 : 0) && actionLine.append(' ') &&
                     actionLine.appendInteger(action.panelOpacity) && actionLine.append(' ') &&
+                    actionLine.appendInteger(action.contentScale) && actionLine.append(' ') &&
                     actionLine.appendInteger(action.panelColor);
                 break;
             case BlacklistAction::Type::None: break;
@@ -1111,17 +1206,20 @@ void AgentRuntime::queueStateChanged(const bool visible, const bool interactive)
 
 void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
 {
+    const unsigned aimOptions=packAimOptions(settings);
+    m_aimOptions.store(aimOptions,std::memory_order_release);
+    m_featureChangedAimOptions.store(aimOptions,std::memory_order_relaxed);
     const std::uint32_t bits = packFeatures(settings);
     m_featureBits.store(bits, std::memory_order_release);
     m_bedDefenseRadius.store(std::clamp(settings.bedDefenseRadius, 3, 10),
                              std::memory_order_release);
     m_bedThreatRadius.store(std::clamp(settings.bedThreatRadius, 3, 32),
                             std::memory_order_release);
-    m_bedDefenseHotkey.store(std::clamp(settings.bedDefenseHotkey, 8, 254),
+    m_bedDefenseHotkey.store(std::clamp(settings.bedDefenseHotkey, 0, 254),
                              std::memory_order_release);
     m_bedDefensePanelOpacity.store(std::clamp(settings.bedDefensePanelOpacity, 0, 100),
                                    std::memory_order_release);
-    m_hypixelPanelHotkey.store(std::clamp(settings.hypixelPanelHotkey, 8, 254),
+    m_hypixelPanelHotkey.store(std::clamp(settings.hypixelPanelHotkey, 0, 254),
                                std::memory_order_release);
     m_hypixelPanelOpacity.store(std::clamp(settings.hypixelPanelOpacity, 0, 100),
                                 std::memory_order_release);
@@ -1168,7 +1266,7 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
     m_safewalkMinimumPitch.store(
         std::clamp(settings.safewalkMinimumPitch, -90, 90),
         std::memory_order_release);
-    m_safewalkHotkey.store(std::clamp(settings.safewalkHotkey, 8, 254),
+    m_safewalkHotkey.store(std::clamp(settings.safewalkHotkey, 0, 254),
                             std::memory_order_release);
     m_flySpeedPercent.store(std::clamp(settings.flySpeedPercent, 10, 500),
                             std::memory_order_release);
@@ -1178,6 +1276,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
     m_featureHotkeysPackedA.store(packFeatureHotkeys(settings, 0U),
                                   std::memory_order_release);
     m_featureHotkeysPackedB.store(packFeatureHotkeys(settings, 8U),
+                                  std::memory_order_release);
+    m_featureHotkeysPackedC.store(packFeatureHotkeysExtra(settings),
                                   std::memory_order_release);
     m_fireballEspEnabled.store(settings.fireballEspEnabled, std::memory_order_release);
     m_fireballEspFilled.store(settings.fireballEspFilled, std::memory_order_release);
@@ -1196,6 +1296,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
         std::max(1, settings.aimMinimumDistance), 128), std::memory_order_release);
     m_aimFovDegrees.store(std::clamp(settings.aimFovDegrees, 1, 360),
                           std::memory_order_release);
+    m_aimAttackCps.store(std::clamp(settings.aimAttackCps,1,20),
+                         std::memory_order_release);
     m_clickGuiWidthPercent.store(std::clamp(settings.clickGuiWidthPercent, 80, 150),
                                  std::memory_order_release);
     m_clickGuiHeightPercent.store(std::clamp(settings.clickGuiHeightPercent, 80, 150),
@@ -1222,13 +1324,13 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
                                     std::memory_order_relaxed);
     m_featureChangedThreatRadius.store(std::clamp(settings.bedThreatRadius, 3, 32),
                                        std::memory_order_relaxed);
-    m_featureChangedBedHotkey.store(std::clamp(settings.bedDefenseHotkey, 8, 254),
+    m_featureChangedBedHotkey.store(std::clamp(settings.bedDefenseHotkey, 0, 254),
                                     std::memory_order_relaxed);
     m_featureChangedPanelOpacity.store(
         std::clamp(settings.bedDefensePanelOpacity, 0, 100),
         std::memory_order_relaxed);
     m_featureChangedHypixelHotkey.store(
-        std::clamp(settings.hypixelPanelHotkey, 8, 254), std::memory_order_relaxed);
+        std::clamp(settings.hypixelPanelHotkey, 0, 254), std::memory_order_relaxed);
     m_featureChangedHypixelOpacity.store(
         std::clamp(settings.hypixelPanelOpacity, 0, 100), std::memory_order_relaxed);
     m_featureChangedHypixelScale.store(
@@ -1276,7 +1378,7 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
         std::clamp(settings.safewalkMinimumPitch, -90, 90),
         std::memory_order_relaxed);
     m_featureChangedSafewalkHotkey.store(
-        std::clamp(settings.safewalkHotkey, 8, 254),
+        std::clamp(settings.safewalkHotkey, 0, 254),
         std::memory_order_relaxed);
     m_featureChangedFlySpeedPercent.store(
         std::clamp(settings.flySpeedPercent, 10, 500),
@@ -1287,6 +1389,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
     m_featureChangedHotkeysPackedA.store(packFeatureHotkeys(settings, 0U),
                                          std::memory_order_relaxed);
     m_featureChangedHotkeysPackedB.store(packFeatureHotkeys(settings, 8U),
+                                         std::memory_order_relaxed);
+    m_featureChangedHotkeysPackedC.store(packFeatureHotkeysExtra(settings),
                                          std::memory_order_relaxed);
     m_featureChangedFireballEspEnabled.store(settings.fireballEspEnabled,
                                               std::memory_order_relaxed);
@@ -1312,6 +1416,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
         std::memory_order_relaxed);
     m_featureChangedAimFovDegrees.store(
         std::clamp(settings.aimFovDegrees, 1, 360), std::memory_order_relaxed);
+    m_featureChangedAimAttackCps.store(
+        std::clamp(settings.aimAttackCps,1,20),std::memory_order_relaxed);
     m_featureChangedClickGuiWidthPercent.store(
         std::clamp(settings.clickGuiWidthPercent, 80, 150), std::memory_order_relaxed);
     m_featureChangedClickGuiHeightPercent.store(
@@ -1366,6 +1472,41 @@ void AgentRuntime::queueGuiScaleChanged(const int index) noexcept
     m_guiScaleIndex.store(bounded, std::memory_order_release);
     m_guiScaleChangedIndex.store(bounded, std::memory_order_relaxed);
     m_guiScaleChangedRevision.fetch_add(1U, std::memory_order_release);
+    if (m_telemetryEvent != nullptr) ::SetEvent(m_telemetryEvent);
+}
+
+void AgentRuntime::queueMediaSettingsChanged(
+    const MediaOverlaySettings& settings) noexcept
+{
+    const std::uint32_t bits = static_cast<std::uint32_t>(
+        (settings.enabled ? 0x100U : 0U) |
+        static_cast<unsigned>(std::clamp(settings.opacity, 20, 100)));
+    m_mediaSettingsChangedBits.store(bits, std::memory_order_relaxed);
+    m_mediaSettingsChangedPrevious.store(
+        std::clamp(settings.previousHotkey, 0, 254), std::memory_order_relaxed);
+    m_mediaSettingsChangedToggle.store(
+        std::clamp(settings.toggleHotkey, 0, 254), std::memory_order_relaxed);
+    m_mediaSettingsChangedNext.store(
+        std::clamp(settings.nextHotkey, 0, 254), std::memory_order_relaxed);
+    m_mediaSettingsChangedColor.store(
+        settings.panelColor & 0xFFFFFFU, std::memory_order_relaxed);
+    m_mediaSettingsChangedX.store(
+        std::clamp(settings.panelX, -1, 1000), std::memory_order_relaxed);
+    m_mediaSettingsChangedY.store(
+        std::clamp(settings.panelY, -1, 1000), std::memory_order_relaxed);
+    m_mediaSettingsChangedSpectrum.store(
+        std::clamp(settings.spectrumOpacity, 0, 100), std::memory_order_relaxed);
+    m_mediaSettingsChangedScale.store(
+        std::clamp(settings.scalePercent, 35, 100), std::memory_order_relaxed);
+    m_mediaSettingsChangedRevision.fetch_add(1U, std::memory_order_release);
+    if (m_telemetryEvent != nullptr) ::SetEvent(m_telemetryEvent);
+}
+
+void AgentRuntime::queueMediaAction(const MediaAction action) noexcept
+{
+    if (action == MediaAction::None) return;
+    m_mediaAction.store(static_cast<std::uint8_t>(action), std::memory_order_relaxed);
+    m_mediaActionRevision.fetch_add(1U, std::memory_order_release);
     if (m_telemetryEvent != nullptr) ::SetEvent(m_telemetryEvent);
 }
 
@@ -1431,7 +1572,26 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
                               (interactive ? "1" : "0"));
         return true;
     }
-    if (command == "FEATURE_STATE") {
+    if (command == "AIM_OPTIONS") {
+        unsigned value=0; std::string trailing;
+        if(!(stream>>value) || value>0x7FFFFFFFU || (stream>>trailing)) {
+            (void)m_ipc->sendLine("ERROR BAD_AIM_OPTIONS expected-v32-packed-options");
+            return true;
+        }
+        m_aimOptions.store(value,std::memory_order_release);
+        return true;
+    }
+    if(command=="AIM_ATTACK_CPS") {
+        int value=0; std::string trailing;
+        if(!(stream>>value)||value<1||value>20||(stream>>trailing)) {
+            (void)m_ipc->sendLine("ERROR BAD_AIM_ATTACK_CPS expected-1-to-20");
+            return true;
+        }
+        m_aimAttackCps.store(value,std::memory_order_release);
+        return true;
+    }
+    if (command == "FEATURE_STATE" || command == "FEATURE_STATE_V2" ||
+        command == "FEATURE_STATE_V3") {
         std::array<std::string, 32U> tokens{};
         std::string trailing;
         FeatureSettings settings{};
@@ -1472,6 +1632,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         int bhopAirSpeedPercent = 0;
         std::uint64_t hotkeysPackedA = 0U;
         std::uint64_t hotkeysPackedB = 0U;
+        std::uint32_t hotkeysPackedC = 0xA400U;
         std::string fireballEnabledToken;
         std::string fireballFilledToken;
         std::string longJumpEnabledToken;
@@ -1507,8 +1668,9 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
                >> safewalkMinimumPitch >> safewalkHotkey >> flySpeedPercent
                >> aimSlowdownPercent >> aimSpeedPercent >> textGuiColor
                >> textGuiX >> textGuiY >> bhopAirSpeedPercent
-               >> hotkeysPackedA >> hotkeysPackedB
-               >> fireballEnabledToken >> fireballFilledToken
+               >> hotkeysPackedA >> hotkeysPackedB) ||
+            (command=="FEATURE_STATE_V3"&&!(stream>>hotkeysPackedC)) ||
+            !(stream >> fireballEnabledToken >> fireballFilledToken
                >> longJumpEnabledToken >> longJumpSpeedPercent
                >> fireballEspColor >> aimMinimumDistance
                >> aimMaximumDistance >> aimFovDegrees
@@ -1529,9 +1691,9 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         }
         if (defenseRadius < 3 || defenseRadius > 10 ||
             threatRadius < 3 || threatRadius > 32 ||
-            bedHotkey < 8 || bedHotkey > 254 ||
+            (bedHotkey != 0 && bedHotkey < 8) || bedHotkey > 254 ||
             panelOpacity < 0 || panelOpacity > 100 ||
-            hypixelHotkey < 8 || hypixelHotkey > 254 ||
+            (hypixelHotkey != 0 && hypixelHotkey < 8) || hypixelHotkey > 254 ||
             hypixelOpacity < 0 || hypixelOpacity > 100 ||
             hypixelScale < 70 || hypixelScale > 160 ||
             hypixelHeight < 60 || hypixelHeight > 400 ||
@@ -1547,7 +1709,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             safewalkReleaseDelayMs < 0 || safewalkReleaseDelayMs > 750 ||
             safewalkEdgeSensitivity < 0 || safewalkEdgeSensitivity > 100 ||
             safewalkMinimumPitch < -90 || safewalkMinimumPitch > 90 ||
-            safewalkHotkey < 8 || safewalkHotkey > 254 ||
+            (safewalkHotkey != 0 && safewalkHotkey < 8) || safewalkHotkey > 254 ||
             flySpeedPercent < 10 || flySpeedPercent > 500 ||
             aimSlowdownPercent < 5 || aimSlowdownPercent > 95 ||
             aimSpeedPercent < 1 || aimSpeedPercent > 100 ||
@@ -1564,7 +1726,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             hypixelFontIndex < 0 || hypixelFontIndex > 3 ||
             nametagRange < 4 || nametagRange > 128 ||
             nametagSizeIndex < 0 || nametagSizeIndex > 3 ||
-            extraBits > 0xFFU || textGuiAlignment < 0 || textGuiAlignment > 2 ||
+            textGuiAlignment < 0 || textGuiAlignment > 2 ||
             localMobReach < 3 || localMobReach > 10 ||
             localAttackDelayMs < 100 || localAttackDelayMs > 1500 ||
             localVelocityPercent < 0 || localVelocityPercent > 100) {
@@ -1611,7 +1773,9 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         settings.bhopEnabled = values[26];
         settings.bhopAutoJump = values[27];
         settings.aimAssistEnabled = values[28];
-        settings.aimSlowdownMode = values[29];
+        // Legacy slot 29 meant sensitivity slowdown, never hard-lock. Only a
+        // versioned packet can request the new mode; old clients fail softly.
+        settings.aimLockOnMode = command != "FEATURE_STATE" && values[29];
         settings.textGuiEnabled = values[30];
         settings.allowHypixelMovement = values[31];
         settings.bedDefenseRadius = defenseRadius;
@@ -1648,7 +1812,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         settings.textGuiX = textGuiX;
         settings.textGuiY = textGuiY;
         settings.bhopAirSpeedPercent = bhopAirSpeedPercent;
-        for (std::size_t index = 0U; index < settings.featureHotkeys.size(); ++index) {
+        for (std::size_t index = 0U; index < 16U; ++index) {
             const std::uint64_t packed = index < 8U ? hotkeysPackedA : hotkeysPackedB;
             const std::size_t offset = index < 8U ? index : index - 8U;
             const int key = static_cast<int>((packed >> (offset * 8U)) & 0xFFU);
@@ -1658,6 +1822,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             }
             settings.featureHotkeys[index] = key;
         }
+        const int extraHotkey16=static_cast<int>(hotkeysPackedC&0xFFU);
+        const int extraHotkey17=static_cast<int>((hotkeysPackedC>>8U)&0xFFU);
+        if((extraHotkey16>0&&extraHotkey16<8)||extraHotkey16>254||
+           (extraHotkey17>0&&extraHotkey17<8)||extraHotkey17>254||
+           hotkeysPackedC>0x1FFFFU) {
+            (void)m_ipc->sendLine("ERROR BAD_FEATURE_STATE invalid-extra-feature-hotkey");
+            return true;
+        }
+        settings.featureHotkeys[16U]=extraHotkey16;
+        settings.featureHotkeys[17U]=extraHotkey17;
+        settings.freeLookEnabled=(hotkeysPackedC&0x10000U)!=0U;
         if (settings.featureHotkeys[4U] == 0)
             settings.featureHotkeys[4U] = safewalkHotkey;
         settings.safewalkHotkey = settings.featureHotkeys[4U];
@@ -1680,6 +1855,10 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         settings.localVelocityEnabled = (extraBits & 0x20U) != 0U;
         settings.scaffoldSameLayerOnly = (extraBits & 0x40U) != 0U;
         settings.fullscreenImeFixEnabled = (extraBits & 0x80U) != 0U;
+        const auto ui = unpackUiPreferences(extraBits);
+        settings.clickGuiBlur = ui.blur;
+        settings.imePanelX = ui.imeX;
+        settings.imePanelY = ui.imeY;
         settings.textGuiAlignment = textGuiAlignment;
         settings.localMobReach = localMobReach;
         settings.localAttackDelayMs = localAttackDelayMs;
@@ -1728,6 +1907,8 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
                                       std::memory_order_release);
         m_featureHotkeysPackedB.store(packFeatureHotkeys(settings, 8U),
                                       std::memory_order_release);
+        m_featureHotkeysPackedC.store(packFeatureHotkeysExtra(settings),
+                                      std::memory_order_release);
         m_fireballEspEnabled.store(fireballEnabled, std::memory_order_release);
         m_fireballEspFilled.store(fireballFilled, std::memory_order_release);
         m_longJumpEnabled.store(longJumpEnabled, std::memory_order_release);
@@ -1752,7 +1933,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         unsigned virtualKey = 0U;
         std::string trailing;
         if (!(stream >> virtualKey) || (stream >> trailing) ||
-            virtualKey < 8U || virtualKey > 254U) {
+            (virtualKey != 0U && virtualKey < 8U) || virtualKey > 254U) {
             (void)m_ipc->sendLine("ERROR BAD_BIND expected-virtual-key-8-254");
             return true;
         }
@@ -1770,6 +1951,112 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         }
         m_guiScaleIndex.store(index, std::memory_order_release);
         (void)m_ipc->sendLine(std::string("GUI_SCALE_APPLIED ") + std::to_string(index));
+        return true;
+    }
+    if (command == "MEDIA_STATE") {
+        int available = 0;
+        int playing = 0;
+        std::string titleToken;
+        std::string artistToken;
+        std::string sourceToken;
+        std::string coverToken;
+        std::string trailing;
+        MediaPlaybackSnapshot snapshot{};
+        if (!(stream >> available >> playing >> titleToken >> artistToken >>
+              sourceToken >> coverToken >> snapshot.positionMs >> snapshot.durationMs) ||
+            (stream >> trailing) || available < 0 || available > 1 ||
+            playing < 0 || playing > 1 || snapshot.positionMs < 0 ||
+            snapshot.durationMs < 0 || !percentDecode(titleToken, snapshot.title) ||
+            !percentDecode(artistToken, snapshot.artist) ||
+            !percentDecode(sourceToken, snapshot.source) ||
+            !percentDecode(coverToken, snapshot.coverPath)) {
+            // Media integration is optional and must not affect the overlay
+            // session if a shell provider emits an unexpected payload.
+            (void)m_ipc->sendLine("STATUS media-state-rejected");
+            return true;
+        }
+        snapshot.available = available != 0;
+        snapshot.playing = playing != 0;
+        snapshot.receivedAtMs = static_cast<std::uint64_t>(::GetTickCount64());
+        if (snapshot.durationMs > 0)
+            snapshot.positionMs = std::min(snapshot.positionMs, snapshot.durationMs);
+        ::AcquireSRWLockExclusive(&m_mediaLock);
+        // Metadata/timeline events and WASAPI frames are independent streams.
+        // Preserve the latest audio bands when a STATE update arrives so the
+        // spectrum does not flash to zero on every playback-position event.
+        snapshot.spectrum = m_mediaSnapshot.spectrum;
+        m_mediaSnapshot = snapshot;
+        ::ReleaseSRWLockExclusive(&m_mediaLock);
+        return true;
+    }
+    if (command == "MEDIA_SPECTRUM") {
+        std::string encoded;
+        std::string trailing;
+        if (!(stream >> encoded) || (stream >> trailing) || encoded.size() > 80U)
+            return true;
+        std::replace(encoded.begin(), encoded.end(), ',', ' ');
+        std::istringstream bands(encoded);
+        std::array<float, 10U> parsed{};
+        int value = 0;
+        for (float& band : parsed) {
+            if (!(bands >> value) || value < 0 || value > 1000) return true;
+            band = static_cast<float>(value) / 1000.0F;
+        }
+        if (bands >> value) return true;
+        ::AcquireSRWLockExclusive(&m_mediaLock);
+        m_mediaSnapshot.spectrum = parsed;
+        ::ReleaseSRWLockExclusive(&m_mediaLock);
+        return true;
+    }
+    if (command == "MEDIA_SETTINGS") {
+        int enabled = 0;
+        std::uint32_t color = 0U;
+        std::string trailing;
+        MediaOverlaySettings settings{};
+        if (!(stream >> enabled >> settings.opacity >> settings.previousHotkey >>
+              settings.toggleHotkey >> settings.nextHotkey >> color >>
+              settings.panelX >> settings.panelY) ||
+            enabled < 0 || enabled > 1 || settings.opacity < 20 ||
+            settings.opacity > 100 || settings.previousHotkey < 0 ||
+            settings.previousHotkey > 254 || settings.toggleHotkey < 0 ||
+            settings.toggleHotkey > 254 || settings.nextHotkey < 0 ||
+            settings.nextHotkey > 254 || color > 0xFFFFFFU ||
+            settings.panelX < -1 || settings.panelX > 1000 ||
+            settings.panelY < -1 || settings.panelY > 1000) {
+            (void)m_ipc->sendLine("STATUS media-settings-rejected");
+            return true;
+        }
+        settings.enabled = enabled != 0;
+        settings.panelColor = color;
+        stream >> std::ws;
+        if (!stream.eof() && (!(stream >> settings.spectrumOpacity) ||
+            settings.spectrumOpacity < 0 || settings.spectrumOpacity > 100)) {
+            (void)m_ipc->sendLine("STATUS media-settings-rejected");
+            return true;
+        }
+        stream >> std::ws;
+        if (!stream.eof()) {
+            int wireScale = settings.scalePercent;
+            if (!(stream >> wireScale) || (stream >> trailing)) {
+                (void)m_ipc->sendLine("STATUS media-settings-rejected");
+                return true;
+            }
+            if (wireScale >= 0 && wireScale <= 3) {
+                static constexpr std::array<int, 4U> legacyScales{
+                    42, 52, 68, 84};
+                settings.scalePercent = legacyScales[
+                    static_cast<std::size_t>(wireScale)];
+            } else if (wireScale >= 35 && wireScale <= 100) {
+                settings.scalePercent = wireScale;
+            } else {
+                (void)m_ipc->sendLine("STATUS media-settings-rejected");
+                return true;
+            }
+        }
+        ::AcquireSRWLockExclusive(&m_mediaLock);
+        m_mediaSettings = settings;
+        ::ReleaseSRWLockExclusive(&m_mediaLock);
+        (void)m_ipc->sendLine("MEDIA_SETTINGS_APPLIED");
         return true;
     }
     if (command == "BED_RESCAN") {
@@ -1794,19 +2081,22 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
     if (command == "BLACKLIST_SETTINGS") {
         std::string enabledToken, alertsToken, idOnlyToken, showToken,
                     collapsedToken, trailing;
-        int opacity = 0, x = -1, y = -1, width = 100, height = 100;
+        int opacity = 0, x = -1, y = -1, width = 100, height = 100,
+            contentScale = 100;
         std::uint32_t color = 0U;
         bool enabled = false, alerts = false, allowIdOnly = false;
         bool showWithClickGui = false, collapsed = false;
         if (!(stream >> enabledToken >> alertsToken >> idOnlyToken >> showToken
                      >> collapsedToken >> opacity >> color
-                     >> x >> y >> width >> height) || (stream >> trailing) ||
+                     >> x >> y >> width >> height >> contentScale) ||
+            (stream >> trailing) ||
             !parseFlag(enabledToken, enabled) || !parseFlag(alertsToken, alerts) ||
             !parseFlag(idOnlyToken, allowIdOnly) ||
             !parseFlag(showToken, showWithClickGui) ||
             !parseFlag(collapsedToken, collapsed) || opacity < 0 || opacity > 100 ||
             color > 0xFFFFFFU || x < -1 || x > 1000 || y < -1 || y > 1000 ||
-            width < 60 || width > 180 || height < 60 || height > 300) return true;
+            width < 60 || width > 180 || height < 60 || height > 300 ||
+            contentScale < 80 || contentScale > 200) return true;
         ::AcquireSRWLockExclusive(&m_blacklistLock);
         m_blacklistSnapshot.panelEnabled = enabled;
         m_blacklistSnapshot.matchAlertsEnabled = alerts;
@@ -1814,6 +2104,7 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         m_blacklistSnapshot.showWithClickGui = showWithClickGui;
         m_blacklistSnapshot.collapsed = collapsed;
         m_blacklistSnapshot.panelOpacity = opacity;
+        m_blacklistSnapshot.contentScale = contentScale;
         m_blacklistSnapshot.panelColor = color;
         m_blacklistSnapshot.panelX = x;
         m_blacklistSnapshot.panelY = y;
@@ -2015,7 +2306,18 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             !percentDecode(uuidToken, snapshot.uuid) ||
             !percentDecode(nameToken, snapshot.displayName) ||
             !percentDecode(statusToken, snapshot.status)) {
-            (void)m_ipc->sendLine("ERROR BAD_HYPIXEL_RESULT invalid-payload");
+            // Hypixel is an optional UI data source.  Never terminate an
+            // otherwise healthy overlay session because one response was
+            // truncated or malformed.  Keep a bounded error snapshot and let
+            // the next valid Controller update replace it.
+            HypixelOverlaySnapshot rejected{};
+            rejected.state = HypixelOverlaySnapshot::State::Error;
+            constexpr std::string_view reason = "Statistics response was rejected";
+            std::copy(reason.begin(), reason.end(), rejected.status.begin());
+            ::AcquireSRWLockExclusive(&m_hypixelLock);
+            m_hypixelSnapshot = rejected;
+            ::ReleaseSRWLockExclusive(&m_hypixelLock);
+            (void)m_ipc->sendLine("STATUS hypixel-result-rejected");
             return true;
         }
         snapshot.state = static_cast<HypixelOverlaySnapshot::State>(state);
@@ -2177,6 +2479,11 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     }
 
     m_renderer->setMenuHotkey(m_menuHotkey.load(std::memory_order_acquire));
+    const bool gameScreenOpen = m_bindings->gameScreenOpen(env);
+    // Menus without a world (title screen/test harness) still allow opening
+    // ClickGUI. In-world screens, especially chat, own their keyboard input.
+    m_renderer->setGameScreenOpen(gameScreenOpen &&
+        m_bindings->hasPlayerSnapshot());
     if (m_renderer->consumeClickGuiToggle()) {
         const bool next = !m_interactive.load(std::memory_order_acquire);
         m_interactive.store(next, std::memory_order_release);
@@ -2239,8 +2546,26 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         m_textGuiAlignment.load(std::memory_order_acquire),
         m_localMobReach.load(std::memory_order_acquire),
         m_localAttackDelayMs.load(std::memory_order_acquire),
-        m_localVelocityPercent.load(std::memory_order_acquire));
+        m_localVelocityPercent.load(std::memory_order_acquire),
+        m_featureHotkeysPackedC.load(std::memory_order_acquire));
     const bool interactiveNow = m_interactive.load(std::memory_order_acquire);
+    const unsigned aimOptions=m_aimOptions.load(std::memory_order_acquire);
+    activeFeatures.aimSilentLock=(aimOptions&1U)!=0;
+    activeFeatures.silentFileDebug=(aimOptions&0x08000000U)!=0;
+    activeFeatures.silentChatDebug=(aimOptions&0x10000000U)!=0;
+    activeFeatures.aimScannerEnabled=(aimOptions&2U)!=0;
+    activeFeatures.bedBreakerEnabled=(aimOptions&4U)!=0;
+    activeFeatures.aimAttackViability=(aimOptions&8U)!=0;
+    activeFeatures.aimSequentialTargets=(aimOptions&0x20000000U)!=0;
+    activeFeatures.silentControlAdaptation=(aimOptions&0x40000000U)!=0;
+    activeFeatures.textGuiShowModes=(aimOptions&16U)!=0;
+    activeFeatures.localVelocityProbability=static_cast<int>((aimOptions>>5U)&0x7FU);
+    activeFeatures.localVelocityVerticalPercent=static_cast<int>((aimOptions>>12U)&0x7FU);
+    activeFeatures.featureHotkeys[16U]=static_cast<int>((aimOptions>>19U)&0xFFU);
+    activeFeatures.aimAttackCps=std::clamp(
+        m_aimAttackCps.load(std::memory_order_acquire),1,20);
+    activeFeatures.longJumpEnabled=false;
+    activeFeatures.localMobAuraEnabled=false;
     if (env != nullptr) {
         if (interactiveNow && !m_gameInputReleased) {
             if (m_bindings->setInputCaptured(env, true)) {
@@ -2278,6 +2603,9 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         m_bindings->sampleCamera(env);
     }
     GameSnapshot snapshot = m_bindings->snapshot(tickMilliseconds);
+    snapshot.gameScreenOpen = gameScreenOpen;
+    snapshot.entityRenderTick = m_entityRenderClock.update(snapshot.entitySampleGeneration,
+        snapshot.worldGeneration, snapshot.camera.partialTicks);
 
     // Server guard is evaluated from currentServerData.serverIP and therefore
     // remains active in lobbies and during respawn. The explicit override is
@@ -2298,11 +2626,12 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     if (!snapshot.integratedSinglePlayer &&
         (activeFeatures.longJumpEnabled || activeFeatures.fireballEspEnabled ||
          activeFeatures.localMobAuraEnabled ||
-         activeFeatures.localVelocityEnabled)) {
+         activeFeatures.localVelocityEnabled || activeFeatures.bedBreakerEnabled)) {
         activeFeatures.longJumpEnabled = false;
         activeFeatures.fireballEspEnabled = false;
         activeFeatures.localMobAuraEnabled = false;
         activeFeatures.localVelocityEnabled = false;
+        activeFeatures.bedBreakerEnabled = false;
         queueFeatureChanged(activeFeatures);
         m_bindings->enqueueDebugChatLine(
             "[Local Guard] Local diagnostics require an integrated single-player world.");
@@ -2310,21 +2639,38 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
 
     if (env != nullptr) {
         GameplaySettings gameplay{};
-        gameplay.safewalk = activeFeatures.safewalkEnabled && !interactiveNow;
-        gameplay.scaffold = activeFeatures.scaffoldEnabled && !interactiveNow;
+        const bool gameForeground =
+            ::GetForegroundWindow() == ::WindowFromDC(deviceContext);
+        const bool gameplayInput = !interactiveNow && !gameScreenOpen &&
+            gameForeground;
+        gameplay.safewalk = activeFeatures.safewalkEnabled && gameplayInput;
+        gameplay.scaffold = activeFeatures.scaffoldEnabled && gameplayInput;
         gameplay.scaffoldSameLayerOnly = activeFeatures.scaffoldSameLayerOnly;
-        gameplay.fly = activeFeatures.flyEnabled && !interactiveNow;
-        gameplay.bhop = activeFeatures.bhopEnabled && !interactiveNow;
+        gameplay.fly = activeFeatures.flyEnabled && gameplayInput;
+        gameplay.bhop = activeFeatures.bhopEnabled && gameplayInput;
         gameplay.bhopAutoJump = activeFeatures.bhopAutoJump;
-        gameplay.aimAssist = activeFeatures.aimAssistEnabled && !interactiveNow;
-        gameplay.longJump = activeFeatures.longJumpEnabled && !interactiveNow &&
+        gameplay.freeLookConfigured = activeFeatures.freeLookEnabled;
+        gameplay.freeLookGuiOpen = interactiveNow || gameScreenOpen;
+        gameplay.freeLookForeground = gameForeground;
+        gameplay.freeLook = activeFeatures.freeLookEnabled && gameplayInput;
+        gameplay.freeLookHotkey = activeFeatures.featureHotkeys[17U];
+        gameplay.aimAssist = activeFeatures.aimAssistEnabled && gameplayInput;
+        gameplay.longJump = activeFeatures.longJumpEnabled && gameplayInput &&
                             snapshot.integratedSinglePlayer;
-        gameplay.aimSlowdownMode = activeFeatures.aimSlowdownMode;
+        gameplay.aimLockOnMode = activeFeatures.aimLockOnMode;
+        gameplay.aimSilentLock = activeFeatures.aimSilentLock;
+        gameplay.silentFileDebug = activeFeatures.silentFileDebug;
+        gameplay.silentChatDebug = activeFeatures.silentChatDebug;
+        gameplay.aimAttackViability = activeFeatures.aimAttackViability;
+        gameplay.silentControlAdaptation = activeFeatures.silentControlAdaptation;
+        gameplay.aimSequentialTargets = activeFeatures.aimSequentialTargets;
         gameplay.aimNearestPriority = activeFeatures.aimNearestPriority;
+        gameplay.bedBreaker = activeFeatures.bedBreakerEnabled && gameplayInput &&
+            snapshot.integratedSinglePlayer;
         gameplay.localMobAura = activeFeatures.localMobAuraEnabled &&
-            !interactiveNow && snapshot.integratedSinglePlayer;
+            gameplayInput && snapshot.integratedSinglePlayer;
         gameplay.localVelocity = activeFeatures.localVelocityEnabled &&
-            !interactiveNow && snapshot.integratedSinglePlayer;
+            gameplayInput && snapshot.integratedSinglePlayer;
         gameplay.safewalkReleaseDelayMs = activeFeatures.safewalkReleaseDelayMs;
         gameplay.safewalkEdgeSensitivity = activeFeatures.safewalkEdgeSensitivity;
         gameplay.safewalkMinimumPitch = activeFeatures.safewalkMinimumPitch;
@@ -2332,6 +2678,7 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         gameplay.bhopAirSpeedPercent = activeFeatures.bhopAirSpeedPercent;
         gameplay.aimSlowdownPercent = activeFeatures.aimSlowdownPercent;
         gameplay.aimSpeedPercent = activeFeatures.aimSpeedPercent;
+        gameplay.aimAttackCps = activeFeatures.aimAttackCps;
         gameplay.aimMinimumDistance = activeFeatures.aimMinimumDistance;
         gameplay.aimMaximumDistance = activeFeatures.aimMaximumDistance;
         gameplay.aimFovDegrees = activeFeatures.aimFovDegrees;
@@ -2339,8 +2686,18 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         gameplay.localMobReach = activeFeatures.localMobReach;
         gameplay.localAttackDelayMs = activeFeatures.localAttackDelayMs;
         gameplay.localVelocityPercent = activeFeatures.localVelocityPercent;
+        gameplay.localVelocityProbability = activeFeatures.localVelocityProbability;
+        gameplay.localVelocityVerticalPercent =
+            activeFeatures.localVelocityVerticalPercent;
+        // Sample the view that produced this frame before Aim Assist writes
+        // the next frame's angles. This avoids a one-frame path/camera mismatch.
+        m_bindings->sampleBow(env, snapshot,
+            activeFeatures.bowPredictionEnabled && gameplayInput);
         (void)m_bindings->updateGameplay(env, gameplay, snapshot,
                                          tickMilliseconds);
+        snapshot.aimTargetEntityId=m_bindings->aimTargetId();
+        snapshot.aimAttackTargetEntityId=m_bindings->aimAttackTargetId();
+        snapshot.silentAimAvailable=m_bindings->silentAvailable();
     }
     const std::uint32_t currentBlacklistRevision =
         m_blacklistRevision.load(std::memory_order_acquire);
@@ -2398,6 +2755,12 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         const HypixelOverlaySnapshot hypixel = m_hypixelSnapshot;
         ::ReleaseSRWLockShared(&m_hypixelLock);
         m_renderer->setHypixelSnapshot(hypixel);
+        ::AcquireSRWLockShared(&m_mediaLock);
+        const MediaPlaybackSnapshot media = m_mediaSnapshot;
+        const MediaOverlaySettings mediaSettings = m_mediaSettings;
+        ::ReleaseSRWLockShared(&m_mediaLock);
+        m_renderer->setMediaSnapshot(media);
+        m_renderer->setMediaSettings(mediaSettings);
         PlayerStatsOverlaySnapshot playerStats{};
         ::AcquireSRWLockShared(&m_playerStatsLock);
         for (const auto& [name, stats] : m_playerStats) {
@@ -2438,6 +2801,18 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         if (m_renderer->consumeGuiScaleChange(changedScale)) {
             queueGuiScaleChanged(changedScale);
         }
+        MediaOverlaySettings changedMediaSettings{};
+        if (m_renderer->consumeMediaSettings(changedMediaSettings)) {
+            ::AcquireSRWLockExclusive(&m_mediaLock);
+            m_mediaSettings = changedMediaSettings;
+            ::ReleaseSRWLockExclusive(&m_mediaLock);
+            queueMediaSettingsChanged(changedMediaSettings);
+        }
+        // None is the renderer's empty slot, not a transport command. Writing
+        // it every frame used to race the telemetry thread and overwrite a
+        // real Previous/Next/Toggle before that action reached the Controller.
+        const MediaAction mediaAction = m_renderer->consumeMediaAction();
+        if (mediaAction != MediaAction::None) queueMediaAction(mediaAction);
         if (m_renderer->consumeBedRescanRequest()) {
             m_bindings->requestBedRescan();
         }

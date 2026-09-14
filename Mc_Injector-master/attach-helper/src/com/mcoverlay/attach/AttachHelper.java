@@ -76,6 +76,14 @@ public final class AttachHelper {
         } catch (SecurityException exception) {
             error("permission denied while attaching to PID " + pid + ": " + messageOf(exception));
             return EXIT_SECURITY_FAILURE;
+        } catch (InternalError exception) {
+            // On Windows, HotSpot returns native Attach queue status 100 when
+            // its listener becomes unavailable between the probe and the load
+            // request. The JDK exposes that status as an Error (not a
+            // RuntimeException), so letting it escape prints a raw stack trace
+            // and prevents the controller from using its validated fallback.
+            error("target JVM rejected the attach handshake: " + messageOf(exception));
+            return EXIT_ATTACH_NOT_SUPPORTED;
         } catch (RuntimeException exception) {
             error("unexpected attach failure (" + exception.getClass().getSimpleName() + "): "
                     + messageOf(exception));
@@ -101,6 +109,15 @@ public final class AttachHelper {
             error("permission denied while loading the agent into PID " + pid + ": "
                     + messageOf(exception));
             result = EXIT_SECURITY_FAILURE;
+        } catch (InternalError exception) {
+            // VirtualMachineImpl.enqueue reports Windows Attach queue failures
+            // such as ATTACH_ERROR_DISABLED (100) as InternalError. Classify
+            // that as a load compatibility failure so the controller can
+            // continue through McOverlayNativeLoader instead of terminating
+            // with an uncaught Error and a misleading Agent result.
+            error("the target JVM rejected the agent-load command for PID " + pid + ": "
+                    + messageOf(exception));
+            result = EXIT_AGENT_LOAD_FAILURE;
         } catch (RuntimeException exception) {
             error("unexpected agent-load failure (" + exception.getClass().getSimpleName() + "): "
                     + messageOf(exception));
