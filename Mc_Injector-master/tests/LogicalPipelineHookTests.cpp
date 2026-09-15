@@ -416,11 +416,12 @@ int main(int argc, char** argv)
           "FreeLook redirects all four renderer orientation reads only");
     env->CallVoidMethod(freeLookTerrain,setupTerrain,freeLookEntity,0.0,
                         nullptr,0,JNI_FALSE);
+    const bool terrainCallOk=!env->ExceptionCheck();
     const jfloat terrainYaw=env->GetFloatField(
         freeLookTerrain,observedTerrain[0]);
     const jfloat terrainPitch=env->GetFloatField(
         freeLookTerrain,observedTerrain[1]);
-    check(!env->ExceptionCheck()&&state.cameraReads[0]==2&&
+    check(terrainCallOk&&!env->ExceptionCheck()&&state.cameraReads[0]==2&&
           state.cameraReads[1]==2&&
           std::abs(terrainYaw-state.cameraAngles[0])<0.001F&&
           std::abs(terrainPitch-state.cameraAngles[1])<0.001F,
