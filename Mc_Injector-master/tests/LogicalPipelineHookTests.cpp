@@ -94,10 +94,12 @@ struct State final {
         if (state.movementApplied)
             env->SetFloatField(fixture, state.yaw, state.originalYaw);
         state.movementApplied = false;
+        state.controller.endMovementPhase(state.minecraftTick);
     }
     static bool arbitrateSprint(void* owner,JNIEnv*,jobject,
                                 const bool requested) noexcept {
-        return static_cast<State*>(owner)->controller.arbitrateSprint(requested);
+        auto& state=*static_cast<State*>(owner);
+        return state.controller.arbitrateSprint(requested,state.minecraftTick);
     }
     static void beginJump(void* owner,JNIEnv* env,jobject fixture) noexcept {
         auto& state=*static_cast<State*>(owner);
@@ -128,8 +130,10 @@ struct State final {
         state.controller.observeCameraInput({0,0},state.cameraBlock,-1,left,state.minecraftTick);
         if(state.controller.routeManualInput(left)) return !state.controller.manualBlockInputAllowed();
         if(!state.controller.active()) return false;
-        const auto command = entry == mcoverlay::LiveInteractionTransform::Entry::Click
-            ? state.controller.click() : state.controller.held(down);
+        state.controller.beginInteractionPre(state.minecraftTick);
+        auto command=state.controller.clickAtInteractionPre(state.minecraftTick);
+        if(command.kind==mcoverlay::silent::InteractionCommandKind::None)
+            command=state.controller.held(down);
         env->SetIntField(fixture, state.command,
                          static_cast<jint>(command.kind));
         if (state.finishBlockOnContinue && command.kind ==
@@ -460,6 +464,11 @@ int main(int argc, char** argv)
 
     env->SetFloatField(fixture, state.yaw, 0.0F);
     env->SetBooleanField(fixture,state.sprinting,JNI_TRUE);
+    env->CallVoidMethod(fixture,setSprinting,JNI_TRUE);
+    check(!env->ExceptionCheck()&&
+          env->GetBooleanField(fixture,state.sprinting)==JNI_TRUE,
+          "pre-consumer setSprinting records intent without freezing stale movement");
+    env->SetBooleanField(fixture,state.sprinting,JNI_TRUE);
     env->CallVoidMethod(fixture, move, 0.0F, 1.0F, 0.91F);
     check(!env->ExceptionCheck(), "transformed moveFlying leaves no exception");
     check(std::abs(env->GetFloatField(fixture, observedYaw) + 90.0F) < 0.01F,
@@ -517,13 +526,17 @@ int main(int argc, char** argv)
     env->CallVoidMethod(fixture,queuePacket,fixture);
     check(!env->ExceptionCheck()&&state.serializedPackets>0,
           "attack transaction publishes rotation through the packet hook first");
+    state.controller.endMovementPhase(state.minecraftTick);
+    check(state.controller.clickAtInteractionPre(state.minecraftTick).kind==
+              mcoverlay::silent::InteractionCommandKind::None,
+          "POST-stage consumer cannot dispatch a prepared attack transaction");
     env->CallVoidMethod(fixture, click);
     check(!env->ExceptionCheck(), "transformed click leaves no exception");
     check(env->GetIntField(fixture, vanillaClicks) == 0,
           "vanilla click body is suppressed by the sole interaction owner");
     check(env->GetIntField(fixture, state.command) ==
               static_cast<jint>(mcoverlay::silent::InteractionCommandKind::AttackEntity),
-          "logical entity hit becomes the emitted attack command");
+          "stable transformed PRE boundary emits the published attack transaction");
     env->CallVoidMethod(fixture, held, JNI_TRUE);
     check(!env->ExceptionCheck(), "same-tick held entry leaves no exception");
     check(env->GetIntField(fixture, state.command) ==

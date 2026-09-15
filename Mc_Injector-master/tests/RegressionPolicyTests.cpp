@@ -3,6 +3,9 @@
 #include "../src/ApiKeyFormat.h"
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 int main()
 {
@@ -25,6 +28,19 @@ int main()
     check(normalizeHypixelApiKey("a\r\nAPI-Key: bad").isEmpty(), "reject header injection");
     check(normalizeHypixelApiKey(QString(8193, 'x')).isEmpty(), "bounded credential input");
     check(normalizeHypixelApiKey(QString::fromUtf8("错误key")).isEmpty(), "reject accidental Unicode paste");
+
+    std::ifstream bindings(std::string(MC_TEST_PROJECT_SOURCE_DIR)+
+        "/agent/bindings/GameBindings.cpp",std::ios::binary);
+    const std::string bindingSource((std::istreambuf_iterator<char>(bindings)),{});
+    const std::size_t interaction=bindingSource.find(
+        "bool GameBindings::executeLogicalInteraction");
+    const std::size_t swing=bindingSource.find(
+        "CallVoidMethod(player,c->swingItem)",interaction);
+    const std::size_t attack=bindingSource.find(
+        "CallVoidMethod(controller,c->attackEntity,player,target)",interaction);
+    check(interaction!=std::string::npos&&swing!=std::string::npos&&
+          attack!=std::string::npos&&swing<attack,
+          "synthetic attack transaction preserves vanilla swing-before-attack order");
 
     // Box collision oracle: one 1x1 cube under a standard 0.6m player body.
     // Sweep all four cardinal directions and both positive/negative corners.

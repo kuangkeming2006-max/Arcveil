@@ -8,6 +8,7 @@
 #include "gaussian_blur.h"
 
 #include <windows.h>
+#include <imm.h>
 
 #include <atomic>
 #include <array>
@@ -19,6 +20,32 @@ struct ImFont;
 namespace mcoverlay {
 
 struct OverlayInputState;
+
+enum class ImeMessageAction : std::uint8_t {
+    Ignore,
+    ResetLayout,
+    ResetComposition,
+    QueryComposition
+};
+
+[[nodiscard]] constexpr ImeMessageAction classifyImeMessage(
+    const UINT message,const WPARAM wParam,const bool fullscreenImeEnabled) noexcept
+{
+    // WM_INPUTLANGCHANGE is delivered while the window's HIMC is changing.
+    // It is a layout/name reset boundary even when the fullscreen overlay is
+    // disabled, never a safe point at which to probe composition state.
+    if(message==WM_INPUTLANGCHANGE) return ImeMessageAction::ResetLayout;
+    if(!fullscreenImeEnabled) return ImeMessageAction::Ignore;
+    if(message==WM_IME_ENDCOMPOSITION)
+        return ImeMessageAction::ResetComposition;
+    if(message==WM_IME_STARTCOMPOSITION||message==WM_IME_COMPOSITION)
+        return ImeMessageAction::QueryComposition;
+    if(message==WM_IME_NOTIFY&&
+       (wParam==IMN_OPENCANDIDATE||wParam==IMN_CHANGECANDIDATE||
+        wParam==IMN_CLOSECANDIDATE))
+        return ImeMessageAction::QueryComposition;
+    return ImeMessageAction::Ignore;
+}
 
 struct FeatureSettings final {
     static constexpr std::size_t FeatureHotkeyCount = 18U;
@@ -84,6 +111,7 @@ struct FeatureSettings final {
     bool fireballEspFilled = true;
     bool longJumpEnabled = false;
     bool freeLookEnabled = false;
+    bool smartHotbarEnabled = false;
     // High-risk movement helpers fail closed on Hypixel. This explicit,
     // persisted opt-in is intentionally separate from each feature switch so
     // an accidental hotkey press can never silently override the server guard.
@@ -150,6 +178,9 @@ struct FeatureSettings final {
     // Page master hotkeys in navigation order, excluding Interface. Zero is
     // deliberately "Unbound"; configured keys are persisted by Controller.
     std::array<int, FeatureHotkeyCount> featureHotkeys{};
+    // Each logical Minecraft hotbar binding can become a category shortcut:
+    // 0=None, 1=Sword, 2=Blocks. The physical key remains owned by Minecraft.
+    std::array<int, 9U> smartHotbarActions{};
 
     [[nodiscard]] bool operator==(const FeatureSettings&) const noexcept = default;
 };
@@ -370,7 +401,7 @@ private:
     std::array<char, 81U> m_blacklistSearch{};
     std::array<char, 50U> m_blacklistDeleteKey{};
     SmoothScroll m_navigationScroll;
-    std::array<SmoothScroll, 23U> m_settingsScroll{};
+    std::array<SmoothScroll, 24U> m_settingsScroll{};
     SmoothScroll m_blacklistScroll;
     bool m_blacklistActionDirty = false;
     bool m_featureSettingsDirty = false;
@@ -500,8 +531,8 @@ private:
     std::array<bool, FeatureSettings::FeatureHotkeyCount> m_featureHotkeyWasDown{};
     std::array<float, 19U> m_textGuiModuleProgress{};
     std::array<float, 19U> m_textGuiModuleVelocity{};
-    std::array<std::array<float, 32U>, 19U> m_textGuiGlyphBrightness{};
-    std::array<std::array<float, 32U>, 19U> m_textGuiGlyphTargets{};
+    std::array<std::array<float, 32U>, 20U> m_textGuiGlyphBrightness{};
+    std::array<std::array<float, 32U>, 20U> m_textGuiGlyphTargets{};
     std::uint64_t m_textGuiNextShuffleTick = 0U;
     bool m_textGuiGlyphsInitialized = false;
     bool m_scaffoldBlockedNoticeShown = false;

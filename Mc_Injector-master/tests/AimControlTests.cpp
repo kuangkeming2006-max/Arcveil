@@ -1,5 +1,6 @@
 #include "../agent/bindings/AimControl.h"
 #include "../agent/bindings/SilentLockCoordinator.h"
+#include "../agent/bindings/SmartHotbarPolicy.h"
 #include <cstdio>
 #include <cmath>
 
@@ -14,12 +15,16 @@ int main()
         using mcoverlay::silent::RuntimeCapabilities;
         constexpr RuntimeCapabilities noOptionalHooks{true,true,false,false};
         static_assert(noOptionalHooks.logicalOutputReady());
-        static_assert(noOptionalHooks.attackSchedulerReady());
+        static_assert(!noOptionalHooks.attackSchedulerReady());
         static_assert(!noOptionalHooks.heldArbitrationReady());
         static_assert(!noOptionalHooks.ownershipArbitrationReady());
         check(noOptionalHooks.logicalOutputReady()&&
-              noOptionalHooks.attackSchedulerReady(),
-              "optional Java call-site hooks cannot disable core Silent Lock");
+              !noOptionalHooks.attackSchedulerReady(),
+              "rotation remains available but render update cannot dispatch attacks");
+        constexpr RuntimeCapabilities stablePreBoundary{true,true,true,false};
+        check(stablePreBoundary.attackSchedulerReady()&&
+              stablePreBoundary.heldArbitrationReady(),
+              "attack scheduling requires the transformed input PRE boundary");
         constexpr RuntimeCapabilities missingAttackBindings{true,false,true,true};
         check(missingAttackBindings.logicalOutputReady()&&
               !missingAttackBindings.attackSchedulerReady(),
@@ -273,7 +278,13 @@ int main()
         const auto click=controller.click();
         check(click.kind==InteractionCommandKind::AttackEntity&&click.entityId==42,
               "published logical ray decides authoritative entity interaction");
+        check(controller.latest().committedAttackTargetId==42&&
+              controller.latest().requiredAttackRotationEpoch==click.rotationEpoch,
+              "target and published rotation stay frozen through final dispatch");
         controller.attackDispatched(click,true);
+        check(controller.latest().committedAttackTargetId<0&&
+              controller.latest().requiredAttackRotationEpoch==0U,
+              "completed dispatch releases the attack transaction");
         controller.updateAttackClock(true,true,1100000U,10);
         input.tick=1002;
         (void)controller.advance(input,clearTrace);
@@ -470,6 +481,65 @@ int main()
         using namespace mcoverlay::silent;
         LogicalStateController controller;
         controller.reset({0,0});
+        const TargetCandidate targetA{98,0x98U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        const TargetCandidate targetB{99,0x99U,{2.0,1.62,0.0},
+            {1.7,0.0,-0.3,2.3,1.9,0.3},true};
+        LogicalFrameInput input{};
+        input.tick=3000;input.physicsTick=44;input.worldGeneration=13;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.leftMouseDown=true;input.mode=Mode::LockOn;
+        input.maximumDistance=6;input.fovDegrees=360;
+        input.camera={0,0};input.eye={0,1.62,0};input.candidates={&targetA,1};
+        const auto clearTrace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        (void)controller.advance(input,clearTrace);
+        controller.updateAttackClock(true,true,3000000U,10);
+        input.tick=3001;
+        const auto bound=controller.advance(input,clearTrace);
+        const auto rotationR0=controller.packetPlan(false,false);
+        check(bound.candidateTargetId==98&&
+              rotationR0.mutation==PacketMutation::InjectRotation,
+              "attack transaction binds target A and rotation R0");
+        check(controller.click().kind==InteractionCommandKind::None,
+              "bound attack waits until its exact rotation is published");
+
+        input.candidates={&targetB,1};
+        bool pinned=true;
+        for(int frame=0;frame<5;++frame) {
+            input.tick=3002+static_cast<std::uint64_t>(frame);
+            const auto waiting=controller.advance(input,clearTrace);
+            const auto packet=controller.packetPlan(false,false);
+            pinned=pinned&&waiting.candidateTargetId==98&&
+                std::abs(wrap(packet.rotation.yaw-rotationR0.rotation.yaw))<
+                    0.0005&&
+                std::abs(packet.rotation.pitch-rotationR0.rotation.pitch)<0.0005&&
+                controller.click().kind==InteractionCommandKind::None;
+        }
+        check(pinned,
+              "pending transaction cannot drift from A/R0 to newer AimAssist rotations");
+        const auto publishedR0=controller.packetPlan(false,false);
+        controller.acknowledgePacket(publishedR0.rotation,PacketKind::Ground,
+                                     PacketKind::Look,false,true);
+        const auto attackA=controller.click();
+        check(attackA.kind==InteractionCommandKind::AttackEntity&&
+              attackA.entityId==98,
+              "publishing R0 releases exactly the target A attack");
+
+        controller.updateAttackClock(true,true,3100000U,10);
+        input.tick=3010;
+        const auto next=controller.advance(input,clearTrace);
+        const auto rotationR1=controller.packetPlan(false,false);
+        check(next.candidateTargetId==99&&
+              std::abs(wrap(rotationR1.rotation.yaw-
+                            rotationR0.rotation.yaw))>1.0,
+              "next attack recalculates a fresh target B and rotation R1");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
         const TargetCandidate target{93,0x93U,{0,1.62,2.0},
             {-0.3,0.0,1.7,0.3,1.9,2.3},true};
         LogicalFrameInput input{};
@@ -558,16 +628,57 @@ int main()
         check(controller.advance(input,trace).silentActive,
               "held left mouse grants SilentCombat rotation ownership");
         controller.updateAttackClock(true,true,5000000U,10);
+        input.tick=5001;
+        (void)controller.advance(input,trace);
+        check(controller.click().kind==InteractionCommandKind::None,
+              "bound transaction remains pending before rotation publish");
         controller.observeCameraInput({0,0},{},-1,false,50);
         check(!controller.active()&&
               controller.click().kind==InteractionCommandKind::None,
               "physical release entry cancels SilentCombat before the next frame");
-        input.leftMouseDown=false;input.tick=5001;
+        check(!controller.movementCommand(0,1,50).enabled&&
+              controller.arbitrateSprint(true),
+              "physical release returns movement and sprint to vanilla immediately");
+        input.leftMouseDown=false;input.tick=5002;
         const auto released=controller.advance(input,trace);
         controller.updateAttackClock(false,true,5001000U,10);
         check(!released.silentActive&&!controller.active()&&
               controller.latest().interactionOwner==InteractionOwner::None,
               "left-mouse release immediately returns every owner to Camera");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        const TargetCandidate target{95,0x95U,{0,1.62,2.0},
+            {-0.3,0.0,1.7,0.3,1.9,2.3},true};
+        LogicalFrameInput input{};
+        input.tick=5500;input.physicsTick=55;input.worldGeneration=8;
+        input.localEntityId=1;input.enabled=true;input.silent=true;
+        input.mode=Mode::LockOn;input.leftMouseDown=true;
+        input.maximumDistance=6;input.fovDegrees=90;
+        input.camera={0,0};input.eye={0,1.62,0};input.candidates={&target,1};
+        const auto trace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        (void)controller.advance(input,trace);
+        controller.updateAttackClock(true,true,5500000U,10);
+        input.tick=5501;
+        (void)controller.advance(input,trace);
+        const auto packet=controller.packetPlan(false,false);
+        if(packet.mutation==PacketMutation::InjectRotation)
+            controller.acknowledgePacket(packet.rotation,PacketKind::Ground,
+                                         PacketKind::Look,false,true);
+        controller.beginPhysicsTick(55);
+        controller.endMovementPhase(55);
+        check(controller.clickAtInteractionPre(55).kind==
+                  InteractionCommandKind::None,
+              "rotation-ready attack remains pending after movement POST");
+        controller.beginInteractionPre(55);
+        const auto attack=controller.clickAtInteractionPre(55);
+        check(attack.kind==InteractionCommandKind::AttackEntity&&
+              attack.entityId==95,
+              "pending transaction dispatches at the next stable PRE boundary");
     }
     {
         using namespace mcoverlay::silent;
@@ -596,12 +707,40 @@ int main()
               "sprint arbitration treats Lunar true as intent without manufacturing it");
         input.tick=6001;input.physicsTick=61;input.candidates={&sideTarget,1};
         (void)controller.advance(input,trace);
-        (void)controller.movementCommand(0,1,61);
-        check(!controller.arbitrateSprint(true),
-              "held SilentCombat vetoes sprint for an incompatible logical direction");
+        check(controller.arbitrateSprint(true,61),
+              "pre-consumer setSprinting records intent without reading stale axes");
+        const auto remapped=controller.movementCommand(0,1,61);
+        check(!remapped.sprinting&&!controller.arbitrateSprint(true,61),
+              "current movement snapshot commits the immutable sprint veto");
+        input.tick=6002;input.physicsTick=62;input.candidates={&forwardTarget,1};
+        (void)controller.advance(input,trace);
+        (void)controller.movementCommand(0,1,62);
+        check(!controller.arbitrateSprint(true,62),
+              "incompatible sprint suppression remains latched while LMB is held");
         controller.observeCameraInput({0,0},{},-1,false,61);
         check(controller.arbitrateSprint(true),
               "mouse release returns sprint arbitration to vanilla immediately");
+    }
+    {
+        using namespace mcoverlay::hotbar;
+        std::array<int,SlotCount> actions{};
+        actions[0]=static_cast<int>(Action::Sword);
+        actions[3]=static_cast<int>(Action::Blocks);
+        const std::uint32_t packed=pack(true,actions);
+        check(validPacked(packed)&&enabled(packed)&&unpack(packed)==actions,
+              "smart hotbar configuration has an exact bounded roundtrip");
+        check(!validPacked(packed|(3U<<(1U+2U*2U))),
+              "smart hotbar rejects reserved action values");
+        std::array<ItemKind,36U> inventory{};
+        inventory[7]=ItemKind::Sword;
+        inventory[18]=ItemKind::Blocks;
+        check(selectSource(inventory,2,static_cast<int>(Action::Sword))==7,
+              "smart hotbar prefers a matching hotbar item without swapping");
+        check(selectSource(inventory,2,static_cast<int>(Action::Blocks))==18,
+              "smart hotbar falls back to a matching main-inventory stack");
+        inventory[2]=ItemKind::Sword;
+        check(selectSource(inventory,2,static_cast<int>(Action::Sword))==2,
+              "smart hotbar keeps an already-held matching item selected");
     }
     {
         using namespace mcoverlay::silent;

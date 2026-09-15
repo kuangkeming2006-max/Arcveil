@@ -125,6 +125,8 @@ struct MappingDictionary final {
     std::string serverDataSignature;
     std::string itemBlockName;
     std::string itemBlockSignature;
+    std::string itemSwordName;
+    std::string itemSwordSignature;
     std::string enumFacingName;
     std::string enumFacingSignature;
     std::string vec3Name;
@@ -272,6 +274,7 @@ struct MappingDictionary final {
     std::string guiScreenSignature;
     std::string getCollidingBoundingBoxes;
     std::string keyBindSneakField;
+    std::string keyBindsHotbarField;
     std::array<std::string, 5U> movementKeyFields;
     std::string getKeyCode;
     std::string setKeyBindState;
@@ -292,6 +295,7 @@ struct MappingDictionary final {
     std::string serverIpField;
     std::string playerControllerField;
     std::string attackEntity;
+    std::string windowClick;
     std::string currentItemField;
     std::string mainInventoryField;
     std::string getBlockFromItem;

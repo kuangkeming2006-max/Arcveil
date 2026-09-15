@@ -44,6 +44,10 @@ unlink or conceal the module.
 - **Silent Control Adaptation** optionally aligns movement, jump and sprint
   arbitration with the same committed logical yaw while keeping the core
   Silent Lock attack clock independent.
+- **Smart Hotbar** lets each logical hotbar slot select a sword or blocks from
+  the hotbar/main inventory. Triggers follow Minecraft's own remapped hotbar
+  bindings, including keyboard and mouse bindings, rather than hard-coded
+  number keys.
 - **Bed Breaker** for local/test environments and configurable local velocity
   response controls.
 

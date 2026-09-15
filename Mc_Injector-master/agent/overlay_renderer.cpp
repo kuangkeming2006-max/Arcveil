@@ -193,6 +193,7 @@ void appendTransientSoftBlur(ImDrawList* const drawList,const float amount,
 void beginSmoothChild(const char* id, ImVec2 size, SmoothScroll& scroll,
                       float delta, ImGuiWindowFlags extra = 0) noexcept
 {
+    static_cast<void>(delta);
     // Apply before BeginChild so content, clipping and hit testing share the
     // same scroll origin. Never transform text vertices after layout to fake it.
     if (scroll.initialized) ImGui::SetNextWindowScroll(ImVec2(-1.0F, scroll.current));
@@ -212,6 +213,10 @@ void beginSmoothChild(const char* id, ImVec2 size, SmoothScroll& scroll,
     ImGui::BeginChild(id, size, false,
                       extra | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleColor(4);
+}
+
+void endSmoothChild(SmoothScroll& scroll,const float delta) noexcept
+{
     const ImGuiIO& io = ImGui::GetIO();
     // Nested Aim Assist/Blacklist children are deliberately non-scrolling;
     // route their wheel input to this owning page instead of dropping it.
@@ -227,8 +232,23 @@ void beginSmoothChild(const char* id, ImVec2 size, SmoothScroll& scroll,
     ImGuiWindow* const scrollWindow=ImGui::GetCurrentWindow();
     const bool scrollbarDragging=scrollWindow!=nullptr && scrollWindow->ScrollbarY &&
         ImGui::GetActiveID()==ImGui::GetWindowScrollbarID(scrollWindow,ImGuiAxis_Y);
-    scroll.update(actualScroll, ImGui::GetScrollMaxY(), wheel,
+    // CursorMaxPos contains this frame's completed layout whereas ContentSize
+    // and ScrollMax.y still describe the previous Begin().  Taking the larger
+    // of old and new heights keeps a collapsing bottom card artificially tall
+    // for one frame, then drops the scroll limit in a single step.  Use only
+    // the completed current-frame layout so SmoothScroll can follow every
+    // accordion-height delta continuously.
+    const float liveContentHeight=scrollWindow!=nullptr
+        ? std::max(0.0F,scrollWindow->DC.CursorMaxPos.y-
+            scrollWindow->DC.CursorStartPos.y)
+        : 0.0F;
+    const float liveMaximum=scrollWindow!=nullptr
+        ? std::max(0.0F,liveContentHeight+
+            scrollWindow->WindowPadding.y*2.0F-scrollWindow->InnerRect.GetHeight())
+        : ImGui::GetScrollMaxY();
+    scroll.update(actualScroll,liveMaximum,wheel,
                   ImGui::GetFontSize(), delta, scrollbarDragging);
+    ImGui::EndChild();
 }
 
 UINT imeShutdownMessage() noexcept
@@ -247,9 +267,27 @@ void stopTsf(HWND window, OverlayInputState* input) noexcept
         SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, &result);
 }
 
-void updateImeState(OverlayInputState& input, const HWND window,
-                    const UINT message, const LPARAM lParam) noexcept
+void clearImeComposition(OverlayInputState& input) noexcept
 {
+    ::AcquireSRWLockExclusive(&input.imeLock);
+    input.imeComposition={};
+    input.imeCandidates={};
+    input.imeCandidateCount=0U;
+    input.imeCandidateSelection=0U;
+    input.imeComposing=false;
+    ::ReleaseSRWLockExclusive(&input.imeLock);
+    input.imeRevision.fetch_add(1U,std::memory_order_release);
+    input.composingInput.store(false,std::memory_order_release);
+}
+
+void updateImeState(OverlayInputState& input, const HWND window,
+                    const ImeMessageAction action,const LPARAM lParam) noexcept
+{
+    if(action==ImeMessageAction::Ignore) return;
+    if(action==ImeMessageAction::ResetComposition) {
+        clearImeComposition(input);
+        return;
+    }
     std::array<wchar_t, 80U> name{};
     std::array<wchar_t, 128U> composition{};
     std::array<std::array<wchar_t, 64U>, 9U> candidates{};
@@ -259,7 +297,7 @@ void updateImeState(OverlayInputState& input, const HWND window,
 
     DWORD processId = 0U;
     const DWORD threadId = ::GetWindowThreadProcessId(window, &processId);
-    const HKL layout = message == WM_INPUTLANGCHANGE
+    const HKL layout = action == ImeMessageAction::ResetLayout
         ? reinterpret_cast<HKL>(lParam) : ::GetKeyboardLayout(threadId);
     if (layout != nullptr) {
         const UINT described = ::ImmGetDescriptionW(
@@ -272,9 +310,12 @@ void updateImeState(OverlayInputState& input, const HWND window,
         }
     }
 
-    const bool clearComposition = message == WM_IME_ENDCOMPOSITION;
-    HIMC const ime = ::ImmGetContext(window);
-    if (ime != nullptr && !clearComposition) {
+    // Layout changes are reset-only. The original WndProc has not completed
+    // its input-context transition yet, so touching HIMC here can observe or
+    // retain the old composition/candidate list.
+    HIMC const ime = action==ImeMessageAction::QueryComposition
+        ? ::ImmGetContext(window) : nullptr;
+    if (ime != nullptr) {
         const LONG bytes = ::ImmGetCompositionStringW(
             ime, GCS_COMPSTR, composition.data(),
             static_cast<DWORD>((composition.size() - 1U) * sizeof(wchar_t)));
@@ -324,8 +365,6 @@ void updateImeState(OverlayInputState& input, const HWND window,
                 composing = composing || candidateCount != 0U;
             }
         }
-        ::ImmReleaseContext(window, ime);
-    } else if (ime != nullptr) {
         ::ImmReleaseContext(window, ime);
     }
 
@@ -1584,6 +1623,8 @@ void OverlayRenderer::enqueueFeatureToasts(const FeatureSettings& before,
         enqueueToast("Local Velocity", after.localVelocityEnabled);
     if (before.freeLookEnabled != after.freeLookEnabled)
         enqueueToast("FreeLook", after.freeLookEnabled);
+    if(before.smartHotbarEnabled!=after.smartHotbarEnabled)
+        enqueueToast("Smart Hotbar",after.smartHotbarEnabled);
     if (before.fullscreenImeFixEnabled != after.fullscreenImeFixEnabled)
         enqueueToast("Fullscreen IME", after.fullscreenImeFixEnabled);
 }
@@ -2057,7 +2098,7 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
 
     m_inputState->imguiContext.store(m_imguiContext, std::memory_order_release);
     m_inputState->window.store(window, std::memory_order_release);
-    updateImeState(*m_inputState, window, WM_INPUTLANGCHANGE,
+    updateImeState(*m_inputState, window, ImeMessageAction::ResetLayout,
         reinterpret_cast<LPARAM>(::GetKeyboardLayout(
             ::GetWindowThreadProcessId(window, nullptr))));
     m_inputState->acceptImGuiMessages.store(true, std::memory_order_release);
@@ -3155,8 +3196,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
         return false;
     }
     m_inputState->interactive.store(interactive, std::memory_order_release);
-    m_inputState->imeEnabled.store(m_features.fullscreenImeFixEnabled,
-                                    std::memory_order_release);
+    const bool imeWasEnabled=m_inputState->imeEnabled.exchange(
+        m_features.fullscreenImeFixEnabled,std::memory_order_acq_rel);
+    if(imeWasEnabled&&!m_features.fullscreenImeFixEnabled)
+        clearImeComposition(*m_inputState);
     if (!interactive) {
         if (m_imePositionEditing) m_featureSettingsDirty = true;
         m_imePositionEditing = m_imeDragging = false;
@@ -4395,6 +4438,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 case 20: return m_features.bedBreakerEnabled;
                 case 21: return m_features.localVelocityEnabled;
                 case 22: return m_features.freeLookEnabled;
+                case 23: return m_features.smartHotbarEnabled;
                 default: return false;
                 }
             };
@@ -4479,7 +4523,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             ImGui::SetCursorScreenPos(ImVec2(navOrigin.x,
                 navOrigin.y+(contentY+7.0F)*uiScale));
             ImGui::Dummy(ImVec2(1.0F,1.0F));
-            ImGui::EndChild();
+            endSmoothChild(m_navigationScroll,delta);
             ImGui::PopStyleVar();
 
             // Bottom-left sun/moon control is vector drawn, so it remains crisp
@@ -4514,13 +4558,14 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     5.7F * uiScale, fadedGuiColor(guiRail), 24);
             }
 
-            constexpr std::array<const char*, 23U> pageTitles{{
+            constexpr std::array<const char*, 24U> pageTitles{{
                 "Player ESP", "Bed ESP", "Nametags", "Bed Alerts",
                 "SafeWalk", "Scaffold", "Flight", "Bunny Hop", "Aim Assist",
                 "Player Stats", "Diagnostics", "Blacklist", "Module List", "Interface",
                 "Fireball ESP", "", "Trajectories", "",
-                "Input Method", "Now Playing", "Bed Breaker", "Velocity", "FreeLook"}};
-            constexpr std::array<const char*, 23U> pageDescriptions{{
+                "Input Method", "Now Playing", "Bed Breaker", "Velocity", "FreeLook",
+                "Smart Hotbar"}};
+            constexpr std::array<const char*, 24U> pageDescriptions{{
                 "Player outlines and teammate presentation",
                 "Bed geometry and defense material card",
                 "Confirmed-player identity and live health cards",
@@ -4543,8 +4588,9 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 "Windows media transport, artwork and playback controls",
                 "Visible local-world bed path and automatic tool selection",
                 "Probability and independent horizontal/vertical knockback response",
-                "Hold-to-look camera orbit without rotating your player"}};
-            const int page = std::clamp(m_clickGuiPage, 0, 22);
+                "Hold-to-look camera orbit without rotating your player",
+                "Category shortcuts that follow Minecraft's own hotbar bindings"}};
+            const int page = std::clamp(m_clickGuiPage, 0, 23);
             const float contentX = windowPosition.x + (baseRailWidth + 22.0F) * uiScale;
             windowDraw->AddText(boldFont, ImGui::GetFontSize() * 1.16F,
                 ImVec2(contentX, windowPosition.y + 17.0F * uiScale),
@@ -4602,6 +4648,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
                      pageMasterAnimation = &m_toggleAnimation[50]; break;
             case 22: pageMaster = &m_features.freeLookEnabled;
                      pageMasterAnimation = &m_toggleAnimation[54]; break;
+            case 23: pageMaster=&m_features.smartHotbarEnabled;
+                     pageMasterAnimation=&m_toggleAnimation[55]; break;
             default: break;
             }
             if (pageMaster != nullptr && pageMasterAnimation != nullptr) {
@@ -4932,16 +4980,6 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 const auto collapsible=[&](const std::size_t index,
                     const char* id,const char* title,const char* summary,
                     const float fallbackBodyHeight,auto&& body) noexcept {
-                    // Keep a finite, reversible animation phase.  The previous
-                    // exponential response approached zero asymptotically and
-                    // then snapped its final layout item away; cards below it
-                    // visibly paused for a frame at the end of a collapse.
-                    const float direction=m_aimSectionOpen[index]?1.0F:-1.0F;
-                    m_aimSectionProgress[index]=CollapsibleMotion::advance(
-                        m_aimSectionProgress[index],m_aimSectionOpen[index],delta);
-                    m_aimSectionVelocity[index]=direction/
-                        CollapsibleMotion::DurationSeconds;
-
                     const float bodyGap=8.0F*uiScale;
                     const float bodyPaddingX=19.0F*uiScale;
                     const float bodyPaddingY=13.0F*uiScale;
@@ -4950,13 +4988,6 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         ? m_aimSectionBodyHeight[index]*uiScale
                         : (fallbackBodyHeight+20.0F)*uiScale;
                     const float fullBodyHeight=std::max(36.0F*uiScale,storedBodyHeight);
-                    const float phase=std::clamp(
-                        m_aimSectionProgress[index],0.0F,1.0F);
-                    // Smoothstep reaches both endpoints exactly because phase
-                    // itself is time-bounded.  Geometry, opacity and the cards
-                    // below therefore consume one shared continuous progress.
-                    const float progress=CollapsibleMotion::eased(phase);
-
                     const ImVec2 headerMin=ImGui::GetCursorScreenPos();
                     const float headerWidth=ImGui::GetContentRegionAvail().x;
                     const ImVec2 headerSize(headerWidth,52.0F*uiScale);
@@ -4966,6 +4997,17 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     const bool hovered=ImGui::IsItemHovered();
                     if(ImGui::IsItemClicked())
                         m_aimSectionOpen[index]=!m_aimSectionOpen[index];
+                    // Apply the click before advancing. Otherwise the click
+                    // frame repeats the fully-open layout and collapse appears
+                    // to hitch before its first visible step.
+                    const float direction=m_aimSectionOpen[index]?1.0F:-1.0F;
+                    m_aimSectionProgress[index]=CollapsibleMotion::advance(
+                        m_aimSectionProgress[index],m_aimSectionOpen[index],delta);
+                    m_aimSectionVelocity[index]=direction/
+                        CollapsibleMotion::DurationSeconds;
+                    const float phase=std::clamp(
+                        m_aimSectionProgress[index],0.0F,1.0F);
+                    const float progress=CollapsibleMotion::eased(phase);
                     // InvisibleButton is a normal ImGui item and therefore adds
                     // ItemSpacing.y. The accordion owns its vertical geometry,
                     // so remove that hidden fixed gap before applying animation.
@@ -5018,9 +5060,12 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     draw->AddLine(b,c,ImGui::ColorConvertFloat4ToU32(guiMuted),
                         1.7F*uiScale);
 
-                    const float visibleBodyHeight=fullBodyHeight*progress;
-                    if(visibleBodyHeight>0.5F) {
-                        ImGui::SetCursorPosY(ImGui::GetCursorPosY()+bodyGap*progress);
+                    {
+                        ImGuiWindow* const parentWindow=ImGui::GetCurrentWindow();
+                        const float parentCursorMaxBefore=parentWindow->DC.CursorMaxPos.y;
+                        const ImVec2 bodyStart(headerMin.x,
+                            headerMin.y+headerSize.y+bodyGap);
+                        ImGui::SetCursorScreenPos(bodyStart);
                         // Parent ClickGUI alpha is applied once to the completed
                         // draw lists. This local alpha only represents accordion
                         // openness and therefore composes without overriding the
@@ -5030,15 +5075,22 @@ bool OverlayRenderer::render(HDC const deviceContext,
                             ImVec2(bodyPaddingX,bodyPaddingY));
                         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0,0,0,0));
                         if(progress<0.985F) ImGui::BeginDisabled();
-                        ImGui::BeginChild("##body",ImVec2(0.0F,visibleBodyHeight),
+                        ImGui::BeginChild("##body",ImVec2(0.0F,fullBodyHeight),
                             ImGuiChildFlags_AlwaysUseWindowPadding,
                             ImGuiWindowFlags_NoScrollbar|
-                            ImGuiWindowFlags_NoScrollWithMouse);
+                            ImGuiWindowFlags_NoScrollWithMouse|
+                            (progress<0.985F?ImGuiWindowFlags_NoInputs:0));
+                        ImDrawList* const bodyDraw=ImGui::GetWindowDrawList();
+                        bodyDraw->PushClipRect(
+                            ImVec2(headerMin.x,headerMin.y+headerSize.y),
+                            ImVec2(headerMin.x+headerSize.x,
+                                headerMin.y+headerSize.y+bodyVisible),true);
                         // Description strings are allowed to wrap within the
                         // padded body instead of overrunning the right border.
                         ImGui::PushTextWrapPos(0.0F);
                         body();
                         ImGui::PopTextWrapPos();
+                        bodyDraw->PopClipRect();
                         const float trailingSpacing=ImGui::GetStyle().ItemSpacing.y;
                         const float measuredPixels=std::max(36.0F*uiScale,
                             ImGui::GetCursorPosY()-trailingSpacing+bodyPaddingY);
@@ -5049,17 +5101,19 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         if(phase>=0.999F||m_aimSectionBodyHeight[index]<=1.0F)
                             m_aimSectionBodyHeight[index]=measuredPixels/
                                 std::max(0.01F,uiScale);
-                        ImDrawList* const bodyDraw=ImGui::GetWindowDrawList();
                         ImGui::EndChild();
                         if(spotlightEase>0.985F)
                             appendTransientSoftBlur(bodyDraw,1.0F-progress,uiScale);
                         if(progress<0.985F) ImGui::EndDisabled();
                         ImGui::PopStyleColor();
                         ImGui::PopStyleVar(2);
-                        // BeginChild is also a normal parent item. Remove its
-                        // implicit spacing so no fixed-height residue survives
-                        // while the animated body approaches zero.
-                        ImGui::SetCursorPosY(ImGui::GetCursorPosY()-parentItemSpacing);
+                        // The full-height body keeps its contents and text
+                        // metrics stable while clipping reveals them. Rebase
+                        // the parent layout to the exact shared animated edge
+                        // so ScrollMax and all following cards move continuously.
+                        parentWindow->DC.CursorMaxPos.y=std::max(
+                            parentCursorMaxBefore,outerMax.y);
+                        ImGui::SetCursorScreenPos(ImVec2(headerMin.x,outerMax.y));
                     }
                     ImGui::PopID();
                     // Dummy adds ItemSpacing itself; compensate so the gap
@@ -5532,6 +5586,52 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     "FreeLook temporarily switches to rear third-person view, keeps that perspective while held, then restores the exact previous camera perspective when released.");
                 ImGui::TextDisabled(
                     "The camera is limited to vanilla pitch bounds. Release the key before rebinding it.");
+            } else if(page==23) {
+                sectionTitle("CATEGORY SHORTCUTS");
+                ImGui::TextWrapped(
+                    "Assign a category to each logical hotbar slot. Arcveil reads Minecraft's live Hotbar 1-9 bindings, so a slot rebound to Q or a mouse button follows that binding automatically.");
+                ImGui::Spacing();
+                constexpr std::array<const char*,3U> actionLabels{{
+                    "Normal slot","Sword","Blocks"}};
+                const float gap=10.0F*uiScale;
+                const float available=ImGui::GetContentRegionAvail().x;
+                const float cardWidth=std::max(120.0F*uiScale,
+                    (available-gap*2.0F)/3.0F);
+                for(std::size_t slot=0;slot<m_features.smartHotbarActions.size();
+                    ++slot) {
+                    if(slot%3U!=0U) ImGui::SameLine(0.0F,gap);
+                    ImGui::PushID(static_cast<int>(slot));
+                    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,12.0F*uiScale);
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(14.0F*uiScale,12.0F*uiScale));
+                    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                        mixColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,0.095F),
+                                 ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,0.065F),theme));
+                    ImGui::BeginChild("##smartHotbarCard",
+                        ImVec2(cardWidth,94.0F*uiScale),true,
+                        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+                    ImGui::PushFont(boldFont);
+                    ImGui::Text("HOTBAR %u",static_cast<unsigned>(slot+1U));
+                    ImGui::PopFont();
+                    ImGui::TextDisabled("Minecraft binding");
+                    int& action=m_features.smartHotbarActions[slot];
+                    action=std::clamp(action,0,2);
+                    ImGui::SetNextItemWidth(-1.0F);
+                    if(ImGui::Combo("##category",&action,actionLabels.data(),
+                                    static_cast<int>(actionLabels.size())))
+                        changed=true;
+                    ImGui::EndChild();
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar(2);
+                    ImGui::PopID();
+                    if(slot%3U==2U&&slot+1U<m_features.smartHotbarActions.size())
+                        ImGui::Spacing();
+                }
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_TextDisabled,guiMuted);
+                ImGui::TextWrapped(
+                    "If the category is already in the hotbar it is selected directly. Otherwise the first matching main-inventory stack is swapped into the pressed logical slot.");
+                ImGui::PopStyleColor();
             } else {
                 sectionTitle("INTERFACE SIZE");
                 constexpr std::array<const char*, 4U> sizeLabels{"S", "M", "L", "XL"};
@@ -5588,7 +5688,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             // Preserve a full baseline below the final control so exact
             // bottom snapping never clips half of its label.
             ImGui::Dummy(ImVec2(1.0F,7.0F*uiScale));
-            ImGui::EndChild();
+            endSmoothChild(m_settingsScroll[static_cast<std::size_t>(page)],delta);
             ImGui::PopID();
             ImGui::PopStyleVar();
 
@@ -6050,7 +6150,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
         struct TextModule { const char* name; const char* mode; bool enabled; };
         const char* const aimMode=m_features.aimSilentLock ? "Silent Lock"
             : m_features.aimLockOnMode ? "Lock On" : "Smooth";
-        const std::array<TextModule, 19U> modules{{
+        const std::array<TextModule, 20U> modules{{
             {"Player ESP", "", m_features.entityEspEnabled},
             {"Bed ESP", "", m_features.bedEspEnabled},
             {"Nametag", "", m_features.nametagEnabled},
@@ -6060,6 +6160,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             {"Fly", "", m_features.flyEnabled},
             {"BHop", m_features.bhopAutoJump ? "Auto Jump" : "Manual", m_features.bhopEnabled},
             {"Aim Assist", aimMode, m_features.aimAssistEnabled},
+            {"Smart Hotbar", "Minecraft Keys", m_features.smartHotbarEnabled},
             {"Bed Breaker", "", m_features.bedBreakerEnabled},
             {"Player Stats", "", m_features.hypixelPanelEnabled},
             {"Debug", "", m_features.debugChatEnabled},
@@ -7191,7 +7292,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 }
                 ImGui::Dummy(ImVec2(1.0F,7.0F*uiScale));
                 entriesEnd = entriesDraw->VtxBuffer.Size;
-                ImGui::EndChild();
+                endSmoothChild(m_blacklistScroll,delta);
                 const ImVec2 addMin(minimum.x+content(12.0F),
                                     maximum.y-content(48.0F));
                 const ImVec2 addSize(width-content(44.0F),content(36.0F));
@@ -7301,11 +7402,10 @@ LRESULT OverlayRenderer::onWindowMessage(OverlayInputState& input,
     } else if (input.tsf) {
         input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire));
     }
-    if (message == WM_INPUTLANGCHANGE || message == WM_IME_STARTCOMPOSITION ||
-        message == WM_IME_COMPOSITION || message == WM_IME_ENDCOMPOSITION ||
-        message == WM_IME_NOTIFY) {
-        updateImeState(input, window, message, lParam);
-    }
+    const ImeMessageAction imeAction=classifyImeMessage(message,wParam,
+        input.imeEnabled.load(std::memory_order_acquire));
+    if(imeAction!=ImeMessageAction::Ignore)
+        updateImeState(input,window,imeAction,lParam);
     const bool firstKeyDown = (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) &&
                               (lParam & (1LL << 30)) == 0;
     if (firstKeyDown) {

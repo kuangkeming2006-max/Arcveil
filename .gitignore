@@ -1,6 +1,7 @@
 # Build, package and generated visual-regression output
 /build-*/
 /dist-*/
+/Arcveil/
 /render-*/
 *.zip
 *.user

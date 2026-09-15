@@ -150,6 +150,12 @@ int main()
         forgeCandidates.items[0]->packetPitchField == "field_149473_f" &&
         forgeCandidates.items[0]->packetRotatingField == "field_149481_i",
         "Forge silent output maps only the outgoing movement packet");
+    passed &= expect(forgeCandidates.items[0] &&
+        forgeCandidates.items[0]->keyBindsHotbarField == "field_151456_ac" &&
+        forgeCandidates.items[0]->windowClick == "func_78753_a" &&
+        forgeCandidates.items[0]->itemSwordName ==
+            "net.minecraft.item.ItemSword",
+        "Forge Smart Hotbar mappings use the 1.8.9 SRG inventory API");
 
     MappingRegistry lunarBuiltins;
     ClientEnvironment lunar;
@@ -232,6 +238,11 @@ int main()
                          lunarCandidates.items[0]->rotationPitchField == "z" &&
                          lunarCandidates.items[0]->isAirBlock == "d",
                      "verified 1.8.9 Notch Safewalk mappings");
+    passed &= expect(lunarCandidates.items[0] != nullptr &&
+                         lunarCandidates.items[0]->keyBindsHotbarField == "aw" &&
+                         lunarCandidates.items[0]->windowClick == "a" &&
+                         lunarCandidates.items[0]->itemSwordName == "aay",
+                     "verified 1.8.9 Notch Smart Hotbar mappings");
 
     MappingRegistry lunarNamedBuiltins;
     ClientEnvironment lunarNamed;
@@ -289,6 +300,12 @@ int main()
                              "setKeyBindState" &&
                          lunarNamedCandidates.items[0]->isAirBlock == "isAirBlock",
                      "Lunar named dictionary exposes optional Safewalk mappings");
+    passed &= expect(lunarNamedCandidates.items[0] != nullptr &&
+        lunarNamedCandidates.items[0]->keyBindsHotbarField == "keyBindsHotbar" &&
+        lunarNamedCandidates.items[0]->windowClick == "windowClick" &&
+        lunarNamedCandidates.items[0]->itemSwordName ==
+            "net.minecraft.item.ItemSword",
+        "Lunar named Smart Hotbar mappings stay namespace-correct");
     passed &= expect(lunarNamedCandidates.items[0] != nullptr &&
         lunarNamedCandidates.items[0]->attackEntity == "attackEntity" &&
         lunarNamedCandidates.items[0]->currentScreenField == "currentScreen" &&

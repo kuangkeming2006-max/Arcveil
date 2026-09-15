@@ -308,6 +308,7 @@ private:
     mapping.guiScreenSignature = "Lnet/minecraft/client/gui/GuiScreen;";
     mapping.getCollidingBoundingBoxes = "func_72945_a";
     mapping.keyBindSneakField = "field_74311_E";
+    mapping.keyBindsHotbarField = "field_151456_ac";
     mapping.movementKeyFields = {"field_74351_w", "field_74368_y",
                                  "field_74370_x", "field_74366_z",
                                  "field_74314_A"};
@@ -354,6 +355,7 @@ private:
     mapping.serverIpField = "field_78845_b";
     mapping.playerControllerField = "field_71442_b";
     mapping.attackEntity = "func_78764_a";
+    mapping.windowClick = "func_78753_a";
     mapping.currentItemField = "field_70461_c";
     mapping.mainInventoryField = "field_70462_a";
     mapping.getBlockFromItem = "func_179223_d";
@@ -387,6 +389,8 @@ private:
     mapping.itemSignature = "Lnet/minecraft/item/Item;";
     mapping.itemArmorName = "net.minecraft.item.ItemArmor";
     mapping.itemArmorSignature = "Lnet/minecraft/item/ItemArmor;";
+    mapping.itemSwordName = "net.minecraft.item.ItemSword";
+    mapping.itemSwordSignature = "Lnet/minecraft/item/ItemSword;";
     mapping.inventoryPlayerName = "net.minecraft.entity.player.InventoryPlayer";
     mapping.inventoryPlayerSignature = "Lnet/minecraft/entity/player/InventoryPlayer;";
     mapping.enchantmentHelperName = "net.minecraft.enchantment.EnchantmentHelper";
@@ -554,6 +558,7 @@ private:
     mapping.guiScreenSignature = "Laxu;";
     mapping.getCollidingBoundingBoxes = "a";
     mapping.keyBindSneakField = "ad";
+    mapping.keyBindsHotbarField = "aw";
     mapping.movementKeyFields = {"Y", "aa", "Z", "ab", "ac"};
     mapping.getKeyCode = "i";
     mapping.setKeyBindState = "a";
@@ -597,6 +602,7 @@ private:
     mapping.serverIpField = "b";
     mapping.playerControllerField = "c";
     mapping.attackEntity = "a";
+    mapping.windowClick = "a";
     mapping.currentItemField = "c";
     mapping.mainInventoryField = "a";
     mapping.getBlockFromItem = "d";
@@ -629,6 +635,8 @@ private:
     mapping.itemSignature = "Lzw;";
     mapping.itemArmorName = "yj";
     mapping.itemArmorSignature = "Lyj;";
+    mapping.itemSwordName = "aay";
+    mapping.itemSwordSignature = "Laay;";
     mapping.inventoryPlayerName = "wm";
     mapping.inventoryPlayerSignature = "Lwm;";
     mapping.enchantmentHelperName = "ack";
@@ -769,12 +777,14 @@ private:
     mapping.guiScreenSignature = "Lnet/minecraft/client/gui/GuiScreen;";
     mapping.getCollidingBoundingBoxes = "getCollidingBoundingBoxes";
     mapping.keyBindSneakField = "keyBindSneak";
+    mapping.keyBindsHotbarField = "keyBindsHotbar";
     mapping.movementKeyFields = {"keyBindForward", "keyBindBack",
                                  "keyBindLeft", "keyBindRight",
                                  "keyBindJump"};
     mapping.getKeyCode = "getKeyCode";
     mapping.setKeyBindState = "setKeyBindState";
     mapping.attackEntity = "attackEntity";
+    mapping.windowClick = "windowClick";
     mapping.mouseSensitivityField = "mouseSensitivity";
     mapping.rotationYawField = "rotationYaw";
     mapping.rotationPitchField = "rotationPitch";

@@ -15,9 +15,10 @@
 
 namespace mcoverlay::silent {
 
-// Keep feature-defining output and optional Java call-site arbitration as
-// separate capabilities. A transformed client may expose packet rotation and
-// PlayerControllerMP attack bindings without exposing the held-left wrapper.
+// Rotation publication can stand alone, but scheduled attacks require the
+// transformed input/PRE boundary. Render-driven updateGameplay() is allowed to
+// prepare an intent only; it must never dispatch attackEntity() after movement
+// POST in the same Minecraft tick.
 struct RuntimeCapabilities final {
     bool rotationOutput=false;
     bool attackBindings=false;
@@ -28,7 +29,7 @@ struct RuntimeCapabilities final {
         return rotationOutput;
     }
     [[nodiscard]] constexpr bool attackSchedulerReady() const noexcept {
-        return rotationOutput&&attackBindings;
+        return rotationOutput&&attackBindings&&heldInputHook;
     }
     [[nodiscard]] constexpr bool heldArbitrationReady() const noexcept {
         return attackBindings&&heldInputHook;
@@ -735,6 +736,11 @@ public:
         m_lastMovementTick=~std::uint64_t{0}; m_movementCommand={};
         m_committedMovementTick=~std::uint64_t{0};
         m_committedMovement={}; m_movementSnapshotVersion=0U;
+        m_physicsPhaseTick=~std::uint64_t{0}; m_movementPostReached=false;
+        m_interactionPreOpen=false;
+        m_sprintDecisionTick=~std::uint64_t{0};
+        m_sprintDecisionOwned=false; m_sprintDecisionAllowed=true;
+        m_sprintIntentRequested=false; m_sprintSuppressedUntilRelease=false;
         m_lastTargetSeenTick=0U; m_lastRotationReleaseTick=~std::uint64_t{0};
         m_recentAttacks={}; m_outputReady=false; m_targetAttackReady=false;
         m_cameraResyncPending=false;
@@ -839,6 +845,23 @@ private:
         m_coordinateMovement=input.coordinateMovement;
         m_rotation.observeCamera(input.camera);
         plan.rayOrigin=input.eye; plan.rayLimit=std::max(0.0,input.maximumDistance);
+        const bool releaseRequested=!input.enabled||!input.silent||
+            input.mode!=aim::Mode::LockOn||!input.leftMouseDown||
+            m_manualBlock||contextChanged;
+        if(releaseRequested) {
+            // The render sample is also an authoritative release boundary.  Do
+            // not rely solely on a later held-input callback: no packet,
+            // movement consumer or click may retain a transaction after LMB is
+            // observed up here.
+            const std::uint64_t cancelled=m_attackClock.reset();
+            clearAttackRequirementLocked(cancelled);
+            m_sprintDecisionTick=~std::uint64_t{0};
+            m_sprintDecisionOwned=false;
+            m_sprintDecisionAllowed=true;
+            m_sprintIntentRequested=false;
+            m_sprintSuppressedUntilRelease=false;
+        }
+        const bool attackTransactionActive=attackTransactionActiveLocked();
         const double acquire=std::clamp(input.fovDegrees,1.0,360.0)*0.5;
         std::array<TargetCandidate,256U> adjusted{};
         std::span<const TargetCandidate> candidates=input.candidates;
@@ -851,7 +874,8 @@ private:
             }
             candidates={adjusted.data(),count};
         }
-        const TargetSelection selected=input.enabled && !m_manualBlock
+        const TargetSelection selected=!attackTransactionActive&&input.enabled&&
+            !m_manualBlock
             ? m_selector.select(candidates,input.eye,input.camera,
                 std::max(0.0,input.minimumDistance),std::max(1.0,input.maximumDistance),
                 acquire,std::min(180.0,acquire+10.0),input.nearestPriority,
@@ -859,9 +883,7 @@ private:
             : TargetSelection{};
         const bool silentCombatRequested=input.silent&&
             input.mode==aim::Mode::LockOn&&input.leftMouseDown;
-        const bool explicitRelease=!input.enabled||!input.silent||
-            input.mode!=aim::Mode::LockOn||!input.leftMouseDown||
-            m_manualBlock||contextChanged;
+        const bool explicitRelease=releaseRequested;
         const bool targetGrace=!selected.valid&&!explicitRelease&&
             m_rotation.active()&&m_state.candidateTargetId>=0&&
             input.tick>=m_lastTargetSeenTick&&
@@ -883,6 +905,17 @@ private:
             plan.candidateTargetId=selected.valid?selected.entityId:-1;
             plan.renderDesiredRotation=selected.valid?selected.desired:input.camera;
             plan.logicalRotation=input.camera;
+        } else if(attackTransactionActive) {
+            // One intent owns one immutable target/rotation pair.  AimAssist
+            // must not advance to R1/R2 while this intent is waiting for R0 to
+            // be observed at the packet serialization boundary.
+            m_targetGraceActive=false;
+            m_targetAttackReady=true;
+            plan.aimActive=true;
+            plan.silentActive=true;
+            plan.candidateTargetId=m_attackRequiredTargetId;
+            plan.renderDesiredRotation=m_attackRequiredRotation;
+            plan.logicalRotation=m_rotation.acquire(m_attackRequiredRotation);
         } else if(blockItemKeepsCamera) {
             m_targetGraceActive=false;
             m_targetAttackReady=false;
@@ -958,7 +991,10 @@ private:
         if(m_committedMovementTick==input.physicsTick)
             plan.movement=m_committedMovement;
         plan.rayDirection=RayTraceCoordinator::direction(plan.logicalRotation);
-        m_entityHit=plan.silentActive
+        m_entityHit=attackTransactionActive
+            ? RayTraceCoordinator::EntityHit{
+                m_attackRequiredTargetId,0.0,0.0}
+            : plan.silentActive
             ? m_rayTrace.traceEntities(candidates,plan.candidateTargetId,
                 plan.rayOrigin,plan.rayDirection,plan.rayLimit)
             : RayTraceCoordinator::EntityHit{};
@@ -975,7 +1011,8 @@ private:
         m_state.camera=input.camera;
         m_state.renderDesired=plan.renderDesiredRotation; m_state.logical=plan.logicalRotation;
         m_state.previousLogical=m_rotation.previousLogical();
-        m_state.networkRotation=m_rotation.networkRotation();
+        m_state.networkRotation=attackTransactionActive
+            ? m_attackRequiredRotation:m_rotation.networkRotation();
         m_state.lastReported=m_rotation.lastReported();
         m_state.rotationEpoch=m_rotationEpoch;
         m_state.publishedRotationEpoch=m_publishedRotationEpoch;
@@ -988,6 +1025,22 @@ private:
         return plan;
     }
     void finalizeRayLocked(const BlockRayHit block) noexcept {
+        if(attackTransactionActiveLocked()) {
+            // Availability was evaluated when the transaction was bound.  A
+            // later target sample or ray trace must not rewrite A/R0 or reject
+            // the intent while it is waiting for the matching packet ACK.
+            m_outputReady=m_rotation.active();
+            m_targetAttackReady=true;
+            m_interaction.updateRay(m_attackRequiredTargetId,
+                m_attackRequiredTargetId,m_attackRequiredTargetId,{});
+            m_state.candidateTargetId=m_attackRequiredTargetId;
+            m_state.rayFirstHitEntityId=m_attackRequiredTargetId;
+            m_state.attackTargetId=m_attackRequiredTargetId;
+            m_state.rayBlock={};
+            m_state.interaction=m_interaction.mode();
+            m_state.event=InteractionEvent::None;
+            return;
+        }
         const int attack=m_rotation.active()&&m_targetAttackReady
             ? RayTraceCoordinator::attackTarget(m_state.candidateTargetId,m_entityHit,
                                                 block,m_enforceAttack)
@@ -1032,6 +1085,7 @@ public:
         const std::uint64_t minecraftTick=0U) noexcept {
         AcquireSRWLockExclusive(&m_lock);
         const auto tick=minecraftTick ? minecraftTick : m_interactionTick;
+        beginPhysicsTickLocked(tick);
         const MovementCommand command=movementCommandLocked(
             physicalStrafe,physicalForward,tick);
         m_state.interactionTick=tick;
@@ -1045,6 +1099,7 @@ public:
         const std::uint64_t minecraftTick=0U) noexcept {
         AcquireSRWLockExclusive(&m_lock);
         const auto tick=minecraftTick?minecraftTick:m_interactionTick;
+        beginPhysicsTickLocked(tick);
         MovementCommand command=movementCommandLocked(
             physicalStrafe,physicalForward,tick,physicalSprinting,true);
         m_state.interactionTick=tick;
@@ -1052,18 +1107,55 @@ public:
         publishLocked();
         ReleaseSRWLockExclusive(&m_lock); return command;
     }
-    [[nodiscard]] bool arbitrateSprint(const bool requested) noexcept {
-        AcquireSRWLockShared(&m_lock);
-        const bool silentOwnsSprint=m_coordinateMovement&&
-            m_rotation.active()&&m_state.leftMouseDown;
-        // A true call is only sprint intent. The committed corrected direction
-        // may veto it; the prior physical sprint bit must not prevent Lunar
-        // from beginning a compatible sprint.
-        const bool haveMovement=m_committedMovementTick!=~std::uint64_t{0};
-        const bool result=requested&&(!silentOwnsSprint||!haveMovement||
-            (m_committedMovement.controlsMinecraftMovement&&
-             m_committedMovement.forward>=0.8));
-        ReleaseSRWLockShared(&m_lock);
+    void beginPhysicsTick(const std::uint64_t minecraftTick) noexcept {
+        if(!minecraftTick) return;
+        AcquireSRWLockExclusive(&m_lock);
+        beginPhysicsTickLocked(minecraftTick);
+        ReleaseSRWLockExclusive(&m_lock);
+    }
+    void endMovementPhase(const std::uint64_t minecraftTick) noexcept {
+        if(!minecraftTick) return;
+        AcquireSRWLockExclusive(&m_lock);
+        if(m_physicsPhaseTick!=minecraftTick)
+            m_physicsPhaseTick=minecraftTick;
+        m_movementPostReached=true;
+        m_interactionPreOpen=false;
+        ReleaseSRWLockExclusive(&m_lock);
+    }
+    void beginInteractionPre(const std::uint64_t minecraftTick=0U) noexcept {
+        AcquireSRWLockExclusive(&m_lock);
+        if(minecraftTick) {
+            m_interactionTick=minecraftTick;
+            m_nativeTickKnown=true;
+            m_physicsPhaseTick=minecraftTick;
+        }
+        // This method is called only from the transformed Minecraft input
+        // entry, which is structurally before the upcoming world movement.
+        // ticksExisted may still equal the preceding movement POST here, so the
+        // explicit boundary—not a numeric tick comparison—opens dispatch.
+        m_movementPostReached=false;
+        m_interactionPreOpen=true;
+        ReleaseSRWLockExclusive(&m_lock);
+    }
+    [[nodiscard]] bool arbitrateSprint(
+        const bool requested,const std::uint64_t minecraftTick=0U) noexcept {
+        AcquireSRWLockExclusive(&m_lock);
+        // This hook can precede moveFlying while the entity axes still belong
+        // to the previous physics tick.  Record the caller's intent, but never
+        // derive a movement decision here.  If the current tick's consumer has
+        // already committed a decision, every later caller obeys that one.
+        m_sprintIntentRequested=requested;
+        const bool silentOwnsSprint=m_coordinateMovement&&m_rotation.active()&&
+            m_state.leftMouseDown;
+        bool allowed=true;
+        if(silentOwnsSprint&&m_sprintDecisionOwned&&
+           (!minecraftTick||m_sprintDecisionTick==minecraftTick)) {
+            allowed=m_sprintDecisionAllowed;
+            if(requested&&!allowed) m_sprintSuppressedUntilRelease=true;
+        }
+        const bool result=requested&&(!silentOwnsSprint||
+            (allowed&&!m_sprintSuppressedUntilRelease));
+        ReleaseSRWLockExclusive(&m_lock);
         return result;
     }
     // Raw Minecraft observations only. This never overwrites objectMouseOver.
@@ -1082,6 +1174,10 @@ public:
             // or scheduled click can retain ownership for an extra frame.
             const auto cancelled=m_attackClock.update(false,false,0U,1);
             clearAttackRequirementLocked(cancelled.cancelledIntentId);
+            m_sprintDecisionTick=~std::uint64_t{0};
+            m_sprintDecisionOwned=false; m_sprintDecisionAllowed=true;
+            m_sprintIntentRequested=false;
+            m_sprintSuppressedUntilRelease=false;
             m_targetGraceActive=false;
             m_targetAttackReady=false;
             m_outputReady=false;
@@ -1123,6 +1219,8 @@ public:
            m_state.cameraMouseOverEntityId<0 &&
            (manualBlockPriority||!executableCombat)) {
             m_manualBlock=true;
+            const std::uint64_t cancelled=m_attackClock.reset();
+            clearAttackRequirementLocked(cancelled);
             (void)m_interaction.cancel(m_interactionTick);
             m_interaction.updateRay(-1,-1,-1,{});
             if(m_rotation.active()) m_lastRotationReleaseTick=m_state.tick;
@@ -1147,14 +1245,47 @@ public:
     }
     [[nodiscard]] InteractionCommand click() noexcept {
         AcquireSRWLockExclusive(&m_lock);
-        const std::uint64_t eventId=m_attackClock.pending();
-        if(!eventId) {
+        const InteractionCommand command=clickLocked();
+        ReleaseSRWLockExclusive(&m_lock);
+        return command;
+    }
+    [[nodiscard]] InteractionCommand clickAtInteractionPre(
+        const std::uint64_t minecraftTick=0U) noexcept {
+        AcquireSRWLockExclusive(&m_lock);
+        const auto tick=minecraftTick?minecraftTick:m_interactionTick;
+        // Only beginInteractionPre(), reached by the transformed input entry,
+        // may open this gate. Render/update and movement POST consumers leave
+        // the complete target+rotation transaction pending.
+        if(!m_interactionPreOpen||m_movementPostReached) {
+            const std::uint64_t eventId=m_attackClock.pending();
+            if(eventId&&m_lastWaitPreIntent!=eventId) {
+                m_lastWaitPreIntent=eventId;
+                char detail[144]{};
+                std::snprintf(detail,sizeof(detail),
+                    "intent=%llu inputTick=%llu postTick=%llu",
+                    static_cast<unsigned long long>(eventId),
+                    static_cast<unsigned long long>(tick),
+                    static_cast<unsigned long long>(m_physicsPhaseTick));
+                m_debug.event("ATTACK_WAIT_PRE",m_state,detail,true);
+            }
             ReleaseSRWLockExclusive(&m_lock);
             return {};
         }
+        m_interactionPreOpen=false;
+        if(tick) {m_interactionTick=tick;m_nativeTickKnown=true;}
+        const InteractionCommand command=clickLocked();
+        ReleaseSRWLockExclusive(&m_lock);
+        return command;
+    }
+private:
+    [[nodiscard]] InteractionCommand clickLocked() noexcept {
+        const std::uint64_t eventId=m_attackClock.pending();
+        if(!eventId) return {};
         const bool requirementReady=m_attackRequiredIntentId==eventId&&
             m_attackRequiredTargetId>=0;
-        const bool published=requirementReady&&m_rotation.lastReportedValid()&&
+        const bool published=requirementReady&&
+            m_publishedRotationEpoch>=m_attackRequiredRotationEpoch&&
+            m_rotation.lastReportedValid()&&
             std::abs(aim::wrap(m_rotation.lastReported().yaw-
                 m_attackRequiredRotation.yaw))<0.0005&&
             std::abs(m_rotation.lastReported().pitch-
@@ -1170,7 +1301,6 @@ public:
                     static_cast<unsigned long long>(m_publishedRotationEpoch));
                 m_debug.event("ATTACK_WAIT_ROTATION",m_state,detail,true);
             }
-            ReleaseSRWLockExclusive(&m_lock);
             return {};
         }
         (void)m_attackClock.consume();
@@ -1184,6 +1314,7 @@ public:
             command.rotationEpoch=m_attackRequiredRotationEpoch;
             m_state.attackIntentId=eventId;
             m_state.committedAttackTargetId=command.entityId;
+            m_attackDispatchInFlight=true;
             m_lastCombatTick=m_interactionTick;
             if(m_sequentialTargets) rememberAttackLocked(command.entityId,m_state.tick);
         } else {
@@ -1191,10 +1322,11 @@ public:
             std::snprintf(detail,sizeof(detail),"intent=%llu reason=no_target",
                 static_cast<unsigned long long>(eventId));
             m_debug.event("ATTACK_REJECT",m_state,detail,true);
+            clearAttackRequirementLocked(eventId);
         }
-        clearAttackRequirementLocked(eventId);
-        updateInteractionStateLocked(); ReleaseSRWLockExclusive(&m_lock); return command;
+        updateInteractionStateLocked(); return command;
     }
+public:
     void attackDispatched(const InteractionCommand& command,const bool succeeded,
                           const char* const failureReason=nullptr) noexcept {
         if(command.kind!=InteractionCommandKind::AttackEntity) return;
@@ -1211,6 +1343,7 @@ public:
             !succeeded&&failureReason ? failureReason : "none");
         m_debug.event(succeeded?"ATTACK_DISPATCH":"ATTACK_FAILED",
             m_state,detail,true);
+        clearAttackRequirementLocked(command.intentId);
         updateInteractionStateLocked();
         ReleaseSRWLockExclusive(&m_lock);
     }
@@ -1252,13 +1385,16 @@ public:
             originalRotationValid;
         const bool vanillaContinuity=m_rotation.owner()==RotationOwner::Camera&&
             m_rotation.branchManaged()&&hasRotation&&originalRotationValid;
+        const bool attackTransaction=attackTransactionActiveLocked();
         if(m_rotation.active()||
            m_rotation.restorePacketPending()||m_cameraResyncPending||
            vanillaHandoff||vanillaContinuity) {
             result.rotation=(vanillaHandoff||vanillaContinuity)
                 ? m_rotation.continuousVanillaRotation(originalRotation)
                 : (m_cameraResyncPending||m_rotation.restorePacketPending())
-                    ? m_rotation.cameraNetworkRotation():m_state.networkRotation;
+                    ? m_rotation.cameraNetworkRotation()
+                    : attackTransaction
+                        ? m_attackRequiredRotation:m_state.networkRotation;
             result.restoring=m_rotation.restorePacketPending()||
                 m_cameraResyncPending;
             result.vanillaHandoff=vanillaHandoff;
@@ -1339,6 +1475,11 @@ public:
         m_targetGraceActive=false;
         m_cameraResyncPending=false;
         m_manualBlock=false; m_lastMovementTick=~std::uint64_t{0};
+        m_physicsPhaseTick=~std::uint64_t{0}; m_movementPostReached=false;
+        m_interactionPreOpen=false;
+        m_sprintDecisionTick=~std::uint64_t{0};
+        m_sprintDecisionOwned=false; m_sprintDecisionAllowed=true;
+        m_sprintIntentRequested=false; m_sprintSuppressedUntilRelease=false;
         (void)m_attackClock.reset();
         clearAttackRequirementLocked();
         m_selector.reset(); m_aim.reset(m_rotation.camera());
@@ -1392,6 +1533,12 @@ public:
 private:
     struct RecentAttack final { int entityId=-1; std::uint64_t readyAt=0U; };
     static constexpr std::uint64_t TargetLossGraceMilliseconds=50U;
+    [[nodiscard]] bool attackTransactionActiveLocked() const noexcept {
+        return m_attackRequiredIntentId!=0U&&
+            (m_attackRequiredIntentId==m_attackClock.pending()||
+             m_attackDispatchInFlight)&&
+            m_attackRequiredTargetId>=0;
+    }
     void clearAttackRequirementLocked(
         const std::uint64_t intentId=0U) noexcept {
         if(intentId&&m_attackRequiredIntentId!=intentId) return;
@@ -1400,6 +1547,8 @@ private:
         m_attackRequiredRotation={};
         m_attackRequiredRotationEpoch=0U;
         m_lastWaitRotationIntent=0U;
+        m_lastWaitPreIntent=0U;
+        m_attackDispatchInFlight=false;
         m_state.requiredAttackRotationEpoch=0U;
     }
     [[nodiscard]] bool recentlyAttackedLocked(
@@ -1447,6 +1596,8 @@ private:
         // movement snapshot so state observers and every consumer retain the
         // identical logical yaw/version for that tick.
         m_state.movement=m_committedMovement;
+        const bool silentOwnsSprint=commitSprintDecisionLocked(
+            tick,physicalSprinting);
         MovementCommand command;
         command.enabled=m_rotation.active()&&m_coordinateMovement&&
                         m_committedMovement.controlsMinecraftMovement;
@@ -1461,9 +1612,41 @@ private:
         command.physicalSprinting=physicalSprinting;
         // Veto only. A stale render snapshot can never manufacture sprint;
         // an observed vanilla sprint may only be suppressed by remapped input.
-        command.sprinting=physicalSprinting&&m_committedMovement.sprinting;
+        command.sprinting=physicalSprinting&&
+            (silentOwnsSprint?m_sprintDecisionAllowed:
+                              m_committedMovement.sprinting);
         m_lastMovementTick=tick; m_movementCommand=command;
         return command;
+    }
+    void beginPhysicsTickLocked(const std::uint64_t tick) noexcept {
+        m_interactionPreOpen=false;
+        if(!tick||m_physicsPhaseTick==tick) return;
+        m_physicsPhaseTick=tick;
+        m_movementPostReached=false;
+        // The next setSprinting/movement consumer freezes the new tick's
+        // decision. It may be called before moveFlying commits its snapshot.
+        m_sprintDecisionTick=~std::uint64_t{0};
+        m_sprintDecisionOwned=false;
+        m_sprintDecisionAllowed=true;
+    }
+    [[nodiscard]] bool commitSprintDecisionLocked(
+        const std::uint64_t tick,const bool physicalSprinting) noexcept {
+        const bool owns=m_coordinateMovement&&m_rotation.active()&&
+            m_state.leftMouseDown;
+        if(!owns) return false;
+        if(m_sprintDecisionOwned&&m_sprintDecisionTick==tick) return true;
+        // Only an actual jump/moveFlying consumer reaches this point, after
+        // movementCommandLocked has committed the current tick's snapshot.
+        // No render sample or setSprinting call may preview/recompute it.
+        const bool compatible=m_committedMovementTick==tick&&
+            m_committedMovement.controlsMinecraftMovement&&
+            m_committedMovement.forward>=0.8;
+        if((physicalSprinting||m_sprintIntentRequested)&&!compatible)
+            m_sprintSuppressedUntilRelease=true;
+        m_sprintDecisionTick=tick;
+        m_sprintDecisionOwned=true;
+        m_sprintDecisionAllowed=compatible&&!m_sprintSuppressedUntilRelease;
+        return true;
     }
     void updateInteractionStateLocked() noexcept {
         m_state.interactionTick=m_interactionTick;
@@ -1527,6 +1710,8 @@ private:
     std::uint64_t m_nextInputEventId=0U;
     std::uint64_t m_committedMovementTick=~std::uint64_t{0};
     std::uint64_t m_movementSnapshotVersion=0U;
+    std::uint64_t m_physicsPhaseTick=~std::uint64_t{0};
+    std::uint64_t m_sprintDecisionTick=~std::uint64_t{0};
     std::uint64_t m_lastCombatTick=~std::uint64_t{0};
     std::uint64_t m_lastTargetSeenTick=0U;
     std::uint64_t m_lastRotationReleaseTick=~std::uint64_t{0};
@@ -1535,6 +1720,7 @@ private:
     std::uint64_t m_attackRequiredIntentId=0U;
     std::uint64_t m_attackRequiredRotationEpoch=0U;
     std::uint64_t m_lastWaitRotationIntent=0U;
+    std::uint64_t m_lastWaitPreIntent=0U;
     int m_attackRequiredTargetId=-1;
     aim::Angles m_attackRequiredRotation{};
     MovementCommand m_movementCommand{};
@@ -1546,6 +1732,13 @@ private:
     bool m_silent=false,m_enforceAttack=true,m_sequentialTargets=false;
     HeldItemPolicy m_heldItemPolicy=HeldItemPolicy::Other;
     bool m_coordinateMovement=true;
+    bool m_movementPostReached=false;
+    bool m_interactionPreOpen=false;
+    bool m_sprintDecisionOwned=false;
+    bool m_sprintDecisionAllowed=true;
+    bool m_sprintIntentRequested=false;
+    bool m_sprintSuppressedUntilRelease=false;
+    bool m_attackDispatchInFlight=false;
     bool m_outputReady=false,m_targetAttackReady=false,m_cameraResyncPending=false;
 };
 

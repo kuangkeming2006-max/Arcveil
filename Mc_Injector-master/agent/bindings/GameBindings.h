@@ -244,7 +244,9 @@ struct GameplaySettings final {
     bool freeLookGuiOpen = false;
     bool freeLookForeground = false;
     bool freeLook = false;
+    bool smartHotbar = false;
     int freeLookHotkey = VK_LMENU;
+    std::array<int, 9U> smartHotbarActions{};
     int safewalkReleaseDelayMs = 120;
     int safewalkEdgeSensitivity = 55;
     int safewalkMinimumPitch = -5;
@@ -384,6 +386,8 @@ private:
     [[nodiscard]] bool ensureLwjglKeyboardBindings(JNIEnv* env) noexcept;
     [[nodiscard]] bool queryLwjglKeyDown(JNIEnv* env, int lwjglKey,
                                          bool& down) noexcept;
+    [[nodiscard]] bool queryMinecraftBindingDown(JNIEnv* env,int keyCode,
+                                                 bool& down) noexcept;
     [[nodiscard]] jfloat beginLogicalMovement(JNIEnv* env, jobject entity,
                                               jfloat strafe,
                                               jfloat forward) noexcept;
@@ -518,12 +522,14 @@ private:
     jclass m_lwjglMouseClass = nullptr;
     jmethodID m_lwjglSetGrabbed = nullptr;
     jmethodID m_lwjglIsGrabbed = nullptr;
+    jmethodID m_lwjglIsButtonDown = nullptr;
     jclass m_lwjglKeyboardClass = nullptr;
     jmethodID m_lwjglIsKeyDown = nullptr;
     bool m_overlayInputSessionActive = false;
     bool m_inputGrabStateKnown = false;
     bool m_inputWasGrabbed = true;
     bool m_safewalkSneakForced = false;
+    std::array<bool,9U> m_smartHotbarKeyDown{};
     int m_safewalkSneakKeyCode = 0;
     std::uint8_t m_safewalkSupportMask = 0U;
     std::uint64_t m_safewalkReleaseAt = 0U;

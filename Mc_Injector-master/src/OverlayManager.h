@@ -576,6 +576,7 @@ private:
     int m_clickGuiHeightPercent = 100;
     int m_clickGuiOpacity = 96;
     quint32 m_featureExtraBits = 0x43U;
+    quint32 m_smartHotbarConfig = 0U;
     int m_textGuiAlignment = 2;
     int m_localMobReach = 4;
     int m_localAttackDelayMs = 500;

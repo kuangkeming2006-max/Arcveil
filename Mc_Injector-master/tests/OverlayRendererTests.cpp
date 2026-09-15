@@ -79,6 +79,23 @@ struct OverlayRendererTestAccess {
     static float aimSectionBodyHeight(OverlayRenderer& r,std::size_t index) {
         return r.m_aimSectionBodyHeight[index];
     }
+    static void settingsScrollBottom(OverlayRenderer& r,std::size_t page,
+                                     float maximum) {
+        auto& scroll=r.m_settingsScroll[page];
+        scroll.initialized=true;
+        scroll.maximumInitialized=true;
+        scroll.lastMaximum=maximum;
+        scroll.current=scroll.target=maximum;
+    }
+    static bool settingsScrollBottomAnchored(OverlayRenderer& r,
+                                             std::size_t page) {
+        const auto& scroll=r.m_settingsScroll[page];
+        return std::abs(scroll.current-scroll.lastMaximum)<0.05F&&
+            std::abs(scroll.target-scroll.lastMaximum)<0.05F;
+    }
+    static float settingsScrollMaximum(OverlayRenderer& r,std::size_t page) {
+        return r.m_settingsScroll[page].lastMaximum;
+    }
     static void media(OverlayRenderer& r,const char* title,const char* cover,bool available=true) {
         r.m_mediaSettings.enabled=true; r.m_mediaSettings.opacity=70;
         r.m_mediaSettings.previousHotkey='O'; r.m_mediaSettings.toggleHotkey=VK_END;
@@ -396,6 +413,18 @@ int main(int argc, char** argv)
                                1.0F/60.0F,false);
     check(quantizedBottom.current==30.0F,
           "pixel-quantized feedback still reaches the exact bottom endpoint");
+    mcoverlay::SmoothScroll collapsingBottom;
+    collapsingBottom.update(500.0F,500.0F,0.0F,20.0F,1.0F/60.0F,true);
+    bool bottomStayedAnchored=true;
+    for(int maximum=492;maximum>=340;maximum-=8) {
+        collapsingBottom.update(std::round(collapsingBottom.current),
+            static_cast<float>(maximum),0.0F,20.0F,1.0F/60.0F,false);
+        bottomStayedAnchored=bottomStayedAnchored&&
+            std::abs(collapsingBottom.current-static_cast<float>(maximum))<0.01F&&
+            std::abs(collapsingBottom.target-static_cast<float>(maximum))<0.01F;
+    }
+    check(bottomStayedAnchored,
+          "collapsing the bottom accordion preserves a continuous bottom anchor");
     float collapsePhase=1.0F;
     float previousHeight=mcoverlay::CollapsibleMotion::eased(collapsePhase);
     bool strictlyMoving=true;
@@ -418,7 +447,19 @@ int main(int argc, char** argv)
           mcoverlay::SearchActivationMotion::expansion(0.30F)<1.0F&&
           mcoverlay::SearchActivationMotion::expansion(0.50F)==1.0F,
           "search expands monotonically without a post-open rebound");
-    for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<23;++page) {
+    check(mcoverlay::classifyImeMessage(WM_INPUTLANGCHANGE,0,false)==
+              mcoverlay::ImeMessageAction::ResetLayout&&
+          mcoverlay::classifyImeMessage(WM_IME_COMPOSITION,0,false)==
+              mcoverlay::ImeMessageAction::Ignore,
+          "layout changes reset IME state without probing when fullscreen IME is disabled");
+    check(mcoverlay::classifyImeMessage(WM_IME_NOTIFY,IMN_SETOPENSTATUS,true)==
+              mcoverlay::ImeMessageAction::Ignore&&
+          mcoverlay::classifyImeMessage(WM_IME_NOTIFY,IMN_CHANGECANDIDATE,true)==
+              mcoverlay::ImeMessageAction::QueryComposition&&
+          mcoverlay::classifyImeMessage(WM_IME_ENDCOMPOSITION,0,true)==
+              mcoverlay::ImeMessageAction::ResetComposition,
+          "only composition and relevant candidate messages may query IME state");
+    for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<24;++page) {
         mcoverlay::OverlayRendererTestAccess::prepare(*renderer,page,size,theme!=0);
         if(page==22) mcoverlay::OverlayRendererTestAccess::freeLookPreview(*renderer);
         frame(true);
@@ -434,6 +475,7 @@ int main(int argc, char** argv)
         check(rail && rail->ScrollMax.y>0, "every page/size has independent scrollable rail");
         if (page==0 && size==0) saveFrame(theme ? "gui-light.png" : "gui-dark.png");
         if (page==22 && size==0 && theme==0) saveFrame("freelook-v40.png");
+        if (page==23 && size==0 && theme==0) saveFrame("smart-hotbar-v47.png");
     }
     mcoverlay::OverlayRendererTestAccess::prepare(*renderer,8,0,false);
     mcoverlay::OverlayRendererTestAccess::aimMode(*renderer,false);
@@ -447,6 +489,33 @@ int main(int argc, char** argv)
         if(std::strstr(windowEntry->Name,"##settingsPage")) aimSettings=windowEntry;
     check(aimSettings&&aimSettings->ScrollbarY,
           "Aim Assist reserves a stable scrollbar rail while content changes");
+    saveFrame("aimassist-v46.png");
+    // Exercise the actual ImGui child, not only SmoothScroll in isolation.
+    // The bottom section used to retain ContentSize from the preceding frame,
+    // then drop its scroll maximum all at once near the end of the collapse.
+    mcoverlay::OverlayRendererTestAccess::aimSection(
+        *renderer,3U,true,1.0F,0.0F);
+    frame(true); frame(true);
+    const float expandedMaximum=
+        mcoverlay::OverlayRendererTestAccess::settingsScrollMaximum(*renderer,8U);
+    check(expandedMaximum>0.0F,
+          "expanded Aim Assist bottom section is scrollable");
+    mcoverlay::OverlayRendererTestAccess::settingsScrollBottom(
+        *renderer,8U,expandedMaximum);
+    frame(true);
+    const float bottomBodyHeight=
+        mcoverlay::OverlayRendererTestAccess::aimSectionBodyHeight(*renderer,3U);
+    mcoverlay::OverlayRendererTestAccess::aimSection(
+        *renderer,3U,false,1.0F,bottomBodyHeight);
+    bool liveCollapseStayedAnchored=true;
+    for(int collapseFrame=0;collapseFrame<20;++collapseFrame) {
+        frame(true);
+        liveCollapseStayedAnchored=liveCollapseStayedAnchored&&
+            mcoverlay::OverlayRendererTestAccess::settingsScrollBottomAnchored(
+                *renderer,8U);
+    }
+    check(liveCollapseStayedAnchored,
+          "real Aim Assist bottom collapse follows current-frame height without a hitch");
     mcoverlay::OverlayRendererTestAccess::aimSection(
         *renderer,0U,false,0.8F,123.0F);
     frame(true);

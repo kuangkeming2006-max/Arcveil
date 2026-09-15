@@ -2,6 +2,7 @@
 
 #include "AgentLog.h"
 #include "bindings/GameBindings.h"
+#include "bindings/SmartHotbarPolicy.h"
 #include "ipc_client.h"
 #include "jvm.h"
 #include "opengl_hook.h"
@@ -934,8 +935,15 @@ void AgentRuntime::telemetryMain() noexcept
                     FixedLine<48U> cps;
                     if(cps.append("AIM_ATTACK_CPS_CHANGED ")&&
                        cps.appendInteger(m_featureChangedAimAttackCps.load(
-                           std::memory_order_acquire))&&m_ipc->sendLine(cps.view()))
-                        sentFeatureChangedRevision=featureRevision;
+                           std::memory_order_acquire))&&m_ipc->sendLine(cps.view())) {
+                        FixedLine<48U> smartHotbar;
+                        if(smartHotbar.append("SMART_HOTBAR_CHANGED ")&&
+                           smartHotbar.appendInteger(
+                               m_featureChangedSmartHotbarConfig.load(
+                                   std::memory_order_acquire))&&
+                           m_ipc->sendLine(smartHotbar.view()))
+                            sentFeatureChangedRevision=featureRevision;
+                    }
                 }
             }
         }
@@ -1207,6 +1215,8 @@ void AgentRuntime::queueStateChanged(const bool visible, const bool interactive)
 void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
 {
     const unsigned aimOptions=packAimOptions(settings);
+    const std::uint32_t smartHotbarConfig=hotbar::pack(
+        settings.smartHotbarEnabled,settings.smartHotbarActions);
     m_aimOptions.store(aimOptions,std::memory_order_release);
     m_featureChangedAimOptions.store(aimOptions,std::memory_order_relaxed);
     const std::uint32_t bits = packFeatures(settings);
@@ -1305,6 +1315,7 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
     m_clickGuiOpacity.store(std::clamp(settings.clickGuiOpacity, 35, 100),
                             std::memory_order_release);
     m_featureExtraBits.store(packExtraFeatures(settings), std::memory_order_release);
+    m_smartHotbarConfig.store(smartHotbarConfig,std::memory_order_release);
     m_textGuiAlignment.store(std::clamp(settings.textGuiAlignment, 0, 2),
                              std::memory_order_release);
     m_localMobReach.store(std::clamp(settings.localMobReach, 3, 10),
@@ -1426,6 +1437,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
         std::clamp(settings.clickGuiOpacity, 35, 100), std::memory_order_relaxed);
     m_featureChangedExtraBits.store(packExtraFeatures(settings),
                                     std::memory_order_relaxed);
+    m_featureChangedSmartHotbarConfig.store(
+        smartHotbarConfig,std::memory_order_relaxed);
     m_featureChangedTextGuiAlignment.store(
         std::clamp(settings.textGuiAlignment, 0, 2), std::memory_order_relaxed);
     m_featureChangedLocalMobReach.store(
@@ -1588,6 +1601,16 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             return true;
         }
         m_aimAttackCps.store(value,std::memory_order_release);
+        return true;
+    }
+    if(command=="SMART_HOTBAR") {
+        std::uint32_t packed=0U; std::string trailing;
+        if(!(stream>>packed)||(stream>>trailing)||!hotbar::validPacked(packed)) {
+            (void)m_ipc->sendLine(
+                "ERROR BAD_SMART_HOTBAR expected-packed-v1-config");
+            return true;
+        }
+        m_smartHotbarConfig.store(packed,std::memory_order_release);
         return true;
     }
     if (command == "FEATURE_STATE" || command == "FEATURE_STATE_V2" ||
@@ -2548,6 +2571,10 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         m_localAttackDelayMs.load(std::memory_order_acquire),
         m_localVelocityPercent.load(std::memory_order_acquire),
         m_featureHotkeysPackedC.load(std::memory_order_acquire));
+    const std::uint32_t smartHotbarConfig=m_smartHotbarConfig.load(
+        std::memory_order_acquire);
+    activeFeatures.smartHotbarEnabled=hotbar::enabled(smartHotbarConfig);
+    activeFeatures.smartHotbarActions=hotbar::unpack(smartHotbarConfig);
     const bool interactiveNow = m_interactive.load(std::memory_order_acquire);
     const unsigned aimOptions=m_aimOptions.load(std::memory_order_acquire);
     activeFeatures.aimSilentLock=(aimOptions&1U)!=0;
@@ -2654,6 +2681,8 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         gameplay.freeLookForeground = gameForeground;
         gameplay.freeLook = activeFeatures.freeLookEnabled && gameplayInput;
         gameplay.freeLookHotkey = activeFeatures.featureHotkeys[17U];
+        gameplay.smartHotbar=activeFeatures.smartHotbarEnabled&&gameplayInput;
+        gameplay.smartHotbarActions=activeFeatures.smartHotbarActions;
         gameplay.aimAssist = activeFeatures.aimAssistEnabled && gameplayInput;
         gameplay.longJump = activeFeatures.longJumpEnabled && gameplayInput &&
                             snapshot.integratedSinglePlayer;

@@ -16,6 +16,8 @@ target_compile_features(McOverlayKnockbackTests PRIVATE cxx_std_20)
 
 add_executable(McOverlayRegressionPolicyTests EXCLUDE_FROM_ALL RegressionPolicyTests.cpp)
 target_compile_features(McOverlayRegressionPolicyTests PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayRegressionPolicyTests PRIVATE
+    MC_TEST_PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(McOverlayRegressionPolicyTests PRIVATE Qt6::Core)
 
 if(NOT WIN32)

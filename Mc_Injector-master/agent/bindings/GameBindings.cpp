@@ -1,4 +1,5 @@
 #include "GameBindings.h"
+#include "SmartHotbarPolicy.h"
 #include "TrajectoryMath.h"
 #include "SafeWalkPolicy.h"
 
@@ -182,6 +183,7 @@ struct GameBindings::BindingCache final {
     jmethodID aabbConstructor = nullptr;
     jmethodID getCollidingBoxes = nullptr;
     jfieldID keyBindSneakField = nullptr;
+    jfieldID keyBindsHotbar = nullptr;
     std::array<jfieldID, 5U> movementKeyFields{};
     jmethodID getKeyCode = nullptr;
     jmethodID setKeyBindState = nullptr;
@@ -210,6 +212,7 @@ struct GameBindings::BindingCache final {
     jmethodID getBlockReachDistance = nullptr;
     jmethodID getStrVsBlock = nullptr;
     jmethodID attackEntity = nullptr;
+    jmethodID windowClick = nullptr;
     jmethodID vec3Constructor = nullptr;
     jfieldID minX = nullptr;
     jfieldID minY = nullptr;
@@ -228,6 +231,7 @@ struct GameBindings::BindingCache final {
     jclass itemStackClass = nullptr;
     jclass itemClass = nullptr;
     jclass itemArmorClass = nullptr;
+    jclass itemSwordClass = nullptr;
     jclass inventoryPlayerClass = nullptr;
     jclass enchantmentHelperClass = nullptr;
     jclass abstractClientPlayerClass = nullptr;
@@ -707,6 +711,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     jclass itemStack = nullptr;
     jclass item = nullptr;
     jclass itemArmor = nullptr;
+    jclass itemSword = nullptr;
     jclass inventoryPlayer = nullptr;
     jclass enchantmentHelper = nullptr;
     jclass abstractClientPlayer = nullptr;
@@ -806,6 +811,9 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         loadFeatureClass(itemArmor, profile.itemArmorName, "Armor", "ItemArmor") &&
         loadFeatureClass(enchantmentHelper, profile.enchantmentHelperName,
                          "Armor", "EnchantmentHelper");
+    const bool itemSwordClassLoaded = itemClassesLoaded &&
+        loadFeatureClass(itemSword,profile.itemSwordName,
+                         "Smart Hotbar","ItemSword");
 
     const bool skinClassesLoaded =
         loadFeatureClass(abstractClientPlayer, profile.abstractClientPlayerName,
@@ -1518,6 +1526,29 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                     rightClickSignature.c_str());
             });
     }
+    bool smartHotbarCapability=safewalkCapability&&placementCapability&&
+        itemSwordClassLoaded&&!profile.keyBindsHotbarField.empty()&&
+        !profile.windowClick.empty();
+    if(smartHotbarCapability) {
+        smartHotbarCapability=
+            lookupRequired(env,candidate.keyBindsHotbar,[&] {
+                return env->GetFieldID(gameSettings,
+                    profile.keyBindsHotbarField.c_str(),
+                    (std::string("[")+profile.keyBindingSignature).c_str());
+            })&&
+            lookupRequired(env,candidate.windowClick,[&] {
+                return env->GetMethodID(playerController,
+                    profile.windowClick.c_str(),
+                    (std::string("(IIII")+profile.entityPlayerSignature+")"+
+                     profile.itemStackSignature).c_str());
+            });
+    }
+    if(!smartHotbarCapability) {
+        candidate.keyBindsHotbar=nullptr;
+        candidate.windowClick=nullptr;
+        log::info(std::string("Smart Hotbar capability disabled for profile: ")+
+                  profile.label+" (auxiliary mapping did not resolve).");
+    }
     bool bedBreakerCapability = playerControllerClassLoaded &&
         enumFacingClassLoaded && itemClassesLoaded && controllerFieldAvailable &&
         !profile.clickBlock.empty() && !profile.onPlayerDamageBlock.empty() &&
@@ -1950,6 +1981,13 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             candidate.onPlayerRightClick = nullptr;
         }
     }
+    if(smartHotbarCapability&&
+       !makeGlobal(itemSword,candidate.itemSwordClass)) {
+        smartHotbarCapability=false;
+        clearGlobal(candidate.itemSwordClass);
+        candidate.keyBindsHotbar=nullptr;
+        candidate.windowClick=nullptr;
+    }
 
     if (candidate.chatTextConstructor != nullptr && candidate.addChatMessage != nullptr &&
         !makeGlobal(chatText, candidate.chatTextClass)) {
@@ -2173,7 +2211,7 @@ bool GameBindings::ensureLwjglMouseBindings(JNIEnv* const env) noexcept
 {
     if (env == nullptr) return false;
     if (m_lwjglMouseClass == nullptr || m_lwjglSetGrabbed == nullptr ||
-        m_lwjglIsGrabbed == nullptr) {
+        m_lwjglIsGrabbed == nullptr || m_lwjglIsButtonDown == nullptr) {
         jclass localMouse = env->FindClass("org/lwjgl/input/Mouse");
         if (env->ExceptionCheck() == JNI_TRUE || localMouse == nullptr) {
             clearException(env);
@@ -2181,8 +2219,10 @@ bool GameBindings::ensureLwjglMouseBindings(JNIEnv* const env) noexcept
         }
         jmethodID setGrabbed = env->GetStaticMethodID(localMouse, "setGrabbed", "(Z)V");
         jmethodID isGrabbed = env->GetStaticMethodID(localMouse, "isGrabbed", "()Z");
+        jmethodID isButtonDown=env->GetStaticMethodID(
+            localMouse,"isButtonDown","(I)Z");
         if (env->ExceptionCheck() == JNI_TRUE || setGrabbed == nullptr ||
-            isGrabbed == nullptr) {
+            isGrabbed == nullptr || isButtonDown == nullptr) {
             clearException(env);
             env->DeleteLocalRef(localMouse);
             return false;
@@ -2196,6 +2236,7 @@ bool GameBindings::ensureLwjglMouseBindings(JNIEnv* const env) noexcept
         m_lwjglMouseClass = globalMouse;
         m_lwjglSetGrabbed = setGrabbed;
         m_lwjglIsGrabbed = isGrabbed;
+        m_lwjglIsButtonDown=isButtonDown;
     }
     return true;
 }
@@ -2238,6 +2279,22 @@ bool GameBindings::queryLwjglKeyDown(JNIEnv* const env, const int lwjglKey,
     const bool succeeded = env->ExceptionCheck() != JNI_TRUE;
     clearException(env);
     if (succeeded) down = value == JNI_TRUE;
+    return succeeded;
+}
+
+bool GameBindings::queryMinecraftBindingDown(JNIEnv* const env,
+                                             const int keyCode,
+                                             bool& down) noexcept
+{
+    if(keyCode>0) return queryLwjglKeyDown(env,keyCode,down);
+    // 1.8.9 KeyBinding encodes mouse button N as -100+N.
+    const int button=keyCode+100;
+    if(button<0||!ensureLwjglMouseBindings(env)) return false;
+    const jboolean value=env->CallStaticBooleanMethod(
+        m_lwjglMouseClass,m_lwjglIsButtonDown,static_cast<jint>(button));
+    const bool succeeded=env->ExceptionCheck()!=JNI_TRUE;
+    clearException(env);
+    if(succeeded) down=value==JNI_TRUE;
     return succeeded;
 }
 
@@ -2601,6 +2658,16 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         cache->getBlockReachDistance != nullptr && cache->getStrVsBlock != nullptr &&
         cache->blockPosConstructor != nullptr && cache->getBlockState != nullptr &&
         cache->getBlock != nullptr && cache->isAirBlock != nullptr;
+    const bool smartHotbarCapability=aimCapability&&cache!=nullptr&&
+        cache->keyBindingClass!=nullptr&&cache->keyBindsHotbar!=nullptr&&
+        cache->getKeyCode!=nullptr&&cache->inventoryField!=nullptr&&
+        cache->currentItem!=nullptr&&cache->mainInventory!=nullptr&&
+        cache->getItem!=nullptr&&cache->itemSwordClass!=nullptr&&
+        cache->itemBlockClass!=nullptr&&cache->playerControllerField!=nullptr&&
+        cache->windowClick!=nullptr;
+    const bool smartHotbarRequested=requested.smartHotbar&&
+        smartHotbarCapability;
+    if(!requested.smartHotbar) m_smartHotbarKeyDown.fill(false);
     const bool bedBreakerRequested = requested.bedBreaker && localWorld;
     const bool movementRequested = requested.safewalk || requested.scaffold ||
         requested.fly || requested.bhop || requested.longJump ||
@@ -2613,10 +2680,10 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         requested.silentFileDebug || requested.silentChatDebug ||
         bedBreakerRequested || m_bedBreakerTargetValid ||
         m_logicalController.requiresDrain() || freeLookRequested ||
-        m_freeLookActive;
+        m_freeLookActive || smartHotbarRequested;
     if ((!anyRequested && !m_aimSensitivityModified) ||
         (!aimCapability && !movementCapability && !bedBreakerCapability &&
-         !freeLookCapability)) {
+         !freeLookCapability && !smartHotbarCapability)) {
         if(!aimCapability) deactivateSilentOutput();
         (void)releaseForcedSneak();
         m_scaffoldPlatformYValid = false;
@@ -2660,6 +2727,84 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const jfloat pitch = env->GetFloatField(player, cache->rotationPitch);
     const jfloat yaw = env->GetFloatField(player, cache->rotationYaw);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
+
+    if(smartHotbarRequested) {
+        jobjectArray bindings=static_cast<jobjectArray>(
+            env->GetObjectField(settings,cache->keyBindsHotbar));
+        jobject inventory=env->GetObjectField(player,cache->inventoryField);
+        jobject controller=env->GetObjectField(
+            minecraft,cache->playerControllerField);
+        jobjectArray stacks=inventory?static_cast<jobjectArray>(
+            env->GetObjectField(inventory,cache->mainInventory)):nullptr;
+        if(env->ExceptionCheck()==JNI_TRUE||!bindings||!inventory||
+           !controller||!stacks) return fail();
+        const jsize bindingCount=std::min<jsize>(
+            static_cast<jsize>(hotbar::SlotCount),env->GetArrayLength(bindings));
+        int triggeredSlot=-1;
+        for(jsize slot=0;slot<bindingCount;++slot) {
+            jobject binding=env->GetObjectArrayElement(bindings,slot);
+            if(!binding||env->ExceptionCheck()==JNI_TRUE) return fail();
+            const jint code=env->CallIntMethod(binding,cache->getKeyCode);
+            if(env->ExceptionCheck()==JNI_TRUE) return fail();
+            bool down=false;
+            (void)queryMinecraftBindingDown(env,static_cast<int>(code),down);
+            env->DeleteLocalRef(binding);
+            const bool pressed=down&&!m_smartHotbarKeyDown[
+                static_cast<std::size_t>(slot)];
+            m_smartHotbarKeyDown[static_cast<std::size_t>(slot)]=down;
+            if(pressed&&triggeredSlot<0&&
+               requested.smartHotbarActions[static_cast<std::size_t>(slot)]!=0)
+                triggeredSlot=static_cast<int>(slot);
+        }
+        for(std::size_t slot=static_cast<std::size_t>(bindingCount);
+            slot<m_smartHotbarKeyDown.size();++slot)
+            m_smartHotbarKeyDown[slot]=false;
+        if(triggeredSlot>=0) {
+            const jsize inventoryLength=std::min<jsize>(
+                env->GetArrayLength(stacks),36);
+            std::array<hotbar::ItemKind,36U> kinds{};
+            for(jsize slot=0;slot<inventoryLength;++slot) {
+                jobject stack=env->GetObjectArrayElement(stacks,slot);
+                if(!stack) continue;
+                jobject item=env->CallObjectMethod(stack,cache->getItem);
+                if(env->ExceptionCheck()==JNI_TRUE) return fail();
+                if(item) {
+                    if(env->IsInstanceOf(item,cache->itemSwordClass)==JNI_TRUE)
+                        kinds[static_cast<std::size_t>(slot)]=
+                            hotbar::ItemKind::Sword;
+                    else if(env->IsInstanceOf(item,cache->itemBlockClass)==JNI_TRUE)
+                        kinds[static_cast<std::size_t>(slot)]=
+                            hotbar::ItemKind::Blocks;
+                    else kinds[static_cast<std::size_t>(slot)]=
+                        hotbar::ItemKind::Other;
+                    env->DeleteLocalRef(item);
+                }
+                env->DeleteLocalRef(stack);
+            }
+            const int current=std::clamp(static_cast<int>(
+                env->GetIntField(inventory,cache->currentItem)),0,8);
+            if(env->ExceptionCheck()==JNI_TRUE) return fail();
+            const int source=hotbar::selectSource(
+                std::span<const hotbar::ItemKind>(kinds.data(),
+                    static_cast<std::size_t>(inventoryLength)),current,
+                requested.smartHotbarActions[
+                    static_cast<std::size_t>(triggeredSlot)]);
+            if(source>=0&&source<9) {
+                env->SetIntField(inventory,cache->currentItem,source);
+            } else if(source>=9) {
+                // Player inventory indices 9..35 are identical to the normal
+                // player-container slot IDs. Mode 2 performs the vanilla
+                // number-key swap into the logical hotbar slot that triggered
+                // this action, then that slot becomes selected.
+                jobject result=env->CallObjectMethod(controller,
+                    cache->windowClick,0,source,triggeredSlot,2,player);
+                if(result) env->DeleteLocalRef(result);
+                if(env->ExceptionCheck()==JNI_TRUE) return fail();
+                env->SetIntField(inventory,cache->currentItem,triggeredSlot);
+            }
+            if(env->ExceptionCheck()==JNI_TRUE) return fail();
+        }
+    }
 
     silent::HeldItemPolicy heldItemPolicy=silent::HeldItemPolicy::Other;
     if(cache->getEquipmentInSlot&&cache->getItem) {
@@ -2932,11 +3077,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     logicalInput.physicsTick = logicalPhysicsTick;
     logicalInput.worldGeneration = snapshot.worldGeneration;
     logicalInput.localEntityId = snapshot.entityId;
-    // Target selection and the scanner are useful diagnostics even when a
-    // transformed client has not exposed an optional movement/interaction
-    // hook. Only packet serialization is gated by packet readiness below.
+    // Silent combat is activated only when both packet publication and its
+    // stable input/PRE dispatch boundary exist. Falling back to vanilla attack
+    // while a hidden rotation is active would attack a camera-ray target.
     logicalInput.enabled = canAim&&(!wantsSilent||
-        silentCapabilities.logicalOutputReady());
+        silentCapabilities.attackSchedulerReady());
     logicalInput.silent = wantsSilent;
     logicalInput.mode = mode;
     logicalInput.nearestPriority = requested.aimNearestPriority;
@@ -3003,18 +3148,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         return fail();
     }
 
-    // The transformed held-left entry is an optional low-latency consumer, not
-    // a prerequisite for Silent Lock.  Some Lunar/vanilla layouts do not expose
-    // that call site even though packet rotation and PlayerControllerMP attack
-    // bindings are valid.  Commit any rotation-confirmed scheduler intent here
-    // on the game's render/update thread.  click() atomically consumes one
-    // numbered intent, so an ownership/held hook racing this boundary can never
-    // emit a second attack.
-    if(logicalPlan.silentActive&&silentAttackBindingsReady) {
-        const silent::InteractionCommand scheduled=m_logicalController.click();
-        if(scheduled.kind!=silent::InteractionCommandKind::None)
-            (void)executeLogicalInteraction(env,minecraft,scheduled);
-    }
+    // Render/update owns preparation only. A rotation-confirmed AttackIntent is
+    // deliberately left pending for the transformed Minecraft input/PRE
+    // boundary; dispatching here can run after this tick's movement POST.
 
     if (logicalPlan.writeVisibleRotation) {
         const aim::Angles previous{
@@ -3040,7 +3176,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     m_logicalMovementHook.setEnabled(logicalMovementEnabled);
     m_logicalJumpHook.setEnabled(logicalMovementEnabled);
     const bool logicalAttackEnabled=logicalPlan.silentActive&&
-        silentAttackBindingsReady;
+        silentCapabilities.attackSchedulerReady();
     m_logicalInteractionHook.setEnabled(logicalAttackEnabled&&
         silentCapabilities.heldArbitrationReady());
     m_attackOwnershipHook.setEnabled(logicalAttackEnabled&&
@@ -3661,7 +3797,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     m_lastGameplayTick = tickMilliseconds;
     return finish(m_safewalkSneakForced || requested.scaffold || requested.fly ||
                   requested.bhop || requested.aimAssist || requested.longJump ||
-                  localMobAuraRequested || localVelocityRequested);
+                  localMobAuraRequested || localVelocityRequested ||
+                  smartHotbarRequested);
 }
 
 void GameBindings::enqueueDebugChatLine(const std::string_view line) noexcept
@@ -4949,11 +5086,18 @@ jfloat GameBindings::logicalMovementForward(JNIEnv*,jobject,
 
 void GameBindings::endLogicalMovement(JNIEnv* env,jobject entity) noexcept
 {
-    if(!env || !entity || !g_logicalMovementHook.applied) return;
+    if(!env || !entity) return;
     const auto* c=m_cache.get();
-    if(c && c->getEntityId && c->rotationYaw) {
+    if(c && c->getEntityId) {
         const jint entityId=env->CallIntMethod(entity,c->getEntityId);
-        if(env->ExceptionCheck()==JNI_FALSE &&
+        const auto tick=c->entityTicks&&env->ExceptionCheck()==JNI_FALSE
+            ? static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks))
+            : 0U;
+        if(env->ExceptionCheck()==JNI_FALSE&&
+           entityId==m_logicalController.localPlayerId())
+            m_logicalController.endMovementPhase(tick);
+        if(g_logicalMovementHook.applied&&c->rotationYaw&&
+           env->ExceptionCheck()==JNI_FALSE&&
            entityId==g_logicalMovementHook.entityId) {
             env->SetFloatField(entity,c->rotationYaw,
                                g_logicalMovementHook.originalYaw);
@@ -4975,7 +5119,18 @@ bool GameBindings::arbitrateLogicalSprint(JNIEnv* env,jobject entity,
         return requested;
     }
     if(entityId!=m_logicalController.localPlayerId()) return requested;
-    const bool allowed=m_logicalController.arbitrateSprint(requested);
+    const auto tick=c->entityTicks
+        ? static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks))
+        : 0U;
+    if(env->ExceptionCheck()==JNI_TRUE) {
+        clearException(env);
+        return requested;
+    }
+    // setSprinting may run before this tick's moveFlying/jump consumer, while
+    // EntityLivingBase still contains the preceding tick's action-state axes.
+    // It is therefore an intent/arbitration boundary only.  The immutable
+    // movement-derived decision is committed by movementCommand/jumpCommand.
+    const bool allowed=m_logicalController.arbitrateSprint(requested,tick);
     if(requested&&!allowed) {
         m_logicalController.debug().event("SPRINT_VETO",
             m_logicalController.latest(),"source=setSprinting",true);
@@ -5131,25 +5286,19 @@ bool GameBindings::executeLogicalInteraction(
             world,c->getEntityById,static_cast<jint>(command.entityId));
         if(!target||env->ExceptionCheck()==JNI_TRUE)
             return fail("logical_target_unavailable");
+        // Preserve the vanilla 1.8.9 click transaction: the client publishes
+        // the arm swing first, then PlayerControllerMP sends the attack.  The
+        // PRE dispatch boundary and frozen rotation transaction remain owned
+        // by LogicalStateController; only this internal call order is restored.
+        env->CallVoidMethod(player,c->swingItem);
+        if(env->ExceptionCheck()==JNI_TRUE)
+            return fail("swing_jni_exception");
         g_syntheticLogicalAttack=true;
         env->CallVoidMethod(controller,c->attackEntity,player,target);
         g_syntheticLogicalAttack=false;
         if(env->ExceptionCheck()==JNI_TRUE)
             return fail("attack_entity_jni_exception");
         m_logicalController.attackDispatched(command,true);
-        env->CallVoidMethod(player,c->swingItem);
-        if(env->ExceptionCheck()==JNI_TRUE) {
-            // The attack already reached Minecraft's lower dispatch boundary.
-            // Retrying this command would duplicate damage merely because the
-            // cosmetic arm swing failed.
-            clearException(env);
-            char detail[96]{};
-            std::snprintf(detail,sizeof(detail),"target=%d reason=swing_jni_exception",
-                          command.entityId);
-            m_logicalController.debug().event("SWING_FAILED",
-                m_logicalController.latest(),detail,true);
-            return true;
-        }
     } else if(command.kind==silent::InteractionCommandKind::ResetBlock) {
         env->CallVoidMethod(controller,c->resetBlockRemoving);
     } else {
@@ -5188,34 +5337,11 @@ jobject GameBindings::arbitrateLogicalAttack(
 {
     if(!env||!originalTarget||g_syntheticLogicalAttack||
        !m_logicalController.active()) return originalTarget;
-    const auto* c=m_cache.get();
-    if(!c||!c->getEntityId||!c->minecraftClass||!c->worldField||
-       !c->getEntityById) return originalTarget;
-
-    // Only the monotonic hold scheduler may create an attack intent. This
-    // lower hook merely consumes that already-numbered intent and substitutes
-    // its committed target once.
-    const silent::InteractionCommand command=m_logicalController.click();
-    if(command.kind!=silent::InteractionCommandKind::AttackEntity) return nullptr;
-
-    const jint originalId=env->CallIntMethod(originalTarget,c->getEntityId);
-    if(env->ExceptionCheck()) {clearException(env);m_logicalController.attackDispatched(command,false);return nullptr;}
-    jobject selected=originalTarget;
-    if(originalId!=command.entityId) {
-        jobject minecraft=c->minecraftInstanceField
-            ?env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
-            :env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
-        jobject world=!env->ExceptionCheck()&&minecraft
-            ?env->GetObjectField(minecraft,c->worldField):nullptr;
-        selected=!env->ExceptionCheck()&&world
-            ?env->CallObjectMethod(world,c->getEntityById,
-                static_cast<jint>(command.entityId)):nullptr;
-        if(world)env->DeleteLocalRef(world);
-        if(minecraft)env->DeleteLocalRef(minecraft);
-        if(env->ExceptionCheck()) {clearException(env);selected=nullptr;}
-    }
-    m_logicalController.attackDispatched(command,selected!=nullptr);
-    return selected;
+    // Vanilla/lower attackEntity is an ownership guard only. It must never
+    // consume a prepared scheduler intent because not every caller is the
+    // stable input/PRE boundary. The held-input hook emits the sole synthetic
+    // dispatch; that call bypasses this guard via g_syntheticLogicalAttack.
+    return nullptr;
 }
 
 bool GameBindings::consumeLogicalInteraction(
@@ -5237,7 +5363,10 @@ bool GameBindings::consumeLogicalInteraction(
     }
     if(!m_logicalController.active()) return false;
     if(env->PushLocalFrame(32)<0) { clearException(env); return true; }
-    silent::InteractionCommand command=m_logicalController.click();
+    const auto interactionTick=m_logicalController.latest().interactionTick;
+    m_logicalController.beginInteractionPre(interactionTick);
+    silent::InteractionCommand command=
+        m_logicalController.clickAtInteractionPre(interactionTick);
     if(command.kind==silent::InteractionCommandKind::None)
         command=m_logicalController.held(heldDown);
     (void)executeLogicalInteraction(env,minecraft,command);
@@ -6886,6 +7015,7 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
     if (cache.itemStackClass != nullptr) env->DeleteGlobalRef(cache.itemStackClass);
     if (cache.itemClass != nullptr) env->DeleteGlobalRef(cache.itemClass);
     if (cache.itemArmorClass != nullptr) env->DeleteGlobalRef(cache.itemArmorClass);
+    if (cache.itemSwordClass != nullptr) env->DeleteGlobalRef(cache.itemSwordClass);
     if (cache.inventoryPlayerClass != nullptr) env->DeleteGlobalRef(cache.inventoryPlayerClass);
     if (cache.enchantmentHelperClass != nullptr)
         env->DeleteGlobalRef(cache.enchantmentHelperClass);
@@ -6945,6 +7075,7 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
     cache.itemStackClass = nullptr;
     cache.itemClass = nullptr;
     cache.itemArmorClass = nullptr;
+    cache.itemSwordClass = nullptr;
     cache.inventoryPlayerClass = nullptr;
     cache.enchantmentHelperClass = nullptr;
     cache.abstractClientPlayerClass = nullptr;
@@ -7028,6 +7159,7 @@ void GameBindings::release(JNIEnv* const env) noexcept
         env->DeleteGlobalRef(m_lwjglMouseClass);
     }
     m_lwjglMouseClass = nullptr;
+    m_lwjglIsButtonDown = nullptr;
     m_lwjglSetGrabbed = nullptr;
     m_lwjglIsGrabbed = nullptr;
     if (env != nullptr && m_lwjglKeyboardClass != nullptr) {

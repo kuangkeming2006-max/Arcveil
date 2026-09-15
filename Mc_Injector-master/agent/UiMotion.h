@@ -85,7 +85,9 @@ struct SmoothScroll final {
     float target = 0.0F;
     float scrollbarAlpha = 0.0F;
     float scrollbarIdleSeconds = 10.0F;
+    float lastMaximum = 0.0F;
     bool initialized = false;
+    bool maximumInitialized = false;
 
     void update(float actual, float maximum, float wheel, float lineHeight,
                 float seconds, bool dragging) noexcept
@@ -95,6 +97,23 @@ struct SmoothScroll final {
             current = target = std::clamp(actual, 0.0F, maximum);
             initialized = true;
         }
+        const float edgeBand=std::max(1.0F,lineHeight*0.75F);
+        // Dynamic accordion height changes move the true scroll maximum every
+        // frame.  When the user is already at the bottom, shift both ends by
+        // the same delta so the viewport remains bottom-anchored continuously
+        // instead of clamping late and hitching on the final collapse frame.
+        if(maximumInitialized&&!dragging) {
+            const bool bottomAnchored=lastMaximum>0.0F&&
+                (lastMaximum-target<=edgeBand||
+                 lastMaximum-current<=edgeBand);
+            if(bottomAnchored) {
+                const float maximumDelta=maximum-lastMaximum;
+                current+=maximumDelta;
+                target+=maximumDelta;
+            }
+        }
+        lastMaximum=maximum;
+        maximumInitialized=true;
         current = std::clamp(current, 0.0F, maximum);
         target = std::clamp(target, 0.0F, maximum);
         if (dragging) {
@@ -109,7 +128,6 @@ struct SmoothScroll final {
         // Snap the last partial line to the true ImGui endpoints. Fractional
         // DPI/font metrics otherwise leave roughly half a glyph clipped even
         // though another wheel notch has already been consumed.
-        const float edgeBand=std::max(1.0F,lineHeight*0.75F);
         if(wheel>0.001F&&target<edgeBand) target=0.0F;
         if(wheel<-0.001F&&maximum-target<edgeBand) target=maximum;
         const float blend = 1.0F - std::exp(-16.0F * std::clamp(seconds, 0.0F, 0.05F));

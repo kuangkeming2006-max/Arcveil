@@ -32,6 +32,15 @@ constexpr qsizetype kMaximumAgentMessageBytes = 64 * 1024;
 constexpr qint64 kAgentReadChunkBytes = 4096;
 constexpr qint64 kGameStateStaleAfterMilliseconds = 3500;
 
+bool validSmartHotbarConfig(const quint32 packed) noexcept
+{
+    constexpr quint32 mask=(1U<<(1U+9U*2U))-1U;
+    if((packed&~mask)!=0U) return false;
+    for(unsigned slot=0;slot<9U;++slot)
+        if(((packed>>(1U+slot*2U))&3U)>2U) return false;
+    return true;
+}
+
 QString normalizedRgbColor(const QString &value)
 {
     const QColor color(value.trimmed());
@@ -1913,6 +1922,16 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         if(!ok||value<1||value>20) return;
         m_aimAttackCps=value;
         storeFeatureSettings(); emit featureSettingsChanged();
+    } else if(type==QByteArrayLiteral("SMART_HOTBAR_CHANGED")) {
+        if(fields.size()!=2) return;
+        bool ok=false;
+        const quint32 value=fields[1].toUInt(&ok);
+        if(!ok||!validSmartHotbarConfig(value)) return;
+        if(m_smartHotbarConfig!=value) {
+            m_smartHotbarConfig=value;
+            storeFeatureSettings();
+            emit featureSettingsChanged();
+        }
     } else if (type == QByteArrayLiteral("FEATURE_STATE_CHANGED") ||
                type == QByteArrayLiteral("FEATURE_STATE_CHANGED_V2") ||
                type == QByteArrayLiteral("FEATURE_STATE_CHANGED_V3")) {
@@ -2723,6 +2742,9 @@ void OverlayManager::loadFeatureSettings()
         QStringLiteral("clickGuiOpacity"), 96).toInt(), 35, 100);
     m_featureExtraBits = settings.value(
         QStringLiteral("featureExtraBits"), 0x43U).toUInt() & ~0x10U;
+    m_smartHotbarConfig=settings.value(
+        QStringLiteral("smartHotbarConfig"),quint32(0U)).toUInt();
+    if(!validSmartHotbarConfig(m_smartHotbarConfig)) m_smartHotbarConfig=0U;
     m_textGuiAlignment = std::clamp(settings.value(
         QStringLiteral("textGuiAlignment"), 2).toInt(), 0, 2);
     m_localMobReach = std::clamp(settings.value(
@@ -2892,6 +2914,7 @@ void OverlayManager::flushFeatureSettings()
     settings.setValue(QStringLiteral("clickGuiHeightPercent"), m_clickGuiHeightPercent);
     settings.setValue(QStringLiteral("clickGuiOpacity"), m_clickGuiOpacity);
     settings.setValue(QStringLiteral("featureExtraBits"), m_featureExtraBits);
+    settings.setValue(QStringLiteral("smartHotbarConfig"),m_smartHotbarConfig);
     settings.setValue(QStringLiteral("textGuiAlignment"), m_textGuiAlignment);
     settings.setValue(QStringLiteral("localMobReach"), m_localMobReach);
     settings.setValue(QStringLiteral("localAttackDelayMs"), m_localAttackDelayMs);
@@ -3026,6 +3049,8 @@ void OverlayManager::sendFeatureSnapshot()
         (static_cast<unsigned>(std::clamp(m_velocityHotkey,0,254))<<19U))+'\n');
     writeAgentCommand(QByteArrayLiteral("AIM_ATTACK_CPS ")+
         QByteArray::number(std::clamp(m_aimAttackCps,1,20))+'\n');
+    writeAgentCommand(QByteArrayLiteral("SMART_HOTBAR ")+
+        QByteArray::number(m_smartHotbarConfig)+'\n');
 }
 
 void OverlayManager::sendBindSnapshot()

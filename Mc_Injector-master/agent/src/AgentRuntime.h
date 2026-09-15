@@ -137,6 +137,7 @@ private:
     // 32-bit feature mask. Bits: nearest, text line, knockback, bow,
     // local-hostile aura, local incoming-velocity scaling.
     std::atomic<std::uint32_t> m_featureExtraBits{0x43U};
+    std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
     std::atomic<unsigned> m_aimOptions{412810U};
     std::atomic<unsigned> m_featureChangedAimOptions{412810U};
     std::atomic<int> m_textGuiAlignment{2};
@@ -250,6 +251,7 @@ private:
     std::atomic<int> m_featureChangedClickGuiHeightPercent{100};
     std::atomic<int> m_featureChangedClickGuiOpacity{96};
     std::atomic<std::uint32_t> m_featureChangedExtraBits{0x03U};
+    std::atomic<std::uint32_t> m_featureChangedSmartHotbarConfig{0U};
     std::atomic<int> m_featureChangedTextGuiAlignment{2};
     std::atomic<int> m_featureChangedLocalMobReach{4};
     std::atomic<int> m_featureChangedLocalAttackDelayMs{500};
