@@ -309,6 +309,8 @@ private:
     mapping.getCollidingBoundingBoxes = "func_72945_a";
     mapping.keyBindSneakField = "field_74311_E";
     mapping.keyBindsHotbarField = "field_151456_ac";
+    mapping.keyBindingIsPressed = "func_151468_f";
+    mapping.syncCurrentPlayItem = "func_78750_j";
     mapping.movementKeyFields = {"field_74351_w", "field_74368_y",
                                  "field_74370_x", "field_74366_z",
                                  "field_74314_A"};
@@ -329,6 +331,12 @@ private:
     mapping.getEyeHeight = "func_70047_e";
     mapping.hitVectorField = "field_72307_f";
     mapping.clickMouse = "func_147116_af";
+    mapping.rightClickMouse = "func_147121_ag";
+    mapping.knockBack = "func_70653_a";
+    mapping.velocityPacketName = "net.minecraft.network.play.server.S12PacketEntityVelocity";
+    mapping.velocityPacketSignature = "Lnet/minecraft/network/play/server/S12PacketEntityVelocity;";
+    mapping.handleEntityVelocity = "func_147244_a";
+    mapping.velocityEntityId = "func_149412_c";
     mapping.sendClickBlock = "func_147115_a";
     mapping.moveFlying = "func_70060_a";
     mapping.isSprinting = "func_70051_ag";
@@ -559,6 +567,8 @@ private:
     mapping.getCollidingBoundingBoxes = "a";
     mapping.keyBindSneakField = "ad";
     mapping.keyBindsHotbarField = "aw";
+    mapping.keyBindingIsPressed = "f";
+    mapping.syncCurrentPlayItem = "j";
     mapping.movementKeyFields = {"Y", "aa", "Z", "ab", "ac"};
     mapping.getKeyCode = "i";
     mapping.setKeyBindState = "a";
@@ -577,6 +587,12 @@ private:
     mapping.getEyeHeight = "aS";
     mapping.hitVectorField = "c";
     mapping.clickMouse = "aw";
+    mapping.rightClickMouse = "ax";
+    mapping.knockBack = "a";
+    mapping.velocityPacketName = "hm";
+    mapping.velocityPacketSignature = "Lhm;";
+    mapping.handleEntityVelocity = "a";
+    mapping.velocityEntityId = "a";
     mapping.sendClickBlock = "b";
     mapping.moveFlying = "a";
     mapping.isSprinting = "aw";
@@ -778,6 +794,8 @@ private:
     mapping.getCollidingBoundingBoxes = "getCollidingBoundingBoxes";
     mapping.keyBindSneakField = "keyBindSneak";
     mapping.keyBindsHotbarField = "keyBindsHotbar";
+    mapping.keyBindingIsPressed = "isPressed";
+    mapping.syncCurrentPlayItem = "syncCurrentPlayItem";
     mapping.movementKeyFields = {"keyBindForward", "keyBindBack",
                                  "keyBindLeft", "keyBindRight",
                                  "keyBindJump"};
@@ -798,6 +816,12 @@ private:
     mapping.getEyeHeight = "getEyeHeight";
     mapping.hitVectorField = "hitVec";
     mapping.clickMouse = "clickMouse";
+    mapping.rightClickMouse = "rightClickMouse";
+    mapping.knockBack = "knockBack";
+    mapping.velocityPacketName = "net.minecraft.network.play.server.S12PacketEntityVelocity";
+    mapping.velocityPacketSignature = "Lnet/minecraft/network/play/server/S12PacketEntityVelocity;";
+    mapping.handleEntityVelocity = "handleEntityVelocity";
+    mapping.velocityEntityId = "getEntityID";
     mapping.sendClickBlock = "sendClickBlockToController";
     mapping.moveFlying = "moveFlying";
     mapping.isSprinting = "isSprinting";

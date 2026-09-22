@@ -7,14 +7,18 @@
 #include <QTimer>
 #include <QDebug>
 #include <QTest>
+#include <QDir>
+#include <QImage>
 #include <functional>
 
 // Explicit --smoke-test only. Delivers events to this owned QQuickWindow;
 // never moves the system pointer or sends input to another application.
 class ControllerUiSmoke final : public QObject {
 public:
-    ControllerUiSmoke(QQuickWindow* window, std::function<void(bool)> finished)
-        : QObject(window), m_window(window), m_finished(std::move(finished)) {
+    ControllerUiSmoke(QQuickWindow* window, std::function<void(bool)> finished,
+        std::function<void(bool)> setTheme = {})
+        : QObject(window), m_window(window), m_finished(std::move(finished)),
+          m_setTheme(std::move(setTheme)) {
         connect(&m_timer,&QTimer::timeout,this,[this] { step(); });
         m_timer.start(500);
     }
@@ -53,7 +57,12 @@ private:
             qInfo() << "Found attach popup:" << m_popup;
             if(!m_popup || !QMetaObject::invokeMethod(m_popup,"open")) finish(false);
         } else if(phase==2) {
-            if(!m_popup->property("opened").toBool()) { finish(false); return; }
+            if(!m_popup->property("opened").toBool()) {
+                qInfo()<<"Waiting for modal enter:"<<m_popup->property("visible")
+                       <<m_popup->property("opacity")<<m_popup->property("scale");
+                if(++m_enterWaits<5) {--m_phase;return;}
+                finish(false); return;
+            }
             click("scanner");
             if(m_window->property("activeRoute").toString()!="settings") { finish(false); return; }
             QMetaObject::invokeMethod(m_popup,"close");
@@ -79,14 +88,37 @@ private:
             auto* refresh=find(m_window->contentItem(),"scanRefreshButton");
             if(!refresh || refresh->isEnabled() ||
                !refresh->property("text").toString().startsWith("Scanning")) finish(false);
-        } else if(phase>=19) {
+        } else if(phase==19) {
             auto* refresh=find(m_window->contentItem(),"scanRefreshButton");
-            finish(refresh && refresh->isEnabled() && refresh->property("text")=="Refresh");
+            if(!refresh||!refresh->isEnabled()||refresh->property("text")!="Refresh"||
+               !click("about")) finish(false);
+        } else if(phase==20) {
+            auto* build=find(m_window->contentItem(),"aboutBuildLabel");
+            if(m_window->property("activeRoute").toString()!="about"||!build||
+               !build->property("text").toString().contains("v51")||!capture("about-light")) {
+                finish(false);return;
+            }
+            if(m_setTheme) m_setTheme(true);
+        } else if(phase==21) {
+            finish(capture("about-dark"));
         }
+    }
+    bool capture(const QString& name) {
+        auto* glyph=find(m_window->contentItem(),"aboutBrandGlyph");
+        const QColor expected=m_window->property("darkTheme").toBool()
+            ? QColor("#24163E") : QColor("#FFFFFF");
+        qInfo()<<"Theme foreground:"<<m_window->property("primaryForegroundColor")
+               <<"glyph:"<<(glyph?glyph->property("color"):QVariant{});
+        if(!glyph||glyph->property("color").value<QColor>()!=expected) return false;
+        const QString path=qEnvironmentVariable("ARCVEIL_TEST_SCREENSHOTS");
+        if(path.isEmpty()) return true;
+        return QDir().mkpath(path)&&m_window->grabWindow().save(path+"/"+name+".png");
     }
     QQuickWindow* m_window;
     QObject* m_popup=nullptr;
     std::function<void(bool)> m_finished;
+    std::function<void(bool)> m_setTheme;
     QTimer m_timer;
     int m_phase=0;
+    int m_enterWaits=0;
 };

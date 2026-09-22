@@ -12,9 +12,23 @@ using Windows.Media.Control;
 internal static class WindowsMediaBridge
 {
     private const uint KeyEventKeyUp = 0x0002U;
-    [DllImport("user32.dll", SetLastError = false)]
-    private static extern void keybd_event(byte virtualKey, byte scanCode,
-        uint flags, UIntPtr extraInfo);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardInput {
+        public ushort Key, Scan; public uint Flags, Time; public UIntPtr Extra;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MouseInput {
+        public int X, Y; public uint Data, Flags, Time; public UIntPtr Extra;
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputData {
+        [FieldOffset(0)] public KeyboardInput Keyboard;
+        [FieldOffset(0)] public MouseInput Mouse;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeInput { public uint Type; public InputData Data; }
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint count, NativeInput[] inputs, int size);
     private static readonly ConcurrentQueue<string> Commands = new ConcurrentQueue<string>();
     private static readonly AutoResetEvent Changed = new AutoResetEvent(true);
     private static readonly object OutputGate = new object();
@@ -54,17 +68,30 @@ internal static class WindowsMediaBridge
         bool accepted = false;
         string route = "GSMTC";
         string detail = string.Empty;
+        WriteLine("RECEIVED\t" + command);
         try
         {
             if (session != null)
             {
+                Task<bool> request = null;
                 if (command == "PREVIOUS")
-                    accepted = session.TrySkipPreviousAsync().AsTask().GetAwaiter().GetResult();
+                    request = session.TrySkipPreviousAsync().AsTask();
                 else if (command == "NEXT")
-                    accepted = session.TrySkipNextAsync().AsTask().GetAwaiter().GetResult();
+                    request = session.TrySkipNextAsync().AsTask();
                 else if (command == "TOGGLE")
-                    accepted = session.TryTogglePlayPauseAsync().AsTask().GetAwaiter().GetResult();
+                    request = session.TryTogglePlayPauseAsync().AsTask();
+                if (request != null && !request.Wait(1500))
+                {
+                    // The player may complete this later. A fallback here
+                    // could double-skip, so report uncertainty and do not retry.
+                    WriteLine("ACTION\t" + command + "\t0\tGSMTC_TIMEOUT\t" +
+                        Encode("Player did not acknowledge within 1500 ms; not retried."));
+                    return;
+                }
+                accepted = request != null && request.GetAwaiter().GetResult();
+                if (!accepted) detail = "Player rejected GSMTC transport.";
             }
+            else detail = "No media session.";
         }
         catch (Exception error)
         {
@@ -79,12 +106,16 @@ internal static class WindowsMediaBridge
             byte key = MediaKey(command);
             if (key != 0)
             {
-                route = "MEDIA_KEY";
+                route = "MEDIA_KEY_SUBMITTED";
                 try
                 {
-                    keybd_event(key, 0, 0, UIntPtr.Zero);
-                    keybd_event(key, 0, KeyEventKeyUp, UIntPtr.Zero);
-                    accepted = true;
+                    var inputs = new NativeInput[2];
+                    inputs[0].Type = inputs[1].Type = 1;
+                    inputs[0].Data.Keyboard.Key = inputs[1].Data.Keyboard.Key = key;
+                    inputs[1].Data.Keyboard.Flags = KeyEventKeyUp;
+                    accepted = SendInput(2, inputs, Marshal.SizeOf(typeof(NativeInput))) == 2;
+                    detail += accepted ? " Native media key submitted; playback is not yet confirmed."
+                        : " SendInput failed: " + Marshal.GetLastWin32Error();
                 }
                 catch (Exception error)
                 {

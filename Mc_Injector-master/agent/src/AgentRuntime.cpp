@@ -161,7 +161,9 @@ std::uint32_t packFeatureHotkeysExtra(const FeatureSettings& settings) noexcept
         std::clamp(settings.featureHotkeys[16U],0,254)) |
         (static_cast<std::uint32_t>(
             std::clamp(settings.featureHotkeys[17U],0,254))<<8U) |
-        (settings.freeLookEnabled ? 0x10000U : 0U);
+        (settings.freeLookEnabled ? 0x10000U : 0U) |
+        (settings.attackShieldEnabled ? 0x20000U : 0U) |
+        (settings.attackShieldWildcard ? 0x40000U : 0U);
 }
 
 FeatureSettings unpackFeatures(const std::uint32_t bits,
@@ -295,6 +297,8 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.featureHotkeys[16U]=static_cast<int>(hotkeysPackedC&0xFFU);
     s.featureHotkeys[17U]=static_cast<int>((hotkeysPackedC>>8U)&0xFFU);
     s.freeLookEnabled=(hotkeysPackedC&0x10000U)!=0U;
+    s.attackShieldEnabled=(hotkeysPackedC&0x20000U)!=0U;
+    s.attackShieldWildcard=(hotkeysPackedC&0x40000U)!=0U;
     // Preserve the legacy Safewalk binding as a migration source. New builds
     // keep both fields synchronized, while old settings remain usable.
     if (s.featureHotkeys[4U] == 0) s.featureHotkeys[4U] = s.safewalkHotkey;
@@ -1216,7 +1220,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
 {
     const unsigned aimOptions=packAimOptions(settings);
     const std::uint32_t smartHotbarConfig=hotbar::pack(
-        settings.smartHotbarEnabled,settings.smartHotbarActions);
+        settings.smartHotbarEnabled,settings.smartHotbarActions,
+        settings.smartHotbarRefill,settings.sprintEnabled,settings.nametagAlways);
     m_aimOptions.store(aimOptions,std::memory_order_release);
     m_featureChangedAimOptions.store(aimOptions,std::memory_order_relaxed);
     const std::uint32_t bits = packFeatures(settings);
@@ -1849,13 +1854,15 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         const int extraHotkey17=static_cast<int>((hotkeysPackedC>>8U)&0xFFU);
         if((extraHotkey16>0&&extraHotkey16<8)||extraHotkey16>254||
            (extraHotkey17>0&&extraHotkey17<8)||extraHotkey17>254||
-           hotkeysPackedC>0x1FFFFU) {
+           hotkeysPackedC>0x7FFFFU) {
             (void)m_ipc->sendLine("ERROR BAD_FEATURE_STATE invalid-extra-feature-hotkey");
             return true;
         }
         settings.featureHotkeys[16U]=extraHotkey16;
         settings.featureHotkeys[17U]=extraHotkey17;
         settings.freeLookEnabled=(hotkeysPackedC&0x10000U)!=0U;
+        settings.attackShieldEnabled=(hotkeysPackedC&0x20000U)!=0U;
+        settings.attackShieldWildcard=(hotkeysPackedC&0x40000U)!=0U;
         if (settings.featureHotkeys[4U] == 0)
             settings.featureHotkeys[4U] = safewalkHotkey;
         settings.safewalkHotkey = settings.featureHotkeys[4U];
@@ -2575,6 +2582,9 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         std::memory_order_acquire);
     activeFeatures.smartHotbarEnabled=hotbar::enabled(smartHotbarConfig);
     activeFeatures.smartHotbarActions=hotbar::unpack(smartHotbarConfig);
+    activeFeatures.smartHotbarRefill=(smartHotbarConfig&hotbar::Refill)!=0U;
+    activeFeatures.sprintEnabled=(smartHotbarConfig&hotbar::Sprint)!=0U;
+    activeFeatures.nametagAlways=(smartHotbarConfig&hotbar::AllNames)!=0U;
     const bool interactiveNow = m_interactive.load(std::memory_order_acquire);
     const unsigned aimOptions=m_aimOptions.load(std::memory_order_acquire);
     activeFeatures.aimSilentLock=(aimOptions&1U)!=0;
@@ -2638,14 +2648,15 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     // remains active in lobbies and during respawn. The explicit override is
     // persisted separately and never inferred from a feature hotkey.
     if (snapshot.hypixelServer && !activeFeatures.allowHypixelMovement &&
-        (activeFeatures.scaffoldEnabled || activeFeatures.flyEnabled ||
+        (activeFeatures.aimAssistEnabled || activeFeatures.scaffoldEnabled || activeFeatures.flyEnabled ||
          activeFeatures.bhopEnabled)) {
+        activeFeatures.aimAssistEnabled = false;
         activeFeatures.scaffoldEnabled = false;
         activeFeatures.flyEnabled = false;
         activeFeatures.bhopEnabled = false;
         queueFeatureChanged(activeFeatures);
         m_bindings->enqueueDebugChatLine(
-            "[Movement Guard] Fly/BHop/Scaffold were disabled on Hypixel.");
+            "[Server Guard] Aim Assist/Fly/BHop/Scaffold were disabled on Hypixel.");
     }
 
     // New local diagnostics are fail-closed. A warning cannot be used as an
@@ -2683,6 +2694,9 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         gameplay.freeLookHotkey = activeFeatures.featureHotkeys[17U];
         gameplay.smartHotbar=activeFeatures.smartHotbarEnabled&&gameplayInput;
         gameplay.smartHotbarActions=activeFeatures.smartHotbarActions;
+        gameplay.smartHotbarRefill=activeFeatures.smartHotbarRefill;
+        gameplay.forceSprint=activeFeatures.sprintEnabled&&gameplayInput;
+        gameplay.shieldAttackerId=gameplayInput?m_renderer->shieldAttacker(snapshot):-1;
         gameplay.aimAssist = activeFeatures.aimAssistEnabled && gameplayInput;
         gameplay.longJump = activeFeatures.longJumpEnabled && gameplayInput &&
                             snapshot.integratedSinglePlayer;

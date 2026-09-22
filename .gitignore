@@ -2,6 +2,8 @@
 /build-*/
 /dist-*/
 /Arcveil/
+/Arcveil_r*/
+/Arcveil_v*/
 /render-*/
 *.zip
 *.user

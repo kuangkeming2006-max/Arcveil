@@ -17,6 +17,8 @@
 #include "SilentLockCoordinator.h"
 #include "LiveInteractionTransform.h"
 #include "LiveAttackTransform.h"
+#include "LiveHotbarTransform.h"
+#include "LiveImpulseTransform.h"
 #include "LiveInteractionObserver.h"
 #include "LiveMovementTransform.h"
 #include "LiveJumpTransform.h"
@@ -71,6 +73,7 @@ struct EntityMarker final {
     char armorTeam = 'u';
     char teamColor = 'u';
     std::array<char, 17U> playerName{};
+    std::array<char, 65U> displayName{}; // UTF-8 offline/custom-server nickname.
     std::array<char, 37U> uuid{};
     // True only after this spawned entity was joined to the persistent TAB
     // roster (UUID first, exact name as a compatibility fallback).  Renderers
@@ -245,6 +248,9 @@ struct GameplaySettings final {
     bool freeLookForeground = false;
     bool freeLook = false;
     bool smartHotbar = false;
+    bool smartHotbarRefill = false;
+    bool forceSprint = false;
+    int shieldAttackerId = -1;
     int freeLookHotkey = VK_LMENU;
     std::array<int, 9U> smartHotbarActions{};
     int safewalkReleaseDelayMs = 120;
@@ -416,6 +422,10 @@ private:
         const silent::InteractionCommand& command) noexcept;
     [[nodiscard]] silent::BlockRayHit traceLogicalBlock(
         JNIEnv* env, jobject world, const silent::LogicalFramePlan& plan) noexcept;
+    [[nodiscard]] bool readCombatEye(JNIEnv* env,jobject player,
+                                    silent::Vec3& eye) noexcept;
+    [[nodiscard]] bool readCombatBounds(JNIEnv* env,jobject entity,
+                                       silent::Bounds& bounds) noexcept;
     static void deleteGlobalRefs(JNIEnv* env, BindingCache& cache) noexcept;
 
     JavaVM* m_vm = nullptr;
@@ -529,7 +539,25 @@ private:
     bool m_inputGrabStateKnown = false;
     bool m_inputWasGrabbed = true;
     bool m_safewalkSneakForced = false;
-    std::array<bool,9U> m_smartHotbarKeyDown{};
+    std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
+    std::atomic<int> m_smartHotbarRequest{0};
+    std::atomic<int> m_smartHotbarRefillRequest{0};
+    std::atomic<bool> m_forceSprint{false};
+    LiveHotbarTransform m_smartHotbarHook;
+    LiveItemUseTransform m_itemUseHook;
+    LiveImpulseTransform m_impulseHook;
+    LiveVelocityTransform m_velocityHook;
+    std::atomic<int> m_shieldAttacker{-1};
+    std::atomic<int> m_shieldLocalPlayer{-1};
+    std::uint64_t m_nextImpulseHookAttempt=0U;
+    [[nodiscard]] bool suppressKnownImpulse(JNIEnv*,jobject,jobject) noexcept;
+    std::atomic<bool> m_refillEnabled{false};
+    int m_refillSlot=-1;
+    [[nodiscard]] bool onItemUse(JNIEnv* env,jobject minecraft,bool entering) noexcept;
+    std::uint64_t m_nextSmartHotbarHookAttemptTick=0U;
+    [[nodiscard]] bool consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept;
+    [[nodiscard]] bool processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noexcept;
+    void refreshAttackAtPublication(JNIEnv* env) noexcept;
     int m_safewalkSneakKeyCode = 0;
     std::uint8_t m_safewalkSupportMask = 0U;
     std::uint64_t m_safewalkReleaseAt = 0U;
@@ -551,9 +579,14 @@ private:
     std::uint8_t m_freeLookHookAttemptCount = 0U;
     bool m_freeLookHookRetryLatched = false;
     std::uint64_t m_nextAimCandidateDebugTick = 0U;
+    std::uint64_t m_nextTargetDiagTick = 0U;
+    int m_lastTargetDiagMissingId=-1;
+    bool m_targetDiagMissingLatched=false;
     silent::LogicalStateController m_logicalController;
     LiveInteractionObserver m_interactionObserver;
     std::uint64_t m_nextInteractionObserverAttempt=0;
+    std::atomic<int> m_lastAttackEntryEntity{-1};
+    std::atomic<std::uint64_t> m_lastAttackEntryTick{0U};
     bool observeLogicalCamera(JNIEnv* env,jobject minecraft,bool leftDown) noexcept;
     bool m_waitingVanillaResume=false;
     std::atomic<bool> m_freeLookRequested{false};

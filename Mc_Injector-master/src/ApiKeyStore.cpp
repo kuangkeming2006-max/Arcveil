@@ -51,7 +51,7 @@ QByteArray ApiKeyStore::protect(const QByteArray &plainText)
     DATA_BLOB input = blobFor(plainText);
     DATA_BLOB entropy = entropyBlob();
     DATA_BLOB output{};
-    if (::CryptProtectData(&input, L"Java Overlay Studio Hypixel key", &entropy,
+    if (::CryptProtectData(&input, L"Arcveil Hypixel key", &entropy,
                            nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output) == FALSE) {
         return {};
     }

@@ -13,7 +13,7 @@ ApplicationWindow {
     minimumHeight: 680
     property bool startupReady: false
     visible: startupReady
-    title: "Java Overlay Studio"
+    title: "Arcveil"
     color: backgroundColor
     // Keep the real Windows caption, snap targets and DPI-aware resize frame.
     flags: Qt.Window
@@ -33,7 +33,7 @@ ApplicationWindow {
     readonly property color outlineVariantColor: darkTheme ? "#3C4049" : "#DED8E2"
     readonly property color hoverColor: darkTheme ? "#30343D" : "#E3DDE7"
     readonly property color selectedIconColor: darkTheme ? "#5B4B7D" : "#D7C7F5"
-    readonly property color onPrimaryColor: darkTheme ? "#24163E" : "#FFFFFF"
+    readonly property color primaryForegroundColor: darkTheme ? "#24163E" : "#FFFFFF"
     readonly property color primaryContainerMutedText: darkTheme ? "#D4C4F4" : "#4F378B"
     property bool windowPersistenceReady: false
     property bool exitConfirmed: false
@@ -77,6 +77,7 @@ ApplicationWindow {
                                                    || (activeTargetPid === 0 ? "" : "PID " + activeTargetPid))
     readonly property var setupNavigationItems: [
         { "icon": "⌕", "label": "Scanner", "description": "Discover Java processes", "route": "scanner" },
+        { "icon": "i", "label": "About", "description": "Arcveil · v51", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Discovery preferences", "route": "settings" }
     ]
     // Process-specific information architecture. Hypixel is intentionally a
@@ -86,7 +87,6 @@ ApplicationWindow {
         { "icon": "P", "label": "Player Status", "description": "Identity, health and skin", "route": "player" },
         { "icon": "◆", "label": "Config", "description": "Save and restore settings", "route": "config" },
         { "icon": "H", "label": "Hypixel", "description": "Official API statistics", "route": "hypixel" },
-        { "icon": "i", "label": "About", "description": "Build and architecture", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Runtime preferences", "route": "settings" }
     ]
     readonly property var navigationItems: workspaceUnlocked
@@ -151,7 +151,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: 430
         modal: true
-        title: "Close Java Overlay Studio?"
+        title: "Close Arcveil?"
         standardButtons: Dialog.Cancel | Dialog.Ok
         Label {
             width: parent.width
@@ -423,14 +423,14 @@ ApplicationWindow {
                 color: app.primaryColor
                 Text {
                     anchors.centerIn: parent
-                    text: "J"
-                    color: app.onPrimaryColor
+                    text: "A"
+                    color: app.primaryForegroundColor
                     font.pixelSize: 12
                     font.weight: Font.Bold
                 }
             }
             Text {
-                text: "Java Overlay Studio"
+                text: "Arcveil"
                 color: app.textColor
                 font.pixelSize: 12
                 font.weight: Font.Medium
@@ -573,8 +573,8 @@ ApplicationWindow {
 
                     Text {
                         anchors.centerIn: parent
-                        text: "J"
-                        color: app.onPrimaryColor
+                        text: "A"
+                        color: app.primaryForegroundColor
                         font.pixelSize: 25
                         font.weight: Font.Bold
                     }
@@ -585,7 +585,7 @@ ApplicationWindow {
                     spacing: 1
                     Text {
                         Layout.fillWidth: true
-                        text: "JAVA OVERLAY"
+                        text: "ARCVEIL"
                         color: app.textColor
                         font.pixelSize: 17
                         font.weight: Font.DemiBold
@@ -1258,7 +1258,7 @@ ApplicationWindow {
                     textColor: app.textColor
                     secondaryTextColor: app.secondaryTextColor
                     primaryColor: app.primaryColor
-                    onPrimaryColor: app.onPrimaryColor
+                    primaryForegroundColor: app.primaryForegroundColor
                     outlineVariantColor: app.outlineVariantColor
                 }
                 WheelPage {
@@ -1770,7 +1770,7 @@ ApplicationWindow {
                                             text: radiusValue.toString()
                                             filled: OverlayManager.bedDefenseRadius === radiusValue
                                             containerColor: app.primaryColor
-                                            foregroundColor: filled ? app.onPrimaryColor : app.primaryColor
+                                            foregroundColor: filled ? app.primaryForegroundColor : app.primaryColor
                                             outlineColor: app.outlineVariantColor
                                             onClicked: OverlayManager.bedDefenseRadius = radiusValue
                                         }
@@ -1970,7 +1970,7 @@ ApplicationWindow {
                                 Layout.preferredWidth: 2
                                 Layout.preferredHeight: 132
                                 radius: 22
-                                color: "#211E24"
+                                color: app.surfaceVariant
 
                                 ColumnLayout {
                                     anchors.fill: parent
@@ -1995,7 +1995,7 @@ ApplicationWindow {
                                     Text {
                                         Layout.fillWidth: true
                                         text: app.mappingStateLabel()
-                                        color: "#D0BCFF"
+                                        color: app.primaryColor
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
                                     }
@@ -2144,7 +2144,7 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: 6
                                             radius: 3
-                                            color: "#E6DFEA"
+                                            color: app.surfaceVariant
                                             clip: true
 
                                             Rectangle {
@@ -2172,7 +2172,7 @@ ApplicationWindow {
                                                 width: Math.max(58, injectionProgressTrack.width * 0.22)
                                                 height: parent.height
                                                 radius: parent.radius
-                                                color: "#D0BCFF"
+                                                color: app.primaryColor
 
                                                 NumberAnimation on x {
                                                     running: openGlProgressSweep.visible
@@ -2426,7 +2426,7 @@ ApplicationWindow {
                         id: aboutContent
                         x: 34; y: 28; width: parent.width - 68; spacing: 18
                         Text { text: "About"; color: app.textColor; font.pixelSize: 32; font.weight: Font.DemiBold }
-                        Text { text: "Java Overlay Studio · Debug v12"; color: app.secondaryTextColor; font.pixelSize: 14 }
+                        Text { objectName: "aboutBuildLabel"; text: "Arcveil · Internal build v51"; color: app.secondaryTextColor; font.pixelSize: 14 }
 
                         Rectangle {
                             Layout.fillWidth: true; Layout.preferredHeight: 210
@@ -2435,11 +2435,11 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 28; spacing: 24
                                 Rectangle {
                                     Layout.preferredWidth: 76; Layout.preferredHeight: 76; radius: 25; color: app.primaryColor
-                                    Text { anchors.centerIn: parent; text: "MC"; color: app.onPrimaryColor; font.pixelSize: 20; font.weight: Font.Bold }
+                                    Text { objectName: "aboutBrandGlyph"; anchors.centerIn: parent; text: "A"; color: app.primaryForegroundColor; font.pixelSize: 20; font.weight: Font.Bold }
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true; spacing: 8
-                                    Text { text: "Native Minecraft 1.8.9 Overlay"; color: app.primaryContainerText; font.pixelSize: 23; font.weight: Font.DemiBold }
+                                    Text { text: "Arcveil"; color: app.primaryContainerText; font.pixelSize: 23; font.weight: Font.DemiBold }
                                     Text {
                                         Layout.fillWidth: true
                                         text: "C++20 · Qt 6/QML · JVMTI/JNI · Dear ImGui · OpenGL 2 · authenticated bidirectional IPC"
@@ -2455,8 +2455,8 @@ ApplicationWindow {
                                 model: [
                                     { "title": "Controller", "body": "Windows process discovery, DPAPI-protected API configuration, asynchronous HTTPS and Material QML dashboard." },
                                     { "title": "Agent", "body": "Native in-process OpenGL renderer with safe JVM thread attachment, cached JNI bindings and reversible hooks." },
-                                    { "title": "Privacy", "body": "The Hypixel key is encrypted for the current Windows account and is never exposed back to QML after saving." },
-                                    { "title": "Scope", "body": "ESP marker rendering remains restricted to integrated single-player worlds; network statistics are separately match-gated." }
+                                    { "title": "License & privacy", "body": "Apache-2.0 · Third-party licenses are included with Arcveil. The Hypixel key is encrypted for the current Windows account." },
+                                    { "title": "Features", "body": "Visual overlays, AimAssist, FreeLook, Smart Hotbar, player blacklist and Windows Now Playing. Some modules are restricted to local worlds." }
                                 ]
                                 delegate: Rectangle {
                                     required property var modelData
@@ -2492,7 +2492,7 @@ ApplicationWindow {
                         spacing: 14
 
                     Text {
-                        text: "Injector settings"
+                        text: "Arcveil settings"
                         color: app.textColor
                         font.pixelSize: 32
                         font.weight: Font.DemiBold
@@ -2545,7 +2545,7 @@ ApplicationWindow {
                                 text: "☀  Light"
                                 filled: !app.darkTheme
                                 containerColor: app.primaryColor
-                                foregroundColor: filled ? app.onPrimaryColor : app.textColor
+                                foregroundColor: filled ? app.primaryForegroundColor : app.textColor
                                 outlineColor: app.outlineVariantColor
                                 onClicked: AppSettings.darkTheme = false
                             }
@@ -2554,7 +2554,7 @@ ApplicationWindow {
                                 text: "☾  Dark"
                                 filled: app.darkTheme
                                 containerColor: app.primaryColor
-                                foregroundColor: filled ? app.onPrimaryColor : app.textColor
+                                foregroundColor: filled ? app.primaryForegroundColor : app.textColor
                                 outlineColor: app.outlineVariantColor
                                 onClicked: AppSettings.darkTheme = true
                             }
@@ -2583,7 +2583,7 @@ ApplicationWindow {
                                 iconText: app.autoRefresh ? "✓" : ""
                                 filled: app.autoRefresh
                                 containerColor: app.primaryColor
-                                foregroundColor: app.autoRefresh ? app.onPrimaryColor : app.primaryColor
+                                foregroundColor: app.autoRefresh ? app.primaryForegroundColor : app.primaryColor
                                 outlineColor: app.outlineVariantColor
                                 onClicked: app.autoRefresh = !app.autoRefresh
                             }
@@ -2701,7 +2701,7 @@ ApplicationWindow {
                                     text: modelData
                                     filled: OverlayManager.guiScaleIndex === index
                                     containerColor: app.primaryColor
-                                    foregroundColor: filled ? app.onPrimaryColor : app.primaryColor
+                                    foregroundColor: filled ? app.primaryForegroundColor : app.primaryColor
                                     outlineColor: app.outlineVariantColor
                                     onClicked: OverlayManager.guiScaleIndex = index
                                 }
@@ -2725,7 +2725,7 @@ ApplicationWindow {
                                 Layout.preferredHeight: 56
                                 radius: 18
                                 color: app.primaryColor
-                                Text { anchors.centerIn: parent; text: "GPU"; color: app.onPrimaryColor; font.pixelSize: 13; font.weight: Font.Bold }
+                                Text { anchors.centerIn: parent; text: "GPU"; color: app.primaryForegroundColor; font.pixelSize: 13; font.weight: Font.Bold }
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true

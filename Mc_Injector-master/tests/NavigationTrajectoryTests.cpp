@@ -24,7 +24,7 @@ int main() {
     result=navigation::filter("  bEd  ");
     check(has(result,1) && has(result,3) && !has(result,0),"case-insensitive bed search across categories");
     result=navigation::filter("MOVEMENT");
-    check(result.count==5 && has(result,4) && !has(result,15),
+    check(result.count==6 && has(result,4) && has(result,24) && !has(result,15),
           "category search includes visible movement children only");
     result=navigation::filter("");
     check(!has(result,15)&&!has(result,17),

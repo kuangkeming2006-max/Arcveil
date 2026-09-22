@@ -112,6 +112,13 @@ struct FeatureSettings final {
     bool longJumpEnabled = false;
     bool freeLookEnabled = false;
     bool smartHotbarEnabled = false;
+    bool smartHotbarRefill = false;
+    bool sprintEnabled = false;
+    bool nametagAlways = false;
+    bool attackShieldEnabled = false;
+    // The wildcard is safe to persist because it has no world/entity identity.
+    // Specific UUID/entity selections remain tied to the current session.
+    bool attackShieldWildcard = false;
     // High-risk movement helpers fail closed on Hypixel. This explicit,
     // persisted opt-in is intentionally separate from each feature switch so
     // an accidental hotkey press can never silently override the server guard.
@@ -330,6 +337,17 @@ public:
     [[nodiscard]] bool consumeClickGuiToggle() noexcept;
     void setFeatureSettings(const FeatureSettings& settings) noexcept;
     [[nodiscard]] bool consumeFeatureSettings(FeatureSettings& settings) noexcept;
+    [[nodiscard]] int shieldAttacker(const GameSnapshot& snapshot, bool selectionOnly=false) const noexcept {
+        if(!selectionOnly&&!m_features.attackShieldEnabled) return -1;
+        if(m_features.attackShieldWildcard) return -2;
+        if(m_shieldWorld!=snapshot.worldGeneration) return -1;
+        for(std::uint32_t i=0;i<snapshot.entityMarkerCount;++i) {
+            const auto& entity=snapshot.entityMarkers[i];
+            if(entity.player&&entity.entityId==m_shieldSelectedId&&
+               entity.uuid==m_shieldSelectedUuid) return entity.entityId;
+        }
+        return -1;
+    }
     void setHypixelSnapshot(const HypixelOverlaySnapshot& snapshot) noexcept;
     void setPlayerStatsSnapshot(const PlayerStatsOverlaySnapshot& snapshot) noexcept;
     void setBlacklistSnapshot(const BlacklistOverlaySnapshot& snapshot) noexcept;
@@ -401,10 +419,13 @@ private:
     std::array<char, 81U> m_blacklistSearch{};
     std::array<char, 50U> m_blacklistDeleteKey{};
     SmoothScroll m_navigationScroll;
-    std::array<SmoothScroll, 24U> m_settingsScroll{};
+    std::array<SmoothScroll, 26U> m_settingsScroll{};
     SmoothScroll m_blacklistScroll;
     bool m_blacklistActionDirty = false;
     bool m_featureSettingsDirty = false;
+    int m_shieldSelectedId=-1;
+    std::uint64_t m_shieldWorld=0U;
+    std::array<char,37U> m_shieldSelectedUuid{};
     bool m_hypixelQueryPending = false;
     std::array<char, 17U> m_hypixelQuery{};
     std::array<char, 17U> m_hypixelInput{};
@@ -451,7 +472,7 @@ private:
     bool m_searchInputActive = false;
     bool m_searchIslandOpen = false;
     bool m_searchFocusRequested = false;
-    std::array<float, 23U> m_clickGuiNavHover{};
+    std::array<float, 26U> m_clickGuiNavHover{};
     bool m_mediaSettingsDirty = false;
     MediaAction m_mediaAction = MediaAction::None;
     float m_mediaPanelProgress = 0.0F;
@@ -498,6 +519,8 @@ private:
     float m_imeEditX = 0.0F;
     float m_imeEditY = 0.0F;
     float m_clickGuiThemeProgress = 0.0F;
+    std::array<float,26U> m_clickGuiNavSelection{};
+    std::array<float,26U> m_clickGuiNavEnabled{};
     bool m_statsPanelTransformDirty = false;
     bool m_statsPanelDragging = false;
     bool m_statsPanelResizing = false;
@@ -529,10 +552,10 @@ private:
     int m_blacklistResizeStartHeight = 100;
     bool m_safewalkHotkeyWasDown = false;
     std::array<bool, FeatureSettings::FeatureHotkeyCount> m_featureHotkeyWasDown{};
-    std::array<float, 19U> m_textGuiModuleProgress{};
-    std::array<float, 19U> m_textGuiModuleVelocity{};
-    std::array<std::array<float, 32U>, 20U> m_textGuiGlyphBrightness{};
-    std::array<std::array<float, 32U>, 20U> m_textGuiGlyphTargets{};
+    std::array<float, 22U> m_textGuiModuleProgress{};
+    std::array<float, 22U> m_textGuiModuleVelocity{};
+    std::array<std::array<float, 32U>, 22U> m_textGuiGlyphBrightness{};
+    std::array<std::array<float, 32U>, 22U> m_textGuiGlyphTargets{};
     std::uint64_t m_textGuiNextShuffleTick = 0U;
     bool m_textGuiGlyphsInitialized = false;
     bool m_scaffoldBlockedNoticeShown = false;

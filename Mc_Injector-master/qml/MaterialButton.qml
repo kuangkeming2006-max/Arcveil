@@ -19,7 +19,9 @@ Item {
     implicitHeight: compact ? 42 : 48
     enabled: true
     opacity: enabled ? 1 : 0.38
-    scale: buttonMouse.pressed ? 0.965 : (buttonMouse.containsMouse ? 1.025 : 1.0)
+    // Hover changes the surface, not layout bounds. Expansion used to clip
+    // neighbouring buttons and labels in compact toolbars.
+    scale: buttonMouse.pressed ? 0.98 : 1.0
     transformOrigin: Item.Center
     activeFocusOnTab: true
 
@@ -32,7 +34,7 @@ Item {
 
     Behavior on scale {
         NumberAnimation {
-            duration: 260
+            duration: 180
             easing.type: Easing.BezierSpline
             easing.bezierCurve: [0.05, 0.7, 0.1, 1.0, 1.0, 1.0]
         }
@@ -61,8 +63,8 @@ Item {
                ? (buttonMouse.containsMouse ? Qt.lighter(root.containerColor, 1.08)
                                             : root.containerColor)
                : (buttonMouse.containsMouse ? "#126750A4" : "transparent")
-        border.width: root.filled ? 0 : 1
-        border.color: root.outlineColor
+        border.width: root.activeFocus ? 2 : (root.filled ? 0 : 1)
+        border.color: root.activeFocus ? root.foregroundColor : root.outlineColor
 
         Behavior on color { ColorAnimation { duration: 160 } }
 

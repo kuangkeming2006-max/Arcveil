@@ -9,7 +9,7 @@ Window {
     visible: false
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.Tool
-    title: "Java Overlay Surface"
+    title: "Arcveil Overlay"
 
     // This QQuickWindow is rendered by the same D3D11 scene graph as main.qml.
     // OverlayManager owns its native hit-testing and position; QML owns only the
@@ -78,7 +78,7 @@ Window {
                     Layout.fillWidth: true
                     Text {
                         Layout.fillWidth: true
-                        text: "JAVA OVERLAY"
+                        text: "ARCVEIL"
                         color: "#D0BCFF"
                         font.pixelSize: 10
                         font.weight: Font.Bold

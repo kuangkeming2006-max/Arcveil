@@ -118,6 +118,7 @@ struct TargetCandidate final {
     Bounds bounds{};
     bool eligible=false;
     bool coolingDown=false;
+    bool attackAvailable=true;
 };
 struct TargetSelection final {
     int entityId=-1;
@@ -149,6 +150,9 @@ struct LogicalFrameInput final {
     HeldItemPolicy heldItemPolicy=HeldItemPolicy::Other;
     double minimumDistance=0.0;
     double maximumDistance=6.0;
+    // Acquisition may deliberately lead vanilla reach (3.5 m pre-aim versus
+    // 3.0 m attack).  Never reuse the acquisition radius as the attack gate.
+    double attackReach=3.0;
     double fovDegrees=90.0;
     int aimSpeedPercent=50;
     double mouseSensitivity=0.5;
@@ -167,6 +171,10 @@ struct InteractionCommand final {
     std::uint64_t logicalTick=0U;
     std::uint64_t intentId=0U;
     std::uint64_t rotationEpoch=0U;
+    aim::Angles committedRotation{};
+    double reach=3.0;
+    double preAimReach=3.5;
+    bool enforceAvailability=true;
 };
 struct LogicalFramePlan final {
     bool aimActive=false;
@@ -359,21 +367,12 @@ public:
         const double logical=logicalYaw*radians;
         const double forward=-std::sin(logical)*result.world.x+std::cos(logical)*result.world.z;
         const double strafe=std::cos(logical)*result.world.x+std::sin(logical)*result.world.z;
-        // Choose an actual keyboard direction (45-degree sectors), not an
-        // arbitrary inverse-rotated joystick vector. Native 0.98/sneak/item-use
-        // scaling arrives in the original arguments and is preserved intact.
-        const double modifier=std::max(std::abs(physicalForward),std::abs(physicalStrafe));
-        // World-space intent is authoritative even when the player happened to
-        // enter this tick sprinting.  Choose the closest real WASD direction;
-        // SprintCoordinator decides afterwards whether vanilla sprint can
-        // remain active for that resolved input.
+        // Preserve the exact inverse-rotated vector. Quantising it to one of
+        // eight WASD sectors changes world-space motion and creates prediction
+        // drift at large camera/silent-yaw deltas.
         static_cast<void>(sprinting); static_cast<void>(tick);
-        constexpr std::array<std::array<int,2>,8> keys{{
-            {{1,0}},{{1,1}},{{0,1}},{{-1,1}},{{-1,0}},{{-1,-1}},{{0,-1}},{{1,-1}}}};
-        const int sector=(static_cast<int>(std::lround(std::atan2(strafe,forward)/
-            (3.14159265358979323846/4.0)))+8)%8;
-        result.logicalForward=keys[sector][0]*modifier;
-        result.logicalStrafe=keys[sector][1]*modifier;
+        result.logicalForward=forward;
+        result.logicalStrafe=strafe;
         return result;
     }
     [[nodiscard]] ResolvedMovementIntent resolve(
@@ -460,10 +459,11 @@ public:
         const aim::Angles camera,const double minimumDistance,
         const double maximumDistance,const double acquireAngle,
         const double releaseAngle,const bool nearestPriority,
-        const bool retainLock) noexcept {
+        const bool retainLock,const bool requireAttackable=false) noexcept {
         constexpr double degrees=180.0/3.14159265358979323846;
-        TargetSelection best{},retained{};
+        TargetSelection best{},retained{},passive{},passiveRetained{};
         double bestScore=std::numeric_limits<double>::infinity();
+        double passiveScore=std::numeric_limits<double>::infinity();
         for(const TargetCandidate& candidate:candidates) {
             if(!candidate.eligible) continue;
             const double dx=candidate.aimPoint.x-eye.x;
@@ -479,21 +479,35 @@ public:
                                           desired.pitch-camera.pitch);
             const bool same=candidate.entityId==m_entity &&
                 (!m_identity||candidate.identity==m_identity);
-            if(same&&angle<=releaseAngle)
-                retained={candidate.entityId,candidate.identity,desired,distance,
-                          true,true,candidate.coolingDown};
+            const TargetSelection choice{candidate.entityId,candidate.identity,desired,distance,
+                true,!requireAttackable||candidate.attackAvailable,candidate.coolingDown};
+            const bool passiveOnly=requireAttackable&&!candidate.attackAvailable;
+            if(same&&angle<=releaseAngle) {
+                if(passiveOnly) passiveRetained=choice;
+                else retained=choice;
+            }
             if(angle>acquireAngle) continue;
             double score=nearestPriority ? distance+angle*0.001
                                          : angle+distance*0.025;
             if(candidate.coolingDown) score+=10000.0;
             if(same) score*=0.65;
+            if(passiveOnly) {
+                if(score<passiveScore) {passiveScore=score;passive=choice;}
+                continue;
+            }
             if(score<bestScore) {
                 bestScore=score;
-                best={candidate.entityId,candidate.identity,desired,distance,
-                      true,true,candidate.coolingDown};
+                best=choice;
             }
         }
         if(retainLock&&retained.valid&&!retained.switchPreferred) best=retained;
+        if(!best.valid&&requireAttackable) {
+            // No attackable target: passive aim may still own/publish rotation,
+            // but cannot bind an attack. Never let an unavailable retained lock
+            // or sequential-switch preference outrank an attackable enemy.
+            best=retainLock&&passiveRetained.valid&&!passiveRetained.switchPreferred
+                ? passiveRetained:passive;
+        }
         if(best.valid) { m_entity=best.entityId; m_identity=best.identity; }
         // Lock-on owns a short target-loss grace in LogicalStateController.
         // Keep the selector identity during that grace; a confirmed release
@@ -586,6 +600,62 @@ public:
         return candidate;
     }
 };
+
+// Pure physics-space geometry, shared by preparation and PRE validation.
+// Visibility failure never removes the candidate or its rotation ownership.
+struct CombatAimPoint final { Vec3 point{}; bool available=false; };
+template<class TraceBlock>
+[[nodiscard]] CombatAimPoint chooseCombatAimPoint(const Vec3 eye,
+    const Bounds& box,const aim::Angles reference,const double reach,
+    const bool enforceAvailability,TraceBlock&& traceBlock) noexcept {
+    const double cx=(box.minX+box.maxX)*0.5;
+    const double cz=(box.minZ+box.maxZ)*0.5;
+    const double height=box.maxY-box.minY;
+    CombatAimPoint result{{cx,box.minY+height*0.55,cz},false};
+    if(!std::isfinite(height)||height<=0.0||box.maxX<=box.minX||
+       box.maxZ<=box.minZ||reach<=0.0) return result;
+    const double insetX=(box.maxX-box.minX)*0.08;
+    const double insetZ=(box.maxZ-box.minZ)*0.08;
+    // The point nearest the eye handles the three-block edge, while a grid
+    // across the actual box finds exposed chest/side/leg areas under cover.
+    double best=std::numeric_limits<double>::infinity();
+    const auto consider=[&](const Vec3 point) noexcept {
+        const double dx=point.x-eye.x,dy=point.y-eye.y,dz=point.z-eye.z;
+        const double length=std::hypot(std::hypot(dx,dz),dy);
+        if(!std::isfinite(length)||length<1.0e-6) return;
+        const Vec3 direction{dx/length,dy/length,dz/length};
+        const double hit=RayTraceCoordinator::intersect(eye,direction,box,reach);
+        if(hit<0.0) return;
+        constexpr double degrees=180.0/3.14159265358979323846;
+        const aim::Angles angle{std::atan2(dz,dx)*degrees-90.0,
+            -std::atan2(dy,std::hypot(dx,dz))*degrees};
+        // A minimal-turn ray alone hugs the nearest edge and becomes invalid
+        // on the next strafe. Prefer interior points while still searching the
+        // entire visible AABB when cover hides the centre.
+        const double edgePenalty=120.0*(std::abs(point.x-cx)/(box.maxX-box.minX)+
+            std::abs(point.z-cz)/(box.maxZ-box.minZ))+
+            30.0*std::abs((point.y-box.minY)/height-0.55);
+        const double score=std::hypot(aim::wrap(angle.yaw-reference.yaw),
+            angle.pitch-reference.pitch)+length*0.01+edgePenalty;
+        if(score>=best) return;
+        if(enforceAvailability) {
+            const BlockRayHit block=traceBlock(direction,reach);
+            if(!block.querySucceeded||
+               (block.distance>=0.0&&block.distance<=hit+1.0e-5)) return;
+        }
+        best=score;result={point,true};
+    };
+    consider(result.point);
+    consider({std::clamp(eye.x,box.minX+insetX,box.maxX-insetX),
+        std::clamp(eye.y,box.minY+height*0.08,box.maxY-height*0.08),
+        std::clamp(eye.z,box.minZ+insetZ,box.maxZ-insetZ)});
+    for(const double y:{0.18,0.38,0.58,0.78,0.92})
+        for(const double x:{0.12,0.5,0.88})
+            for(const double z:{0.12,0.5,0.88})
+                consider({box.minX+(box.maxX-box.minX)*x,
+                    box.minY+height*y,box.minZ+(box.maxZ-box.minZ)*z});
+    return result;
+}
 
 class InteractionCoordinator final {
 public:
@@ -879,7 +949,7 @@ private:
             ? m_selector.select(candidates,input.eye,input.camera,
                 std::max(0.0,input.minimumDistance),std::max(1.0,input.maximumDistance),
                 acquire,std::min(180.0,acquire+10.0),input.nearestPriority,
-                input.mode==aim::Mode::LockOn)
+                input.mode==aim::Mode::LockOn,input.enforceAttackAvailability)
             : TargetSelection{};
         const bool silentCombatRequested=input.silent&&
             input.mode==aim::Mode::LockOn&&input.leftMouseDown;
@@ -910,7 +980,7 @@ private:
             // must not advance to R1/R2 while this intent is waiting for R0 to
             // be observed at the packet serialization boundary.
             m_targetGraceActive=false;
-            m_targetAttackReady=true;
+            m_targetAttackReady=m_attackRequiredAvailable;
             plan.aimActive=true;
             plan.silentActive=true;
             plan.candidateTargetId=m_attackRequiredTargetId;
@@ -1006,6 +1076,8 @@ private:
             if(rotationChanged) ++m_rotationEpoch;
         }
         m_enforceAttack=input.enforceAttackAvailability;
+        m_attackReach=std::max(0.0,input.attackReach);
+        m_preAimReach=std::max(m_attackReach,std::max(0.0,input.maximumDistance));
         m_state.tick=input.tick; m_state.interactionTick=m_interactionTick;
         m_state.leftMouseDown=input.leftMouseDown;
         m_state.camera=input.camera;
@@ -1026,16 +1098,18 @@ private:
     }
     void finalizeRayLocked(const BlockRayHit block) noexcept {
         if(attackTransactionActiveLocked()) {
-            // Availability was evaluated when the transaction was bound.  A
-            // later target sample or ray trace must not rewrite A/R0 or reject
-            // the intent while it is waiting for the matching packet ACK.
+            // A pre-aim transaction owns its target/rotation while it waits,
+            // but temporary lack of reach/visibility is not an executable hit
+            // and must not consume the CPS intent.
             m_outputReady=m_rotation.active();
-            m_targetAttackReady=true;
+            m_targetAttackReady=m_attackRequiredAvailable;
             m_interaction.updateRay(m_attackRequiredTargetId,
-                m_attackRequiredTargetId,m_attackRequiredTargetId,{});
+                m_attackRequiredTargetId,
+                m_attackRequiredAvailable?m_attackRequiredTargetId:-1,{});
             m_state.candidateTargetId=m_attackRequiredTargetId;
             m_state.rayFirstHitEntityId=m_attackRequiredTargetId;
-            m_state.attackTargetId=m_attackRequiredTargetId;
+            m_state.attackTargetId=m_attackRequiredAvailable
+                ?m_attackRequiredTargetId:-1;
             m_state.rayBlock={};
             m_state.interaction=m_interaction.mode();
             m_state.event=InteractionEvent::None;
@@ -1063,14 +1137,15 @@ private:
         m_state.rayBlock=block.target; m_state.interaction=m_interaction.mode();
         m_state.event=InteractionEvent::None;
         const std::uint64_t pendingIntent=m_attackClock.pending();
-        if(pendingIntent&&attack>=0&&
+        if(pendingIntent&&m_state.candidateTargetId>=0&&m_rotation.active()&&
            m_attackRequiredIntentId!=pendingIntent) {
             m_attackRequiredIntentId=pendingIntent;
-            m_attackRequiredTargetId=attack;
+            m_attackRequiredTargetId=m_state.candidateTargetId;
             m_attackRequiredRotation=m_state.networkRotation;
             m_attackRequiredRotationEpoch=m_rotationEpoch;
+            m_attackRequiredAvailable=attack>=0;
             m_state.requiredAttackRotationEpoch=m_attackRequiredRotationEpoch;
-        } else if(pendingIntent&&attack<0) {
+        } else if(pendingIntent&&m_state.candidateTargetId<0) {
             const std::uint64_t rejected=m_attackClock.consume();
             clearAttackRequirementLocked(rejected);
             char detail[112]{};
@@ -1145,9 +1220,11 @@ public:
         // derive a movement decision here.  If the current tick's consumer has
         // already committed a decision, every later caller obeys that one.
         m_sprintIntentRequested=requested;
-        const bool silentOwnsSprint=m_coordinateMovement&&m_rotation.active()&&
+        const bool silentOwnsSprint=m_rotation.active()&&
             m_state.leftMouseDown;
-        bool allowed=true;
+        // Silent aiming owns sprint independently of movement adaptation.
+        // This is a policy veto, not a decision derived from stale entity axes.
+        bool allowed=!silentOwnsSprint;
         if(silentOwnsSprint&&m_sprintDecisionOwned&&
            (!minecraftTick||m_sprintDecisionTick==minecraftTick)) {
             allowed=m_sprintDecisionAllowed;
@@ -1283,6 +1360,18 @@ private:
         if(!eventId) return {};
         const bool requirementReady=m_attackRequiredIntentId==eventId&&
             m_attackRequiredTargetId>=0;
+        if(requirementReady&&!m_attackRequiredAvailable) {
+            if(m_lastWaitAvailabilityIntent!=eventId) {
+                m_lastWaitAvailabilityIntent=eventId;
+                char detail[128]{};
+                std::snprintf(detail,sizeof(detail),
+                    "intent=%llu target=%d state=ARMED_WAIT_AVAILABILITY",
+                    static_cast<unsigned long long>(eventId),
+                    m_attackRequiredTargetId);
+                m_debug.event("ATTACK_WAIT_AVAILABILITY",m_state,detail,true);
+            }
+            return {};
+        }
         const bool published=requirementReady&&
             m_publishedRotationEpoch>=m_attackRequiredRotationEpoch&&
             m_rotation.lastReportedValid()&&
@@ -1312,6 +1401,9 @@ private:
         if(command.kind==InteractionCommandKind::AttackEntity) {
             command.intentId=eventId;
             command.rotationEpoch=m_attackRequiredRotationEpoch;
+            command.committedRotation=m_attackRequiredRotation;
+            command.reach=m_enforceAttack?std::min(3.0,m_attackReach):m_attackReach;
+            command.enforceAvailability=m_enforceAttack;
             m_state.attackIntentId=eventId;
             m_state.committedAttackTargetId=command.entityId;
             m_attackDispatchInFlight=true;
@@ -1373,6 +1465,103 @@ public:
             m_pendingInteraction=command;
         publishLocked();
         ReleaseSRWLockExclusive(&m_lock);
+    }
+    [[nodiscard]] InteractionCommand pendingAttack() const noexcept {
+        AcquireSRWLockShared(&m_lock);
+        InteractionCommand result{};
+        if(attackTransactionActiveLocked()&&!m_attackDispatchInFlight&&
+           m_state.leftMouseDown&&m_rotation.active()) {
+            result.kind=InteractionCommandKind::AttackEntity;
+            result.entityId=m_attackRequiredTargetId;
+            result.intentId=m_attackRequiredIntentId;
+            result.rotationEpoch=m_attackRequiredRotationEpoch;
+            result.committedRotation=m_attackRequiredRotation;
+            result.reach=m_enforceAttack?std::min(3.0,m_attackReach):m_attackReach;
+            result.preAimReach=m_preAimReach;
+            result.enforceAvailability=m_enforceAttack;
+        }
+        ReleaseSRWLockShared(&m_lock);
+        return result;
+    }
+    // Refresh before the first physics consumer; publication may refresh only
+    // if there is no adapted movement commit to contradict. Every replacement
+    // needs fresh publication proof and keeps the same CPS intent/target.
+    bool revisePendingAttack(const InteractionCommand& expected,
+                             const aim::Angles rotation,const bool available) noexcept {
+        AcquireSRWLockExclusive(&m_lock);
+        bool matches=expected.intentId!=0U&&
+            m_attackRequiredIntentId==expected.intentId&&
+            m_attackRequiredRotationEpoch==expected.rotationEpoch&&
+            m_attackRequiredTargetId==expected.entityId&&
+            !m_attackDispatchInFlight&&m_state.leftMouseDown&&m_rotation.active();
+        if(matches) {
+            const bool frozenMovement=!m_interactionPreOpen&&m_coordinateMovement&&
+                m_committedMovementTick==m_physicsPhaseTick&&
+                m_committedMovement.controlsMinecraftMovement;
+            const bool changesCommitted=frozenMovement&&
+                (std::abs(aim::wrap(rotation.yaw-m_committedMovement.logicalRotation.yaw))>0.0005||
+                 std::abs(rotation.pitch-m_committedMovement.logicalRotation.pitch)>0.0005);
+            if(changesCommitted||!std::isfinite(rotation.yaw)||!std::isfinite(rotation.pitch)) {
+                // Even when a committed movement snapshot prevents adopting
+                // the new angle mid-tick, the old ray is no longer an attack
+                // permission. Wait for the next PRE publication.
+                m_attackRequiredAvailable=false;
+                m_targetAttackReady=false;
+                m_state.attackTargetId=-1;
+                publishLocked();
+                matches=false;
+            }
+        }
+        if(matches) {
+            const bool rotationChanged=
+                std::abs(aim::wrap(rotation.yaw-m_attackRequiredRotation.yaw))>0.0005||
+                std::abs(rotation.pitch-m_attackRequiredRotation.pitch)>0.0005;
+            if(rotationChanged) {
+                (void)m_rotation.acquire(rotation);
+                m_attackRequiredRotation=m_rotation.networkRotation();
+                m_attackRequiredRotationEpoch=++m_rotationEpoch;
+                m_state.logical=m_rotation.logical();
+                m_state.networkRotation=m_attackRequiredRotation;
+                m_state.requiredAttackRotationEpoch=m_attackRequiredRotationEpoch;
+            }
+            const bool availabilityChanged=m_attackRequiredAvailable!=available;
+            m_attackRequiredAvailable=available;
+            m_targetAttackReady=available;
+            m_state.attackTargetId=available?m_attackRequiredTargetId:-1;
+            if(available) {
+                m_lastWaitAvailabilityIntent=0U;
+                if(availabilityChanged||rotationChanged)
+                    m_debug.event("ATTACK_GEOMETRY_READY",m_state,
+                        rotationChanged?"rotation=refreshed":"rotation=published",true);
+            } else if(m_lastWaitAvailabilityIntent!=expected.intentId) {
+                m_lastWaitAvailabilityIntent=expected.intentId;
+                m_debug.event("ATTACK_WAIT_AVAILABILITY",m_state,
+                    rotationChanged?"rotation=refreshed":"rotation=published",true);
+            }
+            publishLocked();
+        }
+        ReleaseSRWLockExclusive(&m_lock);
+        return matches;
+    }
+    bool cancelPendingAttack(const InteractionCommand& expected,
+                             const char* const reason="target_invalid") noexcept {
+        AcquireSRWLockExclusive(&m_lock);
+        const bool matches=expected.intentId!=0U&&
+            m_attackRequiredIntentId==expected.intentId&&
+            m_attackRequiredRotationEpoch==expected.rotationEpoch&&
+            m_attackRequiredTargetId==expected.entityId&&!m_attackDispatchInFlight;
+        if(matches) {
+            (void)m_attackClock.consume();
+            char detail[160]{};
+            std::snprintf(detail,sizeof(detail),"intent=%llu target=%d reason=%s",
+                static_cast<unsigned long long>(expected.intentId),expected.entityId,
+                reason?reason:"target_invalid");
+            m_debug.event("ATTACK_CANCELLED",m_state,detail,true);
+            clearAttackRequirementLocked(expected.intentId);
+            publishLocked();
+        }
+        ReleaseSRWLockExclusive(&m_lock);
+        return matches;
     }
     [[nodiscard]] PacketSerializationPlan packetPlan(
         const bool hasPosition,const bool hasRotation,
@@ -1546,7 +1735,9 @@ private:
         m_attackRequiredTargetId=-1;
         m_attackRequiredRotation={};
         m_attackRequiredRotationEpoch=0U;
+        m_attackRequiredAvailable=false;
         m_lastWaitRotationIntent=0U;
+        m_lastWaitAvailabilityIntent=0U;
         m_lastWaitPreIntent=0U;
         m_attackDispatchInFlight=false;
         m_state.requiredAttackRotationEpoch=0U;
@@ -1631,21 +1822,18 @@ private:
     }
     [[nodiscard]] bool commitSprintDecisionLocked(
         const std::uint64_t tick,const bool physicalSprinting) noexcept {
-        const bool owns=m_coordinateMovement&&m_rotation.active()&&
+        const bool owns=m_rotation.active()&&
             m_state.leftMouseDown;
         if(!owns) return false;
         if(m_sprintDecisionOwned&&m_sprintDecisionTick==tick) return true;
         // Only an actual jump/moveFlying consumer reaches this point, after
         // movementCommandLocked has committed the current tick's snapshot.
         // No render sample or setSprinting call may preview/recompute it.
-        const bool compatible=m_committedMovementTick==tick&&
-            m_committedMovement.controlsMinecraftMovement&&
-            m_committedMovement.forward>=0.8;
-        if((physicalSprinting||m_sprintIntentRequested)&&!compatible)
-            m_sprintSuppressedUntilRelease=true;
+        static_cast<void>(physicalSprinting);
+        m_sprintSuppressedUntilRelease=true;
         m_sprintDecisionTick=tick;
         m_sprintDecisionOwned=true;
-        m_sprintDecisionAllowed=compatible&&!m_sprintSuppressedUntilRelease;
+        m_sprintDecisionAllowed=false;
         return true;
     }
     void updateInteractionStateLocked() noexcept {
@@ -1720,6 +1908,7 @@ private:
     std::uint64_t m_attackRequiredIntentId=0U;
     std::uint64_t m_attackRequiredRotationEpoch=0U;
     std::uint64_t m_lastWaitRotationIntent=0U;
+    std::uint64_t m_lastWaitAvailabilityIntent=0U;
     std::uint64_t m_lastWaitPreIntent=0U;
     int m_attackRequiredTargetId=-1;
     aim::Angles m_attackRequiredRotation{};
@@ -1730,6 +1919,8 @@ private:
     std::uint64_t m_world=0U;
     int m_localPlayer=-1;
     bool m_silent=false,m_enforceAttack=true,m_sequentialTargets=false;
+    double m_attackReach=3.0;
+    double m_preAimReach=3.5;
     HeldItemPolicy m_heldItemPolicy=HeldItemPolicy::Other;
     bool m_coordinateMovement=true;
     bool m_movementPostReached=false;
@@ -1739,6 +1930,7 @@ private:
     bool m_sprintIntentRequested=false;
     bool m_sprintSuppressedUntilRelease=false;
     bool m_attackDispatchInFlight=false;
+    bool m_attackRequiredAvailable=false;
     bool m_outputReady=false,m_targetAttackReady=false,m_cameraResyncPending=false;
 };
 

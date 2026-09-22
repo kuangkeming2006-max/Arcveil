@@ -18,6 +18,8 @@ unlink or conceal the module.
 
 ## Current feature set
 
+Internal build: **v51**. The pre-connection About page shows the build number.
+
 ### Controller and in-game interface
 
 - Java process discovery, architecture validation, authenticated per-session
@@ -29,6 +31,8 @@ unlink or conceal the module.
 - Animated page transitions and collapsible Aim Assist sections, stable smooth
   scrolling, searchable feature navigation, four crisp GUI scale presets,
   theme/accent controls and fullscreen IME support.
+- Sidebar left-click toggles a feature; right-click opens its settings. Enabled
+  rows retain a white shimmer with animated selection and hover surfaces.
 - A configurable Click GUI key plus per-feature hotkeys synchronized between
   the controller and the injected agent.
 
@@ -37,19 +41,44 @@ unlink or conceal the module.
 - **Aim Assist** with separate Smooth Aim, Lock On and Silent Lock output
   modes; distance/FOV filters, nearest-target priority, optional attack
   viability checks and sequential target selection.
+- Combat geometry uses the current physics eye and entity bounding boxes,
+  independent of render interpolation. Strict availability searches reachable,
+  unoccluded points across the hitbox, including exposed body/side regions.
+  With availability checking enabled, attackable enemies form the selection
+  pool before distance/angle/retained-lock priority. A target in the 3.5-block
+  pre-aim range can hold a pending attack intent while the current 3.0-block
+  attack geometry is unavailable; the intent is not spent until a valid,
+  published rotation can attack or the target/left-button hold ends.
 - **Silent Lock** activates only while the left mouse button is held. Its fixed
   1-20 CPS scheduler creates one numbered attack intent per deadline, confirms
   the required network rotation before dispatch, and uses one final entity
   attack path without catch-up bursts.
+  Dispatch stays at the Minecraft input/PRE boundary, revalidates the published
+  ray against current physics geometry, and preserves vanilla swing-before-attack
+  ordering. Stale geometry can refresh at a new PRE boundary before consuming
+  the pending intent, retaining its target and attack deadline. Already committed
+  movement is never rewritten; revised rotations require fresh publication proof.
+  Final dispatch rejects any ray that has become invalid again.
 - **Silent Control Adaptation** optionally aligns movement, jump and sprint
   arbitration with the same committed logical yaw while keeping the core
   Silent Lock attack clock independent.
-- **Smart Hotbar** lets each logical hotbar slot select a sword or blocks from
-  the hotbar/main inventory. Triggers follow Minecraft's own remapped hotbar
+- **Smart Hotbar** lets each logical hotbar slot select a sword, blocks, shears,
+  pickaxe or axe (any vanilla material) from the hotbar/main inventory.
+  Optional block refill selects another stack after the last block is consumed.
+  Triggers follow Minecraft's own remapped hotbar
   bindings, including keyboard and mouse bindings, rather than hard-coded
-  number keys.
+  number keys. The consumed game key event is replaced once, preventing vanilla
+  slot selection from overwriting the category selection. Inventory-to-hotbar
+  transfers wait for a neutral input/movement boundary; an already-hotbar item
+  can switch immediately.
 - **Bed Breaker** for local/test environments and configurable local velocity
   response controls.
+- **Attack Shield** cancels directly attributed knockback from a selected player
+  before velocity changes. Explicit-player mode only operates where the actual
+  attacker is supplied (integrated worlds); it never guesses from proximity.
+  The optional `*` selection skips source verification and also suppresses incoming
+  entity-velocity updates for the local player, including non-attack updates.
+  Explosion/teleport packets are not filtered. Selection is world/session-bound.
 
 ### Movement
 
@@ -57,11 +86,21 @@ unlink or conceal the module.
   Minecraft's own sneak binding.
 - Scaffold, Flight and Bunny Hop local/testing tools with visible risk warnings
   and a Hypixel safety interlock.
+- Scaffold synchronizes the block slot before placing, then restores and
+  synchronizes the previous slot even after rejected placement attempts.
+- **Sprint** supports forward auto-sprint. Silent aiming always suppresses sprint,
+  independently of SCA, and releases ownership with the attack button.
+- The Interface **Allow on Hypixel** interlock covers Aim Assist as well as
+  Scaffold, Flight and Bunny Hop.
 
 ### Visuals, HUD and player tools
 
 - Player ESP, Bed ESP and bed-defense material cards.
 - Nametags, teammate presentation controls and visible held-item indicators.
+- Optional always-visible nametags support lobbies and offline servers using
+  entity names/offline identities rather than requiring online TAB confirmation.
+  Offline Aim Assist likewise recognizes actual player entities without an
+  online-authentication requirement; configured range/FOV filters still apply.
 - Fireball ESP plus bow-impact and knockback trajectory visualizations.
 - FreeLook with independent camera render/input hooks and expanded terrain
   preparation so looking behind the player does not reveal unloaded-looking
@@ -137,7 +176,7 @@ The build tree contains:
 
 ```text
 build-native-debug/
-├─ MinecraftOverlayManager.exe
+├─ Arcveil.exe
 ├─ agent/McOverlayAgent.dll
 ├─ tools/McOverlayAttachHelper.jar
 ├─ tools/McOverlayNativeLoader.exe
@@ -153,7 +192,7 @@ it to logs. A non-persistent development override is also supported:
 
 ```powershell
 $env:HYPIXEL_API_KEY = 'your-registered-application-key'
-.\build-native-debug\MinecraftOverlayManager.exe
+.\build-native-debug\Arcveil.exe
 ```
 
 Requests use bounded responses, timeouts, rate-limit reporting and in-memory

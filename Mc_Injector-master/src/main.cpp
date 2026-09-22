@@ -171,8 +171,9 @@ struct ControllerServices {
 int main(int argc, char *argv[])
 {
     QGuiApplication application(argc, argv);
+    // Keep the existing storage ID so rebranding preserves preferences/keys.
     QGuiApplication::setApplicationName(QStringLiteral("MinecraftOverlayManager"));
-    QGuiApplication::setApplicationDisplayName(QStringLiteral("Java Overlay Studio"));
+    QGuiApplication::setApplicationDisplayName(QStringLiteral("Arcveil"));
     QGuiApplication::setOrganizationName(QStringLiteral("Overlay Studio"));
 
     // Tests require an explicit command-line option. An inherited environment
@@ -213,6 +214,7 @@ int main(int argc, char *argv[])
     StartupLoader loader(engine, [&] {
         services = std::make_unique<ControllerServices>();
         ControllerServices::configure(*services);
+        if(smokeTest) services->appSettings.setDarkTheme(false);
     }, [&] {
         // Defer scanning until the application itself can paint and respond.
         if (!smokeTest) QTimer::singleShot(0, &services->processScanner, &ProcessScanner::refresh);
@@ -221,7 +223,7 @@ int main(int argc, char *argv[])
             new ControllerUiSmoke(loader.mainWindow(), [&](bool ok) {
             if (!ok || qmlErrors) QCoreApplication::exit(EXIT_FAILURE);
             else lifecycle.requestExit(QStringLiteral("successful controller smoke test"));
-            });
+            },[&](bool dark){services->appSettings.setDarkTheme(dark);});
 #else
             QTimer::singleShot(1000, &application, [&] {
                 if (qmlErrors) QCoreApplication::exit(EXIT_FAILURE);

@@ -11,7 +11,7 @@ WheelPage {
     required property color textColor
     required property color secondaryTextColor
     required property color primaryColor
-    required property color onPrimaryColor
+    required property color primaryForegroundColor
     required property color outlineVariantColor
 
     contentWidth: width
@@ -114,7 +114,7 @@ WheelPage {
                         text: "Save config"
                         filled: true
                         containerColor: root.primaryColor
-                        foregroundColor: root.onPrimaryColor
+                        foregroundColor: root.primaryForegroundColor
                         enabled: configName.text.trim().length > 0
                         onClicked: if (OverlayManager.saveConfig(configName.text))
                                        configName.text = ""
@@ -192,7 +192,7 @@ WheelPage {
                         text: "Apply"
                         filled: OverlayManager.activeConfig !== modelData
                         containerColor: root.primaryColor
-                        foregroundColor: filled ? root.onPrimaryColor : root.primaryColor
+                        foregroundColor: filled ? root.primaryForegroundColor : root.primaryColor
                         outlineColor: root.outlineVariantColor
                         onClicked: OverlayManager.applyConfig(modelData)
                     }

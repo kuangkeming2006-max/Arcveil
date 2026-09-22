@@ -1,5 +1,7 @@
 #include "../agent/bindings/LiveInteractionTransform.h"
 #include "../agent/bindings/LiveAttackTransform.h"
+#include "../agent/bindings/LiveHotbarTransform.h"
+#include "../agent/bindings/LiveImpulseTransform.h"
 #include "../agent/bindings/LiveInteractionObserver.h"
 #include "../agent/bindings/LiveJumpTransform.h"
 #include "../agent/bindings/LiveFreeLookTransform.h"
@@ -178,6 +180,7 @@ struct State final {
 
 int main(int argc, char** argv)
 {
+    std::setvbuf(stdout,nullptr,_IONBF,0);
     if (argc != 3) return 2;
     int checks = 0;
     int failures = 0;
@@ -467,8 +470,8 @@ int main(int argc, char** argv)
     env->SetBooleanField(fixture,state.sprinting,JNI_TRUE);
     env->CallVoidMethod(fixture,setSprinting,JNI_TRUE);
     check(!env->ExceptionCheck()&&
-          env->GetBooleanField(fixture,state.sprinting)==JNI_TRUE,
-          "pre-consumer setSprinting records intent without freezing stale movement");
+          env->GetBooleanField(fixture,state.sprinting)==JNI_FALSE,
+          "pre-consumer sprint veto does not depend on a stale movement snapshot");
     env->SetBooleanField(fixture,state.sprinting,JNI_TRUE);
     env->CallVoidMethod(fixture, move, 0.0F, 1.0F, 0.91F);
     check(!env->ExceptionCheck(), "transformed moveFlying leaves no exception");
@@ -713,6 +716,118 @@ int main(int argc, char** argv)
     env->DeleteGlobalRef(state.expectedTarget);
     env->DeleteGlobalRef(state.arbitratedTarget);
     env->DeleteGlobalRef(state.freeLookEntity);
+    {
+        jclass type=env->FindClass("HotbarBindingFixture");
+        jmethodID ctor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
+        jmethodID pressed=type?env->GetMethodID(type,"isPressed","()Z"):nullptr;
+        jmethodID select=type?env->GetMethodID(type,"vanillaSelect","(I)V"):nullptr;
+        jfieldID pressTime=type?env->GetFieldID(type,"pressTime","I"):nullptr;
+        jfieldID current=type?env->GetFieldID(type,"currentSlot","I"):nullptr;
+        jobject binding=ctor?env->NewObject(type,ctor):nullptr;
+        check(binding&&pressed&&select&&pressTime&&current&&!env->ExceptionCheck(),
+            "hotbar KeyBinding fixture resolves");
+        if(binding&&pressed&&select&&pressTime&&current&&!env->ExceptionCheck()) {
+            struct Shortcut {jfieldID current;bool replace=true;int calls=0;} shortcut{current};
+            mcoverlay::LiveHotbarTransform hook;
+            check(hook.install(vm,pressed,&shortcut,
+                [](void* owner,JNIEnv* jni,jobject key) noexcept {
+                    auto& state=*static_cast<Shortcut*>(owner);
+                    ++state.calls;
+                    if(!state.replace) return false;
+                    jni->SetIntField(key,state.current,7);
+                    return true;
+                }),"hotbar return filter installs on verified JVM bytecode");
+            hook.setEnabled(true);
+            for(int repeat=0;repeat<4;++repeat) {
+                env->SetIntField(binding,pressTime,1);
+                env->CallVoidMethod(binding,select,3);
+                check(!env->ExceptionCheck()&&env->GetIntField(binding,current)==7&&
+                    env->GetIntField(binding,pressTime)==0,
+                    "consumed key press/repeat cannot be overwritten by vanilla selection");
+            }
+            const int before=shortcut.calls;
+            env->CallVoidMethod(binding,select,3);
+            check(!env->ExceptionCheck()&&shortcut.calls==before,"released key does not produce synthetic edges");
+            shortcut.replace=false;
+            env->SetIntField(binding,pressTime,1);
+            env->CallVoidMethod(binding,select,3);
+            check(!env->ExceptionCheck()&&env->GetIntField(binding,current)==3,
+                "unmapped or unavailable category preserves vanilla selection");
+            shortcut.replace=true;hook.setEnabled(false);
+            env->SetIntField(binding,pressTime,1);
+            env->CallVoidMethod(binding,select,5);
+            check(!env->ExceptionCheck()&&env->GetIntField(binding,current)==5,"disabled shortcut restores vanilla immediately");
+            hook.stop();
+            env->SetIntField(binding,pressTime,1);
+            env->CallVoidMethod(binding,select,2);
+            check(!env->ExceptionCheck()&&env->GetIntField(binding,current)==2,
+                "detaching hotbar hook restores original bytecode");
+        } else if(env->ExceptionCheck()) env->ExceptionClear();
+    }
+    {
+        jclass type=env->FindClass("AssistFeaturesFixture");
+        jmethodID ctor=type?env->GetMethodID(type,"<init>","()V"):nullptr;
+        jmethodID use=type?env->GetMethodID(type,"rightClickMouse","()V"):nullptr;
+        jmethodID observe=type?env->GetMethodID(type,"observeUse","(Z)V"):nullptr;
+        jmethodID knock=type?env->GetMethodID(type,"knockBack","(Ljava/lang/Object;FDD)V"):nullptr;
+        jmethodID receive=type?env->GetMethodID(type,"handleVelocity","(Ljava/lang/Object;)V"):nullptr;
+        jfieldID selected=type?env->GetFieldID(type,"selected","I"):nullptr;
+        jfieldID cleanup=type?env->GetFieldID(type,"cleanupSlot","I"):nullptr;
+        jfieldID velocity=type?env->GetFieldID(type,"velocity","D"):nullptr;
+        jobject instance=ctor?env->NewObject(type,ctor):nullptr;
+        jobject source=ctor?env->NewObject(type,ctor):nullptr;
+        check(instance&&source&&use&&observe&&knock&&receive&&selected&&cleanup&&velocity&&!env->ExceptionCheck(),
+            "item-use and impulse fixtures resolve");
+        if(instance&&source&&use&&observe&&knock&&receive&&selected&&cleanup&&velocity&&!env->ExceptionCheck()) {
+            mcoverlay::LiveItemUseTransform useHook;
+            check(useHook.install(vm,use,&observe,
+                [](void* owner,JNIEnv* jni,jobject mc,bool entering) noexcept {
+                    jni->CallVoidMethod(mc,*static_cast<jmethodID*>(owner),entering?JNI_TRUE:JNI_FALSE);
+                    if(jni->ExceptionCheck()) jni->ExceptionClear();
+                    return false;
+                }),"right-click entry/exit transform installs");
+            useHook.setEnabled(true);
+            env->CallVoidMethod(instance,use);
+            check(!env->ExceptionCheck()&&env->GetIntField(instance,selected)==1&&
+                env->GetIntField(instance,cleanup)==0,
+                "refill runs after vanilla clears the old slot, never clears replacement");
+            useHook.stop();
+            struct Impulse {jobject selected;bool wildcard=false;} choice{env->NewGlobalRef(source)};
+            mcoverlay::LiveImpulseTransform impulse;
+            check(impulse.install(vm,knock,&choice,
+                [](void* owner,JNIEnv* jni,jobject,jobject attacker) noexcept {
+                    auto& choice=*static_cast<Impulse*>(owner);
+                    return choice.wildcard||(attacker&&jni->IsSameObject(attacker,choice.selected));
+                }),"confirmed-source impulse entry verifies in the JVM");
+            impulse.setEnabled(true);
+            env->SetDoubleField(instance,velocity,0.375);
+            env->CallVoidMethod(instance,knock,source,1.0,2.0,3.0);
+            check(!env->ExceptionCheck()&&env->GetDoubleField(instance,velocity)==0.375,
+                "selected source cannot alter pre-existing velocity even transiently");
+            env->CallVoidMethod(instance,knock,nullptr,1.0,2.0,3.0);
+            check(!env->ExceptionCheck()&&env->GetDoubleField(instance,velocity)>0.375,
+                "unknown source passes through in confirmed-only mode");
+            choice.wildcard=true;
+            env->SetDoubleField(instance,velocity,0.375);
+            env->CallVoidMethod(instance,knock,nullptr,1.0,2.0,3.0);
+            check(!env->ExceptionCheck()&&env->GetDoubleField(instance,velocity)==0.375,
+                "explicit wildcard cancels unknown-source impulse at entry");
+            mcoverlay::LiveVelocityTransform velocityHook;
+            check(velocityHook.install(vm,receive,&choice,
+                [](void* owner,JNIEnv*,jobject,jobject) noexcept {
+                    return static_cast<Impulse*>(owner)->wildcard;
+                }),"wildcard packet transform coexists with direct impulse transform");
+            velocityHook.setEnabled(true);
+            env->CallVoidMethod(instance,receive,source);
+            check(!env->ExceptionCheck()&&env->GetDoubleField(instance,velocity)==0.375,
+                "wildcard packet cancellation preserves ongoing velocity");
+            velocityHook.stop();impulse.stop();
+            env->DeleteGlobalRef(choice.selected);
+            env->CallVoidMethod(instance,receive,source);
+            check(!env->ExceptionCheck()&&env->GetDoubleField(instance,velocity)==99.0,
+                "detach restores server velocity handling");
+        } else if(env->ExceptionCheck()) env->ExceptionClear();
+    }
     vm->DestroyJavaVM();
     std::printf("Logical pipeline JVM: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -84,6 +84,10 @@ struct GameBindings::BindingCache final {
     jclass packetNetHandlerClass = nullptr;
     jmethodID rayVectorConstructor = nullptr;
     jmethodID clickMouse = nullptr;
+    jmethodID rightClickMouse = nullptr;
+    jmethodID knockBack = nullptr;
+    jmethodID handleEntityVelocity=nullptr;
+    jmethodID velocityEntityId=nullptr;
     jmethodID sendClickBlock = nullptr;
     jmethodID moveFlying = nullptr;
     jmethodID isSprinting = nullptr;
@@ -184,6 +188,8 @@ struct GameBindings::BindingCache final {
     jmethodID getCollidingBoxes = nullptr;
     jfieldID keyBindSneakField = nullptr;
     jfieldID keyBindsHotbar = nullptr;
+    jmethodID keyBindingIsPressed = nullptr;
+    jmethodID syncCurrentPlayItem = nullptr;
     std::array<jfieldID, 5U> movementKeyFields{};
     jmethodID getKeyCode = nullptr;
     jmethodID setKeyBindState = nullptr;
@@ -1524,6 +1530,10 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                 return env->GetMethodID(playerController,
                     profile.onPlayerRightClick.c_str(),
                     rightClickSignature.c_str());
+            }) &&
+            lookupRequired(env,candidate.syncCurrentPlayItem,[&] {
+                return env->GetMethodID(playerController,
+                    profile.syncCurrentPlayItem.c_str(),"()V");
             });
     }
     bool smartHotbarCapability=safewalkCapability&&placementCapability&&
@@ -1531,6 +1541,9 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         !profile.windowClick.empty();
     if(smartHotbarCapability) {
         smartHotbarCapability=
+            lookupRequired(env,candidate.keyBindingIsPressed,[&] {
+                return env->GetMethodID(keyBinding,profile.keyBindingIsPressed.c_str(),"()Z");
+            })&&
             lookupRequired(env,candidate.keyBindsHotbar,[&] {
                 return env->GetFieldID(gameSettings,
                     profile.keyBindsHotbarField.c_str(),
@@ -1728,6 +1741,16 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             }
         }
         method(candidate.clickMouse,minecraft,profile.clickMouse,"()V");
+        method(candidate.rightClickMouse,minecraft,profile.rightClickMouse,"()V");
+        const std::string knockSignature="("+profile.entitySignature+"FDD)V";
+        method(candidate.knockBack,living,profile.knockBack,knockSignature.c_str());
+        jclass velocityPacket=nullptr;
+        if(netHandler&&loadFeatureClass(velocityPacket,profile.velocityPacketName,
+                "Attack Shield","S12PacketEntityVelocity")) {
+            method(candidate.handleEntityVelocity,netHandler,profile.handleEntityVelocity,
+                "("+profile.velocityPacketSignature+")V");
+            method(candidate.velocityEntityId,velocityPacket,profile.velocityEntityId,"()I");
+        }
         method(candidate.sendClickBlock,minecraft,profile.sendClickBlock,"(Z)V");
         method(candidate.moveFlying,entity,profile.moveFlying,"(FFF)V");
         method(candidate.isSprinting,entity,profile.isSprinting,"()Z");
@@ -2414,6 +2437,207 @@ bool GameBindings::gameScreenOpen(JNIEnv* const env) noexcept
     return !queryLwjglMouseGrabbed(env, grabbed) || !grabbed;
 }
 
+bool GameBindings::suppressKnownImpulse(JNIEnv* env,jobject entity,jobject attacker) noexcept
+{
+    const int selected=m_shieldAttacker.load(std::memory_order_acquire);
+    const int local=m_shieldLocalPlayer.load(std::memory_order_acquire);
+    const auto* c=m_cache.get();
+    if(selected==-1||local<0||!env||!c||!entity||!c->getEntityId||!c->playerClass) return false;
+    if(!attacker&&selected!=-2) return false;
+    if(env->IsInstanceOf(entity,c->playerClass)!=JNI_TRUE||
+       (selected!=-2&&env->IsInstanceOf(attacker,c->playerClass)!=JNI_TRUE)) return false;
+    const int victim=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()) {clearException(env);return false;}
+    if(selected==-2) return victim==local;
+    const int source=env->CallIntMethod(attacker,c->getEntityId);
+    if(env->ExceptionCheck()) {clearException(env);return false;}
+    // This method receives the actual damage source, not an inferred attacker.
+    // Unknown network velocity packets and unrelated motion never reach it.
+    return victim==local&&source==selected&&source!=victim;
+}
+
+bool GameBindings::onItemUse(JNIEnv* env,jobject minecraft,const bool entering) noexcept
+{
+    const int watched=entering?-1:m_refillSlot;
+    m_refillSlot=-1;
+    const auto* c=m_cache.get();
+    if(!env||!minecraft||!c||!c->stackSize||!c->syncCurrentPlayItem||
+       !c->isMainThread||!c->playerField||!c->currentScreen||!c->inventoryField||
+       !c->currentItem||!c->mainInventory||!c->getItem||!c->itemBlockClass||
+       !m_refillEnabled.load(std::memory_order_acquire)||env->PushLocalFrame(80)<0) {
+        if(env) clearException(env);
+        return false;
+    }
+    struct Frame {JNIEnv* e;~Frame(){if(e->ExceptionCheck())e->ExceptionClear();e->PopLocalFrame(nullptr);}} frame{env};
+    if(env->CallBooleanMethod(minecraft,c->isMainThread)!=JNI_TRUE||env->ExceptionCheck()) return false;
+    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject screen=env->GetObjectField(minecraft,c->currentScreen);
+    if(!player||screen||env->ExceptionCheck()) return false;
+    jobject inventory=env->GetObjectField(player,c->inventoryField);
+    if(!inventory||env->ExceptionCheck()) return false;
+    const int selected=env->GetIntField(inventory,c->currentItem);
+    auto stacks=static_cast<jobjectArray>(env->GetObjectField(inventory,c->mainInventory));
+    if(!stacks||selected<0||selected>=9||env->ExceptionCheck()) return false;
+    jobject held=env->GetObjectArrayElement(stacks,selected);
+    const int count=held?env->GetIntField(held,c->stackSize):0;
+    if(env->ExceptionCheck()) return false;
+    if(entering) {
+        jobject item=held?env->CallObjectMethod(held,c->getItem):nullptr;
+        if(!env->ExceptionCheck()&&item&&count>0&&
+           env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE) m_refillSlot=selected;
+        return false;
+    }
+    // Check after Minecraft has removed the consumed stack. Never redirect
+    // its cleanup to a replacement slot, nor switch after a rejected placement.
+    if(watched!=selected||count>0) return false;
+    // The right-click hook is observational only. Inventory mutation here
+    // produces rightClick -> CLICK_WINDOW -> HELD_ITEM_CHANGE (PacketOrderE).
+    // Queue the destination and let the next stable input/PRE boundary decide
+    // whether a hotbar-only switch or a neutral inventory move is safe.
+    m_smartHotbarRefillRequest.store(selected+1,std::memory_order_release);
+    return false;
+}
+
+bool GameBindings::consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept
+{
+    const auto config=m_smartHotbarConfig.load(std::memory_order_acquire);
+    const auto* cache=m_cache.get();
+    if(!env||!binding||!cache||!hotbar::enabled(config)) return false;
+    if(env->PushLocalFrame(96)<0) {clearException(env);return false;}
+    struct Locals {JNIEnv* env;~Locals(){env->PopLocalFrame(nullptr);}} locals{env};
+    const auto fail=[&]() noexcept {clearException(env);return false;};
+    jobject minecraft=cache->minecraftInstanceField
+        ? env->GetStaticObjectField(cache->minecraftClass,cache->minecraftInstanceField)
+        : env->CallStaticObjectMethod(cache->minecraftClass,cache->getMinecraft);
+    if(!minecraft||env->ExceptionCheck()) return fail();
+    if(env->CallBooleanMethod(minecraft,cache->isMainThread)!=JNI_TRUE||
+       env->ExceptionCheck()) return fail();
+    jobject screen=cache->currentScreen
+        ? env->GetObjectField(minecraft,cache->currentScreen):nullptr;
+    bool grabbed=false;
+    if(screen||env->ExceptionCheck()||!queryLwjglMouseGrabbed(env,grabbed)||!grabbed)
+        return fail();
+    jobject settings=env->GetObjectField(minecraft,cache->gameSettingsField);
+    if(!settings||env->ExceptionCheck()) return fail();
+    jobjectArray bindings=static_cast<jobjectArray>(
+        env->GetObjectField(settings,cache->keyBindsHotbar));
+    if(!bindings||env->ExceptionCheck()) return fail();
+    const auto actions=hotbar::unpack(config);
+    int triggeredSlot=-1;
+    const jsize count=std::min<jsize>(9,env->GetArrayLength(bindings));
+    for(jsize slot=0;slot<count;++slot) {
+        jobject candidate=env->GetObjectArrayElement(bindings,slot);
+        const bool matches=candidate&&env->IsSameObject(candidate,binding)==JNI_TRUE;
+        if(candidate) env->DeleteLocalRef(candidate);
+        if(env->ExceptionCheck()) return fail();
+        if(matches&&actions[static_cast<std::size_t>(slot)]!=0) {triggeredSlot=slot;break;}
+    }
+    if(triggeredSlot<0) return false;
+    // isPressed has already decremented the real queued press. The hook only
+    // records intent; all inventory/controller calls happen at input PRE.
+    m_smartHotbarRequest.store(triggeredSlot+1,std::memory_order_release);
+    return true;
+}
+
+bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noexcept
+{
+    int encoded=m_smartHotbarRequest.exchange(0,std::memory_order_acq_rel);
+    const bool refill=encoded==0;
+    if(refill) encoded=m_smartHotbarRefillRequest.exchange(0,std::memory_order_acq_rel);
+    if(encoded<=0||encoded>9) return false;
+    const auto requeue=[&]() noexcept {
+        auto& queue=refill?m_smartHotbarRefillRequest:m_smartHotbarRequest;
+        int empty=0;(void)queue.compare_exchange_strong(empty,encoded,
+            std::memory_order_release,std::memory_order_relaxed);
+    };
+    const auto* c=m_cache.get();
+    if(!env||!minecraft||!c||!hotbar::enabled(
+           m_smartHotbarConfig.load(std::memory_order_acquire))||
+       env->PushLocalFrame(96)<0) {if(env) clearException(env);requeue();return false;}
+    struct Frame {JNIEnv* e;~Frame(){if(e->ExceptionCheck())e->ExceptionClear();e->PopLocalFrame(nullptr);}} frame{env};
+    jobject screen=c->currentScreen?env->GetObjectField(minecraft,c->currentScreen):nullptr;
+    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject inventory=player?env->GetObjectField(player,c->inventoryField):nullptr;
+    auto stacks=inventory?static_cast<jobjectArray>(env->GetObjectField(inventory,c->mainInventory)):nullptr;
+    jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
+    if(screen||!player||!inventory||!stacks||!controller||env->ExceptionCheck()) {
+        requeue();return false;
+    }
+    const int destination=encoded-1;
+    const auto actions=hotbar::unpack(m_smartHotbarConfig.load(std::memory_order_acquire));
+    const int wanted=refill?static_cast<int>(hotbar::Action::Blocks):
+        actions[static_cast<std::size_t>(destination)];
+    const jsize length=std::min<jsize>(env->GetArrayLength(stacks),36);
+    std::array<hotbar::ItemKind,36U> kinds{};
+    for(jsize slot=0;slot<length;++slot) {
+        jobject stack=env->GetObjectArrayElement(stacks,slot);
+        if(!stack) continue;
+        const int amount=c->stackSize?env->GetIntField(stack,c->stackSize):1;
+        jobject item=amount>0?env->CallObjectMethod(stack,c->getItem):nullptr;
+        if(env->ExceptionCheck()) {requeue();return false;}
+        if(item) {
+            if(env->IsInstanceOf(item,c->itemSwordClass)==JNI_TRUE)
+                kinds[static_cast<std::size_t>(slot)]=hotbar::ItemKind::Sword;
+            else if(env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE)
+                kinds[static_cast<std::size_t>(slot)]=hotbar::ItemKind::Blocks;
+            else if(c->itemClass&&c->getIdFromItem) {
+                const jint id=env->CallStaticIntMethod(c->itemClass,c->getIdFromItem,item);
+                if(env->ExceptionCheck()) {requeue();return false;}
+                kinds[static_cast<std::size_t>(slot)]=hotbar::toolKind(id);
+            }
+        }
+    }
+    const int current=std::clamp(static_cast<int>(env->GetIntField(inventory,c->currentItem)),0,8);
+    if(env->ExceptionCheck()) {requeue();return false;}
+    const int source=hotbar::selectSource(
+        std::span<const hotbar::ItemKind>(kinds.data(),static_cast<std::size_t>(length)),
+        current,wanted);
+    if(source<0) {
+        // A configured shortcut with no matching item keeps the normal hotbar
+        // selection instead of silently swallowing the player's key press.
+        if(refill) return false;
+        env->SetIntField(inventory,c->currentItem,destination);
+        if(!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
+        return env->ExceptionCheck()!=JNI_TRUE;
+    }
+    if(source>=9) {
+        // The last render snapshot can be a tick old here. Inventory transfer
+        // requires current key/velocity state at this exact input boundary.
+        bool moving=false;
+        jobject settings=c->gameSettingsField
+            ?env->GetObjectField(minecraft,c->gameSettingsField):nullptr;
+        if(!settings||env->ExceptionCheck()) {requeue();return false;}
+        for(std::size_t axis=0;axis<4U;++axis) {
+            if(!c->movementKeyFields[axis]||!c->getKeyCode) {requeue();return false;}
+            jobject binding=env->GetObjectField(settings,c->movementKeyFields[axis]);
+            if(!binding||env->ExceptionCheck()) {requeue();return false;}
+            const int code=env->CallIntMethod(binding,c->getKeyCode);
+            bool down=false;
+            if(env->ExceptionCheck()||!queryMinecraftBindingDown(env,code,down)) {
+                requeue();return false;
+            }
+            moving=moving||down;
+        }
+        if(!c->motionFields[0]||!c->motionFields[2]) {requeue();return false;}
+        const double velocityX=env->GetDoubleField(player,c->motionFields[0]);
+        const double velocityZ=env->GetDoubleField(player,c->motionFields[2]);
+        moving=moving||std::hypot(velocityX,velocityZ)>0.01;
+        const bool sprinting=c->isSprinting&&
+            env->CallBooleanMethod(player,c->isSprinting)==JNI_TRUE;
+        const bool action=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
+            (GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0||
+            m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
+        if(env->ExceptionCheck()||moving||sprinting||action) {requeue();return false;}
+        jobject result=env->CallObjectMethod(controller,c->windowClick,
+            0,source,destination,2,player);
+        if(result) env->DeleteLocalRef(result);
+        if(env->ExceptionCheck()) {requeue();return false;}
+    }
+    env->SetIntField(inventory,c->currentItem,source<9?source:destination);
+    if(!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
+    return env->ExceptionCheck()!=JNI_TRUE;
+}
+
 bool GameBindings::updateGameplay(JNIEnv* const env,
                                   const GameplaySettings& requested,
                                   const GameSnapshot& snapshot,
@@ -2434,6 +2658,13 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         !snapshot.hypixelServer;
     const bool localMobAuraRequested = requested.localMobAura && localWorld;
     const bool localVelocityRequested = requested.localVelocity && localWorld;
+    m_forceSprint.store(requested.forceSprint,std::memory_order_release);
+    const bool shield=requested.shieldAttackerId==-2||
+        (localWorld&&requested.shieldAttackerId>=0);
+    m_shieldAttacker.store(shield?requested.shieldAttackerId:-1,std::memory_order_release);
+    m_shieldLocalPlayer.store(shield?snapshot.entityId:-1,std::memory_order_release);
+    m_impulseHook.setEnabled(shield);
+    m_velocityHook.setEnabled(shield&&requested.shieldAttackerId==-2);
     const bool aimCapability = cache != nullptr &&
         cache->minecraftClass != nullptr && cache->isMainThread != nullptr &&
         cache->playerField != nullptr && cache->gameSettingsField != nullptr &&
@@ -2646,7 +2877,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         cache->currentItem != nullptr && cache->mainInventory != nullptr &&
         cache->getItem != nullptr && cache->getBlockFromItem != nullptr &&
         cache->getIdFromBlock != nullptr && cache->getFacingByIndex != nullptr &&
-        cache->vec3Constructor != nullptr && cache->playerControllerField != nullptr;
+        cache->vec3Constructor != nullptr && cache->playerControllerField != nullptr &&
+        cache->syncCurrentPlayItem != nullptr;
     const bool bedBreakerCapability = cache != nullptr &&
         cache->playerControllerClass != nullptr && cache->itemStackClass != nullptr &&
         cache->enumFacingClass != nullptr && cache->playerControllerField != nullptr &&
@@ -2660,18 +2892,28 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         cache->getBlock != nullptr && cache->isAirBlock != nullptr;
     const bool smartHotbarCapability=aimCapability&&cache!=nullptr&&
         cache->keyBindingClass!=nullptr&&cache->keyBindsHotbar!=nullptr&&
-        cache->getKeyCode!=nullptr&&cache->inventoryField!=nullptr&&
+        cache->keyBindingIsPressed!=nullptr&&cache->getKeyCode!=nullptr&&cache->inventoryField!=nullptr&&
         cache->currentItem!=nullptr&&cache->mainInventory!=nullptr&&
         cache->getItem!=nullptr&&cache->itemSwordClass!=nullptr&&
         cache->itemBlockClass!=nullptr&&cache->playerControllerField!=nullptr&&
-        cache->windowClick!=nullptr;
+        cache->windowClick!=nullptr&&cache->syncCurrentPlayItem!=nullptr;
     const bool smartHotbarRequested=requested.smartHotbar&&
         smartHotbarCapability;
-    if(!requested.smartHotbar) m_smartHotbarKeyDown.fill(false);
+    m_smartHotbarConfig.store(hotbar::pack(smartHotbarRequested,
+        requested.smartHotbarActions),std::memory_order_release);
+    m_smartHotbarHook.setEnabled(smartHotbarRequested);
+    m_refillEnabled.store(smartHotbarRequested&&requested.smartHotbarRefill,
+        std::memory_order_release);
+    m_itemUseHook.setEnabled(smartHotbarRequested&&requested.smartHotbarRefill);
+    if(!smartHotbarRequested) {
+        m_smartHotbarRequest.store(0,std::memory_order_release);
+        m_smartHotbarRefillRequest.store(0,std::memory_order_release);
+        m_refillSlot=-1;
+    }
     const bool bedBreakerRequested = requested.bedBreaker && localWorld;
     const bool movementRequested = requested.safewalk || requested.scaffold ||
         requested.fly || requested.bhop || requested.longJump ||
-        localMobAuraRequested || localVelocityRequested;
+        localMobAuraRequested || localVelocityRequested || requested.forceSprint || shield;
     // A pending logical restore/reset is work in its own right.  Keep this
     // frame alive even after the feature toggle turns off so the authoritative
     // controller can flush the real Minecraft state before the hooks stand
@@ -2684,7 +2926,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if ((!anyRequested && !m_aimSensitivityModified) ||
         (!aimCapability && !movementCapability && !bedBreakerCapability &&
          !freeLookCapability && !smartHotbarCapability)) {
-        if(!aimCapability) deactivateSilentOutput();
+        if(!aimCapability||!anyRequested) deactivateSilentOutput();
         (void)releaseForcedSneak();
         m_scaffoldPlatformYValid = false;
         m_lastLocalHealth = -1.0F;
@@ -2725,84 +2967,45 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr ||
         settings == nullptr || world == nullptr) return fail();
     const jfloat pitch = env->GetFloatField(player, cache->rotationPitch);
+    if(shield&&cache->knockBack&&(!m_impulseHook.ready()||
+       (requested.shieldAttackerId==-2&&!m_velocityHook.ready()))&&tickMilliseconds>=m_nextImpulseHookAttempt) {
+        m_nextImpulseHookAttempt=tickMilliseconds+5000U;
+        (void)m_impulseHook.install(m_vm,cache->knockBack,this,
+            [](void* owner,JNIEnv* jni,jobject victim,jobject source) noexcept {
+                return static_cast<GameBindings*>(owner)->suppressKnownImpulse(jni,victim,source);
+            });
+        m_impulseHook.setEnabled(true);
+        if(requested.shieldAttackerId==-2&&cache->handleEntityVelocity&&cache->velocityEntityId) {
+            (void)m_velocityHook.install(m_vm,cache->handleEntityVelocity,this,
+                [](void* owner,JNIEnv* jni,jobject,jobject packet) noexcept {
+                    auto* bindings=static_cast<GameBindings*>(owner);
+                    const auto* resolved=bindings->m_cache.get();
+                    if(!packet||!resolved||bindings->m_shieldAttacker.load(std::memory_order_acquire)!=-2) return false;
+                    const int id=jni->CallIntMethod(packet,resolved->velocityEntityId);
+                    if(jni->ExceptionCheck()) {bindings->clearException(jni);return false;}
+                    return id==bindings->m_shieldLocalPlayer.load(std::memory_order_acquire);
+                });
+            m_velocityHook.setEnabled(true);
+        }
+    }
     const jfloat yaw = env->GetFloatField(player, cache->rotationYaw);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
 
-    if(smartHotbarRequested) {
-        jobjectArray bindings=static_cast<jobjectArray>(
-            env->GetObjectField(settings,cache->keyBindsHotbar));
-        jobject inventory=env->GetObjectField(player,cache->inventoryField);
-        jobject controller=env->GetObjectField(
-            minecraft,cache->playerControllerField);
-        jobjectArray stacks=inventory?static_cast<jobjectArray>(
-            env->GetObjectField(inventory,cache->mainInventory)):nullptr;
-        if(env->ExceptionCheck()==JNI_TRUE||!bindings||!inventory||
-           !controller||!stacks) return fail();
-        const jsize bindingCount=std::min<jsize>(
-            static_cast<jsize>(hotbar::SlotCount),env->GetArrayLength(bindings));
-        int triggeredSlot=-1;
-        for(jsize slot=0;slot<bindingCount;++slot) {
-            jobject binding=env->GetObjectArrayElement(bindings,slot);
-            if(!binding||env->ExceptionCheck()==JNI_TRUE) return fail();
-            const jint code=env->CallIntMethod(binding,cache->getKeyCode);
-            if(env->ExceptionCheck()==JNI_TRUE) return fail();
-            bool down=false;
-            (void)queryMinecraftBindingDown(env,static_cast<int>(code),down);
-            env->DeleteLocalRef(binding);
-            const bool pressed=down&&!m_smartHotbarKeyDown[
-                static_cast<std::size_t>(slot)];
-            m_smartHotbarKeyDown[static_cast<std::size_t>(slot)]=down;
-            if(pressed&&triggeredSlot<0&&
-               requested.smartHotbarActions[static_cast<std::size_t>(slot)]!=0)
-                triggeredSlot=static_cast<int>(slot);
-        }
-        for(std::size_t slot=static_cast<std::size_t>(bindingCount);
-            slot<m_smartHotbarKeyDown.size();++slot)
-            m_smartHotbarKeyDown[slot]=false;
-        if(triggeredSlot>=0) {
-            const jsize inventoryLength=std::min<jsize>(
-                env->GetArrayLength(stacks),36);
-            std::array<hotbar::ItemKind,36U> kinds{};
-            for(jsize slot=0;slot<inventoryLength;++slot) {
-                jobject stack=env->GetObjectArrayElement(stacks,slot);
-                if(!stack) continue;
-                jobject item=env->CallObjectMethod(stack,cache->getItem);
-                if(env->ExceptionCheck()==JNI_TRUE) return fail();
-                if(item) {
-                    if(env->IsInstanceOf(item,cache->itemSwordClass)==JNI_TRUE)
-                        kinds[static_cast<std::size_t>(slot)]=
-                            hotbar::ItemKind::Sword;
-                    else if(env->IsInstanceOf(item,cache->itemBlockClass)==JNI_TRUE)
-                        kinds[static_cast<std::size_t>(slot)]=
-                            hotbar::ItemKind::Blocks;
-                    else kinds[static_cast<std::size_t>(slot)]=
-                        hotbar::ItemKind::Other;
-                    env->DeleteLocalRef(item);
-                }
-                env->DeleteLocalRef(stack);
-            }
-            const int current=std::clamp(static_cast<int>(
-                env->GetIntField(inventory,cache->currentItem)),0,8);
-            if(env->ExceptionCheck()==JNI_TRUE) return fail();
-            const int source=hotbar::selectSource(
-                std::span<const hotbar::ItemKind>(kinds.data(),
-                    static_cast<std::size_t>(inventoryLength)),current,
-                requested.smartHotbarActions[
-                    static_cast<std::size_t>(triggeredSlot)]);
-            if(source>=0&&source<9) {
-                env->SetIntField(inventory,cache->currentItem,source);
-            } else if(source>=9) {
-                // Player inventory indices 9..35 are identical to the normal
-                // player-container slot IDs. Mode 2 performs the vanilla
-                // number-key swap into the logical hotbar slot that triggered
-                // this action, then that slot becomes selected.
-                jobject result=env->CallObjectMethod(controller,
-                    cache->windowClick,0,source,triggeredSlot,2,player);
-                if(result) env->DeleteLocalRef(result);
-                if(env->ExceptionCheck()==JNI_TRUE) return fail();
-                env->SetIntField(inventory,cache->currentItem,triggeredSlot);
-            }
-            if(env->ExceptionCheck()==JNI_TRUE) return fail();
+    if(smartHotbarRequested&&(!m_smartHotbarHook.ready()||
+       (requested.smartHotbarRefill&&!m_itemUseHook.ready()))&&
+       cache->keyBindingIsPressed&&tickMilliseconds>=m_nextSmartHotbarHookAttemptTick) {
+        m_nextSmartHotbarHookAttemptTick=tickMilliseconds+5000U;
+        (void)m_smartHotbarHook.install(m_vm,cache->keyBindingIsPressed,this,
+            [](void* owner,JNIEnv* jni,jobject binding) noexcept {
+                return static_cast<GameBindings*>(owner)->consumeSmartHotbarPress(jni,binding);
+            });
+        m_smartHotbarHook.setEnabled(true);
+        if(requested.smartHotbarRefill&&cache->rightClickMouse) {
+            (void)m_itemUseHook.install(m_vm,cache->rightClickMouse,this,
+                [](void* owner,JNIEnv* jni,jobject mc,bool entering) noexcept {
+                    return static_cast<GameBindings*>(owner)->onItemUse(jni,mc,entering);
+                });
+            m_itemUseHook.setEnabled(true);
         }
     }
 
@@ -2868,7 +3071,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const aim::Mode mode = (requested.aimLockOnMode || requested.aimSilentLock)
         ? aim::Mode::LockOn : aim::Mode::Smooth;
     const bool wantsSilent = requested.aimAssist && requested.aimSilentLock;
-    if (wantsSilent || m_logicalController.debug().enabled()) {
+    m_forceSprint.store(requested.forceSprint,std::memory_order_release);
+    if (wantsSilent || requested.forceSprint || smartHotbarRequested ||
+        m_logicalController.debug().enabled()) {
         if (!m_silentRotationHook.ready() &&
             tickMilliseconds >= m_nextSilentRotationHookAttemptTick) {
             m_nextSilentRotationHookAttemptTick = tickMilliseconds + 5000U;
@@ -2991,10 +3196,34 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     std::uint32_t tabConfirmedMarkers = 0U;
     std::uint32_t colouredPlayerMarkers = 0U;
     std::uint32_t teammateMarkers = 0U;
-    const double eyeX = snapshot.camera.valid ? snapshot.camera.renderX : snapshot.x;
-    const double eyeY = (snapshot.camera.valid ? snapshot.camera.renderY : snapshot.y) + 1.62;
-    const double eyeZ = snapshot.camera.valid ? snapshot.camera.renderZ : snapshot.z;
-    const double renderTick = snapshot.entityRenderTick;
+    silent::Vec3 combatEye{};
+    const bool combatEyeReady=readCombatEye(env,player,combatEye);
+    const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    (void)observeLogicalCamera(env,minecraft,leftHeld);
+    const auto previousCombat=m_logicalController.latest();
+    const auto observedAttackTick=m_lastAttackEntryTick.load(std::memory_order_acquire);
+    const int observedAttackId=m_lastAttackEntryEntity.load(std::memory_order_acquire);
+    const int diagnosticId=previousCombat.cameraMouseOverEntityId>=0
+        ? previousCombat.cameraMouseOverEntityId
+        : (observedAttackId>=0&&tickMilliseconds>=observedAttackTick&&
+           tickMilliseconds-observedAttackTick<=1500U ? observedAttackId:-1);
+    struct TargetDiagnostic final {
+        int id=-1;
+        bool markerFound=false,markerPlayer=false,confirmedPlayer=false;
+        bool livePlayer=false;
+        float health=-1.0F;
+        bool self=false,teammate=false,lookup=false,boundsReady=false;
+        bool candidateAdded=false,withinFov=false,withinPreAim=false;
+        bool attackAvailable=false;
+        double aimPointDistance=-1.0,aabbEntryDistance=-1.0,angle=-1.0;
+    } targetDiag{};
+    targetDiag.id=diagnosticId;
+    const double configuredMaximum=std::clamp(requested.aimMaximumDistance,
+        std::max(1,requested.aimMinimumDistance),128);
+    const double preAimRange=requested.aimAttackViability
+        ?std::min(3.5,configuredMaximum):configuredMaximum;
+    const double attackReach=requested.aimAttackViability
+        ?std::min(3.0,configuredMaximum):configuredMaximum;
     const auto identityHash = [](const EntityMarker& marker) noexcept {
         std::uint64_t value = 1469598103934665603ULL;
         const auto append = [&](const auto& text) noexcept {
@@ -3012,6 +3241,14 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
          index < std::min<std::uint32_t>(snapshot.entityMarkerCount,
              static_cast<std::uint32_t>(snapshot.entityMarkers.size())); ++index) {
         const EntityMarker& entity = snapshot.entityMarkers[index];
+        const bool diagnostic=entity.entityId==diagnosticId;
+        if(diagnostic) {
+            targetDiag.markerFound=true;
+            targetDiag.markerPlayer=entity.player;
+            targetDiag.confirmedPlayer=entity.confirmedPlayer;
+            targetDiag.health=entity.health;
+            targetDiag.self=entity.entityId==snapshot.entityId;
+        }
         if (entity.player) ++playerMarkers;
         if (entity.confirmedPlayer) ++tabConfirmedMarkers;
         const bool colouredPlayer = entity.player && entity.teamColor != 'u' &&
@@ -3034,30 +3271,82 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         const bool confirmedTeammate=silent::isConfirmedCombatTeammate(
             snapshot.hypixelServer,snapshot.matchActive,
             snapshot.ownTeam,entity.teamColor);
+        if(diagnostic) targetDiag.teammate=confirmedTeammate;
         const bool eligible = validPlayer && entity.entityId != snapshot.entityId &&
             std::isfinite(entity.health) && entity.health > 0.0F &&
             !confirmedTeammate;
         if (!eligible || candidateCount >= candidates.size()) continue;
-        const double tx = entity.previousX +
-            (entity.currentX - entity.previousX) * renderTick;
-        const double ty = entity.previousY +
-            (entity.currentY - entity.previousY) * renderTick;
-        const double tz = entity.previousZ +
-            (entity.currentZ - entity.previousZ) * renderTick;
-        const double offsetX = tx - entity.currentX;
-        const double offsetY = ty - entity.currentY;
-        const double offsetZ = tz - entity.currentZ;
-        const double height = std::clamp(
-            entity.bounds.maxY - entity.bounds.minY, 0.6, 2.4);
+        if(!combatEyeReady||!cache->getEntityById) continue;
+        jobject liveTarget=env->CallObjectMethod(world,cache->getEntityById,
+                                                entity.entityId);
+        if(diagnostic) targetDiag.lookup=liveTarget&&env->ExceptionCheck()==JNI_FALSE;
+        silent::Bounds bounds{};
+        const bool boundsReady=liveTarget&&env->ExceptionCheck()==JNI_FALSE&&
+            readCombatBounds(env,liveTarget,bounds);
+        if(diagnostic) targetDiag.boundsReady=boundsReady;
+        if(liveTarget) env->DeleteLocalRef(liveTarget);
+        if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
+        if(!boundsReady) continue;
+        const auto reference=previousCombat.candidateTargetId==entity.entityId
+            ? previousCombat.logical : aim::Angles{yaw,pitch};
+        const auto aimPoint=silent::chooseCombatAimPoint(combatEye,bounds,
+            reference,attackReach,requested.aimAttackViability,
+            [&](const silent::Vec3 direction,const double limit) noexcept {
+                silent::LogicalFramePlan ray{};
+                ray.rayOrigin=combatEye;ray.rayDirection=direction;ray.rayLimit=limit;
+                return traceLogicalBlock(env,world,ray);
+            });
+        if(diagnostic) {
+            const double dx=aimPoint.point.x-combatEye.x;
+            const double dy=aimPoint.point.y-combatEye.y;
+            const double dz=aimPoint.point.z-combatEye.z;
+            const double horizontal=std::hypot(dx,dz);
+            targetDiag.aimPointDistance=std::hypot(horizontal,dy);
+            if(targetDiag.aimPointDistance>1.0e-6&&
+               std::isfinite(targetDiag.aimPointDistance)) {
+                const silent::Vec3 direction{dx/targetDiag.aimPointDistance,
+                    dy/targetDiag.aimPointDistance,dz/targetDiag.aimPointDistance};
+                targetDiag.aabbEntryDistance=silent::RayTraceCoordinator::intersect(
+                    combatEye,direction,bounds,std::max(preAimRange,attackReach));
+                constexpr double degrees=180.0/3.14159265358979323846;
+                const aim::Angles desired{std::atan2(dz,dx)*degrees-90.0,
+                    -std::atan2(dy,horizontal)*degrees};
+                targetDiag.angle=std::hypot(aim::wrap(desired.yaw-yaw),desired.pitch-pitch);
+                targetDiag.withinFov=targetDiag.angle<=
+                    std::clamp(requested.aimFovDegrees,1,360)*0.5+1.0e-5;
+                targetDiag.withinPreAim=targetDiag.aimPointDistance<=preAimRange+1.0e-5;
+            }
+            targetDiag.attackAvailable=!requested.aimAttackViability||aimPoint.available;
+            targetDiag.candidateAdded=true;
+        }
         candidates[candidateCount++] = {
-            entity.entityId, identityHash(entity), {tx, ty + height * 0.90, tz},
-            {entity.bounds.minX + offsetX, entity.bounds.minY + offsetY,
-             entity.bounds.minZ + offsetZ, entity.bounds.maxX + offsetX,
-             entity.bounds.maxY + offsetY, entity.bounds.maxZ + offsetZ}, true,
-             requested.aimSequentialTargets && entity.hurtTime > 0};
+            entity.entityId,identityHash(entity),aimPoint.point,bounds,true,
+            requested.aimSequentialTargets&&entity.hurtTime>0,
+            !requested.aimAttackViability||aimPoint.available};
     }
 
-    const bool canAim = requested.aimAssist && aimCapability &&
+    // If the camera/vanilla attack path can resolve an entity that was absent
+    // from the marker pipeline, probe it directly so TARGET_DIAG identifies
+    // marker classification versus world lookup/bounds failures.
+    if(diagnosticId>=0&&!targetDiag.lookup&&cache->getEntityById) {
+        jobject entity=env->CallObjectMethod(world,cache->getEntityById,diagnosticId);
+        if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
+        else if(entity) {
+            targetDiag.lookup=true;
+            targetDiag.livePlayer=cache->playerClass&&
+                env->IsInstanceOf(entity,cache->playerClass)==JNI_TRUE;
+            silent::Bounds bounds{};
+            targetDiag.boundsReady=readCombatBounds(env,entity,bounds);
+            if(cache->livingClass&&cache->getHealth&&
+               env->IsInstanceOf(entity,cache->livingClass)==JNI_TRUE) {
+                targetDiag.health=env->CallFloatMethod(entity,cache->getHealth);
+                if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
+            }
+            env->DeleteLocalRef(entity);
+        }
+    }
+
+    const bool canAim = requested.aimAssist && aimCapability && combatEyeReady &&
         snapshot.state == GameSnapshot::State::Ready && snapshot.health > 0.0F &&
         std::isfinite(yaw) && std::isfinite(pitch);
     const jfloat sensitivity = env->GetFloatField(settings, cache->mouseSensitivity);
@@ -3067,8 +3356,6 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const silent::RuntimeCapabilities silentCapabilities{
         silentRotationReady,silentAttackBindingsReady,
         m_logicalInteractionHook.ready(),m_attackOwnershipHook.ready()};
-    const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
-    (void)observeLogicalCamera(env,minecraft,leftHeld);
     const auto monotonicMicroseconds=static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -3095,30 +3382,82 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     logicalInput.heldItemPolicy = requested.silentControlAdaptation
         ? heldItemPolicy : silent::HeldItemPolicy::Other;
     logicalInput.minimumDistance = std::clamp(requested.aimMinimumDistance, 0, 64);
-    logicalInput.maximumDistance = std::clamp(requested.aimMaximumDistance,
-        std::max(1, requested.aimMinimumDistance), 128);
+    // With availability checking enabled, 3.5 m is acquisition/pre-aim only;
+    // current physics-space reach and occlusion remain a separate 3.0 m gate.
+    logicalInput.maximumDistance=requested.aimAttackViability
+        ? preAimRange:configuredMaximum;
+    logicalInput.attackReach=requested.aimAttackViability
+        ? attackReach:configuredMaximum;
     logicalInput.fovDegrees = std::clamp(requested.aimFovDegrees, 1, 360);
     logicalInput.aimSpeedPercent = requested.aimSpeedPercent;
     logicalInput.mouseSensitivity = sensitivity;
     logicalInput.camera = {yaw, pitch};
-    logicalInput.eye = {eyeX, eyeY, eyeZ};
+    logicalInput.eye = combatEye;
     logicalInput.physicalMovement = physicalMovement;
     logicalInput.currentVelocity = currentVelocity;
     logicalInput.sprinting = logicalSprinting;
     logicalInput.onGround = logicalOnGround;
     logicalInput.candidates = {candidates.data(), candidateCount};
+    // Schedule and bind against this SAME physics snapshot. Never leave a new
+    // intent waiting for the next rendered frame to choose its target/rotation.
+    m_logicalController.updateAttackClock(leftHeld,
+        canAim&&wantsSilent&&silentCapabilities.attackSchedulerReady(),
+        monotonicMicroseconds,requested.aimAttackCps);
     const silent::LogicalFramePlan logicalPlan =
         m_logicalController.advance(logicalInput,
             [&](const silent::LogicalFramePlan& pending) noexcept {
                 return traceLogicalBlock(env,world,pending);
             });
-    // The fixed-CPS clock belongs to core Silent Lock, not to optional local
-    // control adaptation. Scheduling after the logical frame also ensures a
-    // new intent snapshots an already committed target/rotation on the next
-    // frame instead of racing target selection.
-    m_logicalController.updateAttackClock(leftHeld,
-        canAim&&wantsSilent&&silentCapabilities.attackSchedulerReady(),
-        monotonicMicroseconds,requested.aimAttackCps);
+
+    if(m_logicalController.debug().enabled()&&diagnosticId>=0) {
+        const bool cameraMissing=previousCombat.cameraMouseOverEntityId>=0&&
+            logicalPlan.candidateTargetId<0;
+        const bool force=cameraMissing&&(!m_targetDiagMissingLatched||
+            m_lastTargetDiagMissingId!=diagnosticId);
+        if(!cameraMissing) {
+            m_targetDiagMissingLatched=false;
+            m_lastTargetDiagMissingId=-1;
+        } else if(force) {
+            m_targetDiagMissingLatched=true;
+            m_lastTargetDiagMissingId=diagnosticId;
+        }
+        if(force||tickMilliseconds>=m_nextTargetDiagTick) {
+            m_nextTargetDiagTick=tickMilliseconds+2000U;
+            const char* reject="none";
+            if(!targetDiag.markerFound&&targetDiag.livePlayer)
+                reject="marker_missing";
+            else if(!targetDiag.markerPlayer) reject="not_player";
+            else if(targetDiag.self) reject="self";
+            else if(!std::isfinite(targetDiag.health)||targetDiag.health<=0.0F)
+                reject="dead";
+            else if(targetDiag.teammate) reject="teammate";
+            else if(!targetDiag.lookup) reject="entity_lookup_failed";
+            else if(!targetDiag.boundsReady) reject="bounds_unavailable";
+            else if(!targetDiag.markerFound) reject="selector_not_chosen";
+            else if(!targetDiag.withinPreAim) reject="outside_preaim_range";
+            else if(!targetDiag.withinFov) reject="outside_fov";
+            else if(requested.aimAttackViability&&!targetDiag.attackAvailable)
+                reject=targetDiag.aabbEntryDistance<0.0||
+                    targetDiag.aabbEntryDistance>attackReach+1.0e-5
+                    ?"outside_attack_reach":"occluded";
+            else if(logicalPlan.candidateTargetId!=diagnosticId)
+                reject="selector_not_chosen";
+            char detail[1024]{};
+            std::snprintf(detail,sizeof(detail),
+                "id=%d markerFound=%d markerPlayer=%d livePlayer=%d confirmedPlayer=%d health=%.2f self=%d teammate=%d getEntityById=%d boundsReady=%d candidateAdded=%d aimPointDistance=%.3f aabbEntryDistance=%.3f angle=%.2f withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s players=%u candidateCount=%zu cameraEntity=%d selectedCandidate=%d",
+                diagnosticId,targetDiag.markerFound?1:0,targetDiag.markerPlayer?1:0,
+                targetDiag.livePlayer?1:0,targetDiag.confirmedPlayer?1:0,targetDiag.health,
+                targetDiag.self?1:0,targetDiag.teammate?1:0,
+                targetDiag.lookup?1:0,targetDiag.boundsReady?1:0,
+                targetDiag.candidateAdded?1:0,targetDiag.aimPointDistance,
+                targetDiag.aabbEntryDistance,targetDiag.angle,
+                targetDiag.withinFov?1:0,targetDiag.withinPreAim?1:0,
+                targetDiag.attackAvailable?1:0,reject,playerMarkers,candidateCount,
+                previousCombat.cameraMouseOverEntityId,logicalPlan.candidateTargetId);
+            m_logicalController.debug().event("TARGET_DIAG",
+                m_logicalController.latest(),detail,force);
+        }
+    }
 
     if (m_logicalController.debug().enabled() &&
         tickMilliseconds >= m_nextAimCandidateDebugTick) {
@@ -3171,14 +3510,14 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     }
     const bool logicalMovementReady=m_logicalMovementHook.ready()&&
         m_logicalJumpHook.ready();
-    const bool logicalMovementEnabled=logicalPlan.silentActive&&
-        requested.silentControlAdaptation&&logicalMovementReady;
+    const bool logicalMovementEnabled=(logicalPlan.silentActive||requested.forceSprint)&&logicalMovementReady;
     m_logicalMovementHook.setEnabled(logicalMovementEnabled);
     m_logicalJumpHook.setEnabled(logicalMovementEnabled);
     const bool logicalAttackEnabled=logicalPlan.silentActive&&
         silentCapabilities.attackSchedulerReady();
-    m_logicalInteractionHook.setEnabled(logicalAttackEnabled&&
-        silentCapabilities.heldArbitrationReady());
+    m_logicalInteractionHook.setEnabled(
+        (logicalAttackEnabled&&silentCapabilities.heldArbitrationReady())||
+        smartHotbarRequested);
     m_attackOwnershipHook.setEnabled(logicalAttackEnabled&&
         silentCapabilities.ownershipArbitrationReady());
     m_silentRotationHook.setEnabled(
@@ -3776,11 +4115,25 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                         target[1U] + 0.5, target[2U] + 0.5);
                     if (face == nullptr || hit == nullptr ||
                         env->ExceptionCheck() == JNI_TRUE) return fail();
+                    // Borrow the slot only for this placement attempt, even
+                    // if placement is rejected or throws a JNI exception.
+                    const jint previousSlot=env->GetIntField(inventory,cache->currentItem);
+                    if(env->ExceptionCheck()) return fail();
                     env->SetIntField(inventory, cache->currentItem, selectedSlot);
-                    const jboolean accepted = env->CallBooleanMethod(controller,
+                    if(env->ExceptionCheck()) return fail();
+                    // Make the server-visible sequence explicit: held block,
+                    // placement, original held slot. Some clients override the
+                    // right-click method and do not perform vanilla's sync.
+                    env->CallVoidMethod(controller,cache->syncCurrentPlayItem);
+                    const jboolean accepted = env->ExceptionCheck() ? JNI_FALSE : env->CallBooleanMethod(controller,
                         cache->onPlayerRightClick, player, world, selectedStack,
                         neighbour, face, hit);
-                    if (env->ExceptionCheck() == JNI_TRUE) return fail();
+                    const bool placementFailed=env->ExceptionCheck()==JNI_TRUE;
+                    clearException(env);
+                    env->SetIntField(inventory,cache->currentItem,previousSlot);
+                    if(!env->ExceptionCheck())
+                        env->CallVoidMethod(controller,cache->syncCurrentPlayItem);
+                    if(placementFailed||env->ExceptionCheck()) return fail();
                     if (accepted == JNI_TRUE) {
                         m_lastScaffoldPlacementTick = tickMilliseconds;
                         placed = true;
@@ -4658,6 +5011,76 @@ void GameBindings::deactivateSilentOutput() noexcept
     m_logicalInteractionHook.setEnabled(false);
 }
 
+void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
+{
+    const auto pending=m_logicalController.pendingAttack();
+    if(pending.kind==silent::InteractionCommandKind::None) return;
+    const auto* c=m_cache.get();
+    if(!c||env->PushLocalFrame(24)<0) {clearException(env);return;}
+    struct Locals {JNIEnv* env;~Locals(){env->PopLocalFrame(nullptr);}} locals{env};
+    const auto cancel=[&](const char* const reason) noexcept {
+        clearException(env);
+        (void)m_logicalController.cancelPendingAttack(pending,reason);
+    };
+    jobject mc=c->minecraftInstanceField
+        ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
+        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    if(!mc||env->ExceptionCheck()) {cancel("minecraft_unavailable");return;}
+    if(env->CallBooleanMethod(mc,c->isMainThread)!=JNI_TRUE||env->ExceptionCheck()) {
+        clearException(env);return;
+    }
+    jobject player=env->GetObjectField(mc,c->playerField);
+    jobject world=env->GetObjectField(mc,c->worldField);
+    if(!player||!world||env->ExceptionCheck()) {cancel("world_unavailable");return;}
+    jobject target=env->CallObjectMethod(world,c->getEntityById,pending.entityId);
+    if(!target||env->ExceptionCheck()||
+       env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE||
+       (c->playerClass&&env->IsInstanceOf(target,c->playerClass)!=JNI_TRUE)) {
+        cancel("entity_lookup_failed");return;
+    }
+    if(c->getHealth) {
+        const float health=env->CallFloatMethod(target,c->getHealth);
+        if(env->ExceptionCheck()||!std::isfinite(health)||health<=0.0F) {
+            cancel("dead");return;
+        }
+    }
+    silent::Vec3 eye{};silent::Bounds bounds{};
+    if(!readCombatEye(env,player,eye)||!readCombatBounds(env,target,bounds)) {
+        cancel("bounds_unavailable");return;
+    }
+    const double nearestX=std::clamp(eye.x,bounds.minX,bounds.maxX);
+    const double nearestY=std::clamp(eye.y,bounds.minY,bounds.maxY);
+    const double nearestZ=std::clamp(eye.z,bounds.minZ,bounds.maxZ);
+    const double preAimDistance=std::hypot(
+        std::hypot(nearestX-eye.x,nearestZ-eye.z),nearestY-eye.y);
+    if(!std::isfinite(preAimDistance)||preAimDistance>pending.preAimReach+1.0e-5) {
+        cancel("outside_preaim_range");return;
+    }
+    const auto trace=[&](const silent::Vec3 direction,const double reach) noexcept {
+        silent::LogicalFramePlan ray{};
+        ray.rayOrigin=eye;ray.rayDirection=direction;ray.rayLimit=reach;
+        return traceLogicalBlock(env,world,ray);
+    };
+    const auto direction=silent::RayTraceCoordinator::direction(pending.committedRotation);
+    const double distance=silent::RayTraceCoordinator::intersect(eye,direction,bounds,pending.reach);
+    if(std::isfinite(distance)&&distance>=0.0) {
+        const auto block=pending.enforceAvailability?trace(direction,pending.reach):silent::BlockRayHit{};
+        if(!pending.enforceAvailability||(block.querySucceeded&&
+           (block.distance<0.0||block.distance>distance+1.0e-5))) {
+            (void)m_logicalController.revisePendingAttack(
+                pending,pending.committedRotation,true);
+            return;
+        }
+    }
+    const auto point=silent::chooseCombatAimPoint(eye,bounds,pending.committedRotation,
+        pending.reach,pending.enforceAvailability,trace);
+    const double dx=point.point.x-eye.x,dy=point.point.y-eye.y,dz=point.point.z-eye.z;
+    constexpr double degrees=180.0/3.14159265358979323846;
+    const aim::Angles rotation{std::atan2(dz,dx)*degrees-90.0,
+        -std::atan2(dy,std::hypot(dx,dz))*degrees};
+    (void)m_logicalController.revisePendingAttack(pending,rotation,point.available);
+}
+
 jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcept
 {
     if(!env || !packet) return packet;
@@ -4731,6 +5154,11 @@ jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcep
             m_logicalController.debug().event("VANILLA_ROTATION_RESUME",m_logicalController.latest(),detail,true);
         }
     };
+    // Without adapted movement, sample current geometry at publication too.
+    // The controller refuses to rewrite an already committed physics snapshot:
+    // SCA refreshes before its first jump/moveFlying consumer instead. Never
+    // emit an extra movement packet or attack during movement POST.
+    refreshAttackAtPublication(env);
     const silent::PacketSerializationPlan plan=
         m_logicalController.packetPlan(hasPosition,hasRotation,
             originalRotation,originalRotationValid);
@@ -5044,8 +5472,22 @@ jfloat GameBindings::beginLogicalMovement(JNIEnv* env,jobject entity,
     // moveFlying invocation.  Resolving from them (instead of a render-frame
     // key snapshot) makes MovementCoordinator the authoritative source for the
     // current movement computation, including low-TPS/high-FPS timing gaps.
+    m_logicalController.beginPhysicsTick(tick);
+    refreshAttackAtPublication(env);
     const silent::MovementCommand command=m_logicalController.movementCommand(
         static_cast<double>(strafe),static_cast<double>(forward),tick);
+    if(c->setSprinting&&c->isSprinting) {
+        const bool silent=m_logicalController.active();
+        const bool force=m_forceSprint.load(std::memory_order_acquire);
+        if(silent||force) {
+            const bool sneaking=c->isSneaking&&env->CallBooleanMethod(entity,c->isSneaking)==JNI_TRUE;
+            const bool usingItem=c->isUsingItem&&env->CallBooleanMethod(entity,c->isUsingItem)==JNI_TRUE;
+            if(!env->ExceptionCheck())
+                env->CallVoidMethod(entity,c->setSprinting,
+                    (!silent&&force&&forward>=0.8F&&!sneaking&&!usingItem)?JNI_TRUE:JNI_FALSE);
+            clearException(env);
+        }
+    }
     if(!command.enabled || entityId!=m_logicalController.localPlayerId()) return strafe;
     g_logicalMovementHook.entityId=entityId;
     g_logicalMovementHook.originalYaw=env->GetFloatField(entity,c->rotationYaw);
@@ -5164,8 +5606,14 @@ void GameBindings::beginLogicalJump(JNIEnv* env,jobject entity) noexcept
         ? static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks))
         : 0U;
     if(env->ExceptionCheck()==JNI_TRUE) {clearException(env);return;}
+    m_logicalController.beginPhysicsTick(tick);
+    refreshAttackAtPublication(env);
     const silent::MovementCommand command=m_logicalController.jumpCommand(
         physicalStrafe,physicalForward,physicalSprinting,tick);
+    if(m_logicalController.active()) {
+        env->CallVoidMethod(entity,c->setSprinting,JNI_FALSE);
+        clearException(env);
+    }
     if(!command.enabled) return;
     g_logicalJumpHook.entityId=entityId;
     g_logicalJumpHook.originalYaw=env->GetFloatField(entity,c->rotationYaw);
@@ -5208,6 +5656,40 @@ void GameBindings::endLogicalJump(JNIEnv* env,jobject entity) noexcept
     g_logicalJumpHook={};
 }
 
+bool GameBindings::readCombatEye(JNIEnv* env,jobject player,
+                                 silent::Vec3& eye) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!player||!c||!c->getEyeHeight) return false;
+    eye={env->GetDoubleField(player,c->positionX),
+         env->GetDoubleField(player,c->positionY),
+         env->GetDoubleField(player,c->positionZ)};
+    eye.y+=env->CallFloatMethod(player,c->getEyeHeight);
+    if(env->ExceptionCheck()==JNI_TRUE) {clearException(env);return false;}
+    return std::isfinite(eye.x)&&std::isfinite(eye.y)&&std::isfinite(eye.z);
+}
+
+bool GameBindings::readCombatBounds(JNIEnv* env,jobject entity,
+                                    silent::Bounds& bounds) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!entity||!c||!c->getBounds) return false;
+    jobject box=env->CallObjectMethod(entity,c->getBounds);
+    if(!box||env->ExceptionCheck()==JNI_TRUE) {
+        if(box) env->DeleteLocalRef(box);
+        clearException(env);return false;
+    }
+    bounds={env->GetDoubleField(box,c->minX),env->GetDoubleField(box,c->minY),
+        env->GetDoubleField(box,c->minZ),env->GetDoubleField(box,c->maxX),
+        env->GetDoubleField(box,c->maxY),env->GetDoubleField(box,c->maxZ)};
+    env->DeleteLocalRef(box);
+    if(env->ExceptionCheck()==JNI_TRUE) {clearException(env);return false;}
+    return std::isfinite(bounds.minX)&&std::isfinite(bounds.minY)&&
+        std::isfinite(bounds.minZ)&&std::isfinite(bounds.maxX)&&
+        std::isfinite(bounds.maxY)&&std::isfinite(bounds.maxZ)&&
+        bounds.maxX>bounds.minX&&bounds.maxY>bounds.minY&&bounds.maxZ>bounds.minZ;
+}
+
 silent::BlockRayHit GameBindings::traceLogicalBlock(
     JNIEnv* env,jobject world,const silent::LogicalFramePlan& plan) noexcept
 {
@@ -5217,6 +5699,10 @@ silent::BlockRayHit GameBindings::traceLogicalBlock(
        !c->rayVectorConstructor || !c->hitVector ||
        std::any_of(c->vectorFields.begin(),c->vectorFields.end(),
                    [](jfieldID value){return value==nullptr;})) return result;
+    // Adaptive sampling may issue several rays per target. Scope every JNI
+    // local to one query instead of retaining hundreds until the frame ends.
+    if(env->PushLocalFrame(12)<0) {clearException(env);return result;}
+    struct RayLocals {JNIEnv* env;~RayLocals(){env->PopLocalFrame(nullptr);}} locals{env};
     const double reach=std::min(3.0,std::max(0.0,plan.rayLimit));
     jobject from=env->NewObject(c->rayVectorClass,c->rayVectorConstructor,
         plan.rayOrigin.x,plan.rayOrigin.y,plan.rayOrigin.z);
@@ -5286,6 +5772,32 @@ bool GameBindings::executeLogicalInteraction(
             world,c->getEntityById,static_cast<jint>(command.entityId));
         if(!target||env->ExceptionCheck()==JNI_TRUE)
             return fail("logical_target_unavailable");
+        if(env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE)
+            return fail("logical_target_replaced");
+        const float targetHealth=env->CallFloatMethod(target,c->getHealth);
+        if(env->ExceptionCheck()==JNI_TRUE||!std::isfinite(targetHealth)||targetHealth<=0.0F)
+            return fail("logical_target_dead");
+        silent::Vec3 eye{};
+        silent::Bounds bounds{};
+        if(!readCombatEye(env,player,eye)||!readCombatBounds(env,target,bounds))
+            return fail("physics_geometry_unavailable");
+        const auto direction=silent::RayTraceCoordinator::direction(
+            command.committedRotation);
+        const double hit=silent::RayTraceCoordinator::intersect(
+            eye,direction,bounds,command.reach);
+        // Validate the rotation that was actually published. A new point must
+        // start a new transaction and get its own publication; never silently
+        // substitute a fresh angle inside an already confirmed attack.
+        if(!std::isfinite(hit)||hit<0.0)
+            return fail("physics_ray_stale");
+        if(command.enforceAvailability) {
+            silent::LogicalFramePlan ray{};
+            ray.rayOrigin=eye;ray.rayDirection=direction;ray.rayLimit=command.reach;
+            const auto block=traceLogicalBlock(env,world,ray);
+            if(!block.querySucceeded||
+               (block.distance>=0.0&&block.distance<=hit+1.0e-5))
+                return fail("physics_ray_occluded");
+        }
         // Preserve the vanilla 1.8.9 click transaction: the client publishes
         // the arm swing first, then PlayerControllerMP sends the attack.  The
         // PRE dispatch boundary and frozen rotation transaction remain owned
@@ -5348,6 +5860,10 @@ bool GameBindings::consumeLogicalInteraction(
     JNIEnv* env,jobject minecraft,const LiveInteractionTransform::Entry entry,
     const bool heldDown) noexcept
 {
+    // This transformed per-tick input entry is the clean boundary shared by
+    // Smart Hotbar and combat. Processing the queue here keeps inventory
+    // mutation out of key/right-click hooks and out of render-driven update.
+    (void)processSmartHotbarRequests(env,minecraft);
     const bool down=entry==LiveInteractionTransform::Entry::Click || heldDown;
     if(!observeLogicalCamera(env,minecraft,down)) return false;
     m_logicalController.debug().event(entry==LiveInteractionTransform::Entry::Click
@@ -5365,6 +5881,10 @@ bool GameBindings::consumeLogicalInteraction(
     if(env->PushLocalFrame(32)<0) { clearException(env); return true; }
     const auto interactionTick=m_logicalController.latest().interactionTick;
     m_logicalController.beginInteractionPre(interactionTick);
+    // Revalidate before consuming the CPS intent. If movement invalidated its
+    // published ray, retain the same intent/target and require a fresh publish
+    // rather than spending this click on a guaranteed failed dispatch.
+    refreshAttackAtPublication(env);
     silent::InteractionCommand command=
         m_logicalController.clickAtInteractionPre(interactionTick);
     if(command.kind==silent::InteractionCommandKind::None)
@@ -5441,6 +5961,8 @@ void GameBindings::observeActualInteraction(JNIEnv* env,LiveInteractionObserver:
     if(event==LiveInteractionObserver::Event::Attack) {
         const int id=argument ? env->CallIntMethod(argument,c->getEntityId) : -1;
         if(env->ExceptionCheck()) {clearException(env);return;}
+        m_lastAttackEntryEntity.store(id,std::memory_order_release);
+        m_lastAttackEntryTick.store(::GetTickCount64(),std::memory_order_release);
         // This observer is composed at method entry and therefore sees the
         // vanilla/original argument before LiveAttackTransform substitutes the
         // committed target. The lower ownership hook records final target and
@@ -6012,7 +6534,8 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
         return textureId > 0 ? static_cast<std::uint32_t>(textureId) : 0U;
     };
 
-    // ESP collection is deliberately unavailable on remote multiplayer worlds.
+    // Collect live world entities on all supported servers. Player entity type
+    // and nickname do not depend on online authentication or a TAB roster join.
     // A single List.toArray() avoids one virtual JNI call per list index. The
     // fixed 128-marker cap and 20 Hz cadence are both deterministic; smooth
     // motion is reconstructed in OverlayRenderer from previous/current tick
@@ -6035,7 +6558,10 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
         }
         m_snapshot.entityMarkerCount = 0U;
         if (entities != nullptr) {
-            const jsize entityLimit = std::min<jsize>(env->GetArrayLength(entities), 512);
+            const jsize entityLimit = std::min<jsize>(env->GetArrayLength(entities), 4096);
+            // Real players take priority in bounded marker storage; a server's
+            // decorative mobs must not crowd them out before target selection.
+            for(int pass=0;pass<2;++pass)
             for (jsize index = 0; index < entityLimit &&
                  m_snapshot.entityMarkerCount < GameSnapshot::MaxEntityMarkers; ++index) {
                 jobject entity = env->GetObjectArrayElement(entities, index);
@@ -6045,18 +6571,22 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                 }
                 if (entity == nullptr) continue;
                 const bool isLocalPlayer = env->IsSameObject(entity, player) == JNI_TRUE;
+                const bool isPlayer=env->IsInstanceOf(entity,cache->playerClass)==JNI_TRUE;
                 const bool isLiving = env->IsInstanceOf(entity, cache->livingClass) == JNI_TRUE;
                 const bool isHostile = cache->hostileClass != nullptr &&
                     env->IsInstanceOf(entity, cache->hostileClass) == JNI_TRUE;
                 const bool isFireball = cache->fireballClass != nullptr &&
                     env->IsInstanceOf(entity, cache->fireballClass) == JNI_TRUE;
                 if (env->ExceptionCheck() == JNI_TRUE) env->ExceptionClear();
-                if (!isLocalPlayer && (isLiving || isFireball)) {
+                if (!isLocalPlayer && (isLiving || isFireball) && (pass==0?isPlayer:!isPlayer)) {
                     EntityMarker marker;
                     if (readEntityMarker(entity, marker, isLiving)) {
                         marker.fireball = isFireball;
                         marker.hostile = isHostile;
-                        if (playerObjects != nullptr) {
+                        // Entity type is authoritative on offline/custom servers;
+                        // a truncated TAB/world-list join must not exclude real players.
+                        marker.player=isPlayer;
+                        if (!marker.player && playerObjects != nullptr) {
                             const jsize playerLimit = std::min<jsize>(
                                 env->GetArrayLength(playerObjects), 64);
                             for (jsize playerIndex = 0; playerIndex < playerLimit;
@@ -6079,6 +6609,11 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                                 const char* const utf8 = env->GetStringUTFChars(markerName, nullptr);
                                 if (env->ExceptionCheck() != JNI_TRUE && utf8 != nullptr) {
                                     const std::string_view nameView(utf8);
+                                    std::size_t displayLength=std::min(nameView.size(),marker.displayName.size()-1U);
+                                    if(displayLength<nameView.size())
+                                        while(displayLength&&
+                                            (static_cast<unsigned char>(nameView[displayLength])&0xC0U)==0x80U) --displayLength;
+                                    std::copy_n(nameView.data(),displayLength,marker.displayName.data());
                                     if (!nameView.empty() && nameView.size() <= 16U) {
                                         std::copy(nameView.begin(), nameView.end(),
                                                   marker.playerName.begin());
@@ -6160,6 +6695,8 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                                     // alias when the two strings differ.
                                     std::copy(identity.name.begin(), identity.name.end(),
                                               marker.playerName.begin());
+                                    marker.displayName={};
+                                    std::copy(identity.name.begin(),identity.name.end(),marker.displayName.begin());
                                     break;
                                 }
                             }
@@ -7109,6 +7646,14 @@ void GameBindings::release(JNIEnv* const env) noexcept
     m_logicalInteractionHook.stop();
     m_logicalJumpHook.stop();
     m_logicalMovementHook.stop();
+    m_smartHotbarHook.stop();
+    m_itemUseHook.stop();
+    m_impulseHook.stop();
+    m_velocityHook.stop();
+    m_smartHotbarConfig.store(0U,std::memory_order_release);
+    m_smartHotbarRequest.store(0,std::memory_order_release);
+    m_smartHotbarRefillRequest.store(0,std::memory_order_release);
+    m_refillSlot=-1;
     m_silentRotationHook.stop();
     m_logicalController.reset();
     // AgentRuntime guarantees the resolver has joined and all other frame
@@ -7201,6 +7746,11 @@ void GameBindings::abandon() noexcept
     m_logicalInteractionHook.abandon();
     m_logicalJumpHook.abandon();
     m_logicalMovementHook.abandon();
+    m_smartHotbarHook.abandon();
+    m_itemUseHook.abandon();
+    m_impulseHook.abandon();
+    m_velocityHook.abandon();
+    m_smartHotbarConfig.store(0U,std::memory_order_release);
     m_silentRotationHook.abandon();
     m_logicalController.reset();
     // Used only when the JVM is already shutting down and no JNIEnv can be

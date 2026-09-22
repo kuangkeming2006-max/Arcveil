@@ -1,4 +1,5 @@
 #include "overlay_renderer.h"
+#include "UiColors.h"
 #include "FeatureNavigation.h"
 #include "assets/KenneyInputPromptsResource.h"
 #include <span>
@@ -154,7 +155,12 @@ void appendTransientSoftBlur(ImDrawList* const drawList,const float amount,
             vertex.pos.x+=offset.x;
             vertex.pos.y+=offset.y;
             const unsigned sourceAlpha=(vertex.col>>IM_COL32_A_SHIFT)&0xFFU;
-            const unsigned blurredAlpha=static_cast<unsigned>(std::lround(
+            // Solid surfaces must not be composited five times: translucent
+            // dark cards otherwise flash darker while the blur taps disappear.
+            const ImVec2 white=ImGui::GetDrawListSharedData()->TexUvWhitePixel;
+            const bool solid=std::abs(vertex.uv.x-white.x)<1.0e-6F&&
+                std::abs(vertex.uv.y-white.y)<1.0e-6F;
+            const unsigned blurredAlpha=solid?0U:static_cast<unsigned>(std::lround(
                 static_cast<float>(sourceAlpha)*ghostAlpha));
             vertex.col=(vertex.col&~alphaMask)|
                 ((static_cast<ImU32>(std::min(blurredAlpha,255U)))<<IM_COL32_A_SHIFT);
@@ -803,7 +809,7 @@ bool animatedToggle(const char* const label, bool& value, float& animation,
     const float eased = animation * animation * (3.0F - 2.0F * animation);
     ImDrawList* const draw = ImGui::GetWindowDrawList();
     const ImVec4 offColor = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
-    const ImVec4 onColor = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+    const ImVec4 onColor = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const ImVec4 textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
     const bool lightSurface = textColor.x + textColor.y + textColor.z < 1.5F;
     const ImVec4 mixedColor(
@@ -833,7 +839,8 @@ bool animatedToggle(const char* const label, bool& value, float& animation,
     const ImVec4 offKnob = lightSurface
         ? ImVec4(0.36F, 0.34F, 0.39F, 1.0F)
         : ImVec4(0.76F, 0.72F, 0.80F, 1.0F);
-    const ImVec4 onKnob = ImVec4(0.99F, 0.985F, 1.0F, 1.0F);
+    const ImVec4 onKnob = lightSurface ? ImVec4(0.99F,0.985F,1.0F,1.0F)
+        : ImVec4(0.10F,0.09F,0.14F,1.0F);
     const ImVec4 knobColor(
         offKnob.x + (onKnob.x - offKnob.x) * eased,
         offKnob.y + (onKnob.y - offKnob.y) * eased,
@@ -1197,6 +1204,8 @@ void OverlayRenderer::setFeatureSettings(const FeatureSettings& settings) noexce
             enqueueFeatureToasts(m_features, incoming);
         }
         m_features = incoming;
+        if(!m_featureSnapshotInitialized||m_clickGuiProgress<=0.008F)
+            m_clickGuiThemeProgress=incoming.clickGuiLightTheme?1.0F:0.0F;
         m_featureSnapshotInitialized = true;
     }
 }
@@ -1520,6 +1529,7 @@ void OverlayRenderer::applyGuiScaleStyle(const float scale, const int fontIndex)
     fresh.FrameRounding = 9.0F * scale;
     fresh.PopupRounding = 12.0F * scale;
     fresh.WindowPadding = ImVec2(17.0F * scale, 15.0F * scale);
+    fresh.FramePadding = ImVec2(10.0F * scale, 5.0F * scale);
     fresh.ItemSpacing = ImVec2(10.0F * scale, 8.0F * scale);
     fresh.ItemInnerSpacing = ImVec2(7.0F * scale, 5.0F * scale);
     fresh.WindowBorderSize = 0.0F;
@@ -2640,32 +2650,37 @@ void OverlayRenderer::renderMediaOverlay(const float deltaSeconds,
     const float buttonX=controlX+14.5F*cardScale;
     const float keycapLeft=controlX+35.0F*cardScale;
     const float keycapRight=controlX+controlColumnWidth;
-    const auto insideControl=[&](const std::size_t index) noexcept {
-        return io.MousePos.x>=controlX &&
-            io.MousePos.x<=controlX+controlColumnWidth &&
-            io.MousePos.y>=controlTops[index] &&
-            io.MousePos.y<=controlTops[index]+controlHeight;
-    };
     std::array<bool,3U> controlHovered{};
     std::array<bool,3U> controlPressed{};
-    if(interactive&&linear>0.985F) {
+    if(interactive && linear>0.985F && !ImGui::GetTopMostPopupModal()) {
+        // ForegroundDrawList has no input surface. Register a real window so
+        // controls outside the main GUI own their clicks, including overlaps.
+        ImGui::SetNextWindowPos(minimum);
+        ImGui::SetNextWindowSize(ImVec2(panelWidth,panelHeight));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
+        ImGui::Begin("##NowPlayingInput",nullptr,ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoSavedSettings|
+            ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoNav|
+            ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         for(std::size_t index=0;index<controlHovered.size();++index) {
-            controlHovered[index]=insideControl(index);
-            controlPressed[index]=controlHovered[index]&&
-                ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::SetCursorScreenPos(ImVec2(controlX,controlTops[index]));
+            if(ImGui::InvisibleButton("##transport",ImVec2(controlColumnWidth,controlHeight)))
+                requestAction(actions[index]);
+            controlHovered[index]=ImGui::IsItemHovered();
+            controlPressed[index]=ImGui::IsItemActive();
+            ImGui::PopID();
         }
-    }
-    if(interactive && linear>0.985F) {
-        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            if(insideControl(0U)) requestAction(MediaAction::Previous);
-            else if(insideControl(1U)) requestAction(MediaAction::Toggle);
-            else if(insideControl(2U)) requestAction(MediaAction::Next);
-            else if(ImGui::IsMouseHoveringRect(minimum,maximum,false)) {
-                m_mediaDragging=true;
-                m_mediaDragOffsetX=io.MousePos.x-panelX;
-                m_mediaDragOffsetY=io.MousePos.y-panelY;
-            }
+        ImGui::SetCursorScreenPos(minimum);
+        ImGui::InvisibleButton("##dragMedia",ImVec2(controlX-panelX-8.0F*cardScale,panelHeight));
+        if(ImGui::IsItemActivated()) {
+            m_mediaDragging=true;
+            m_mediaDragOffsetX=io.MousePos.x-panelX;
+            m_mediaDragOffsetY=io.MousePos.y-panelY;
         }
+        ImGui::End();
+        ImGui::PopStyleVar();
         if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_mediaDragging=false;
         if(m_mediaDragging) {
             panelX=std::clamp(io.MousePos.x-m_mediaDragOffsetX,4.0F,
@@ -2678,7 +2693,7 @@ void OverlayRenderer::renderMediaOverlay(const float deltaSeconds,
                 panelY/std::max(1.0F,io.DisplaySize.y)*1000.0F)),0,1000);
             m_mediaSettingsDirty=true;
         }
-    } else if(!interactive) m_mediaDragging=false;
+    } else m_mediaDragging=false;
 
     ImDrawList* const draw=ImGui::GetForegroundDrawList();
     const auto transform=[&](const ImVec2 point) noexcept {
@@ -3003,7 +3018,7 @@ void OverlayRenderer::renderImeOverlay(const float deltaSeconds,
     ::ReleaseSRWLockShared(&m_inputState->imeLock);
     if (m_inputState->tsf != nullptr) {
         const ImeCandidates tsf = m_inputState->tsf->snapshot();
-        if (tsf.active) {
+        if (tsf.active && tsf.count > 0U) {
             candidates = tsf.words;
             candidateCount = tsf.count;
             candidateSelection = tsf.selected;
@@ -3631,13 +3646,14 @@ bool OverlayRenderer::render(HDC const deviceContext,
                             insetVertex(right), 3.2F * uiScale, teamAccent);
                     }
                 }
-                const bool nametagAllowed = entity.player && entity.confirmedPlayer &&
-                    m_features.nametagEnabled && entity.playerName[0U] != '\0' &&
+                const char* shownName=entity.displayName[0]?entity.displayName.data():entity.playerName.data();
+                const bool nametagAllowed = entity.player &&
+                    (entity.confirmedPlayer || m_features.nametagAlways) &&
+                    m_features.nametagEnabled && shownName[0] != '\0' &&
                     (!isTeammate || m_features.showTeammateNametags) &&
                     (isTeammate || !m_features.nametagNearbyEnemiesOnly ||
                      entity.distance <= static_cast<double>(m_features.nametagRange));
-                if (nametagAllowed &&
-                    entity.playerName[0U] != '\0') {
+                if (nametagAllowed) {
                     ImVec2 bodyMin{}, bodyMax{};
                     if (projectedBoxBounds(snapshot.camera, displaySize, interpolated,
                                            bodyMin, bodyMax)) {
@@ -3753,7 +3769,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         background->AddText(font, fontSize,
                             ImVec2(faceMax.x + 8.0F * tagScale,
                                    y + 7.0F * tagScale), nameColor,
-                            entity.playerName.data());
+                            shownName);
                         if (entity.protectionLevel > 0U) {
                             char protection[16]{};
                             std::snprintf(protection, sizeof(protection), "Prot %s",
@@ -4037,14 +4053,21 @@ bool OverlayRenderer::render(HDC const deviceContext,
                                     ImVec4(0.88F, 0.86F, 0.90F, 1.0F), theme);
     const ImVec4 guiScrollbarTrack = mixColor(
         ImVec4(0.065F, 0.058F, 0.082F, 0.72F),
-        ImVec4(0.70F, 0.70F, 0.72F, 0.82F), theme);
+        ImVec4(0.86F, 0.85F, 0.89F, 0.82F), theme);
     const ImVec4 guiScrollbarGrab = mixColor(
         ImVec4(1.0F, 1.0F, 1.0F, 0.72F),
-        ImVec4(1.0F, 1.0F, 1.0F, 0.96F), theme);
+        ImVec4(0.43F, 0.40F, 0.49F, 0.85F), theme);
     const std::array<float, 3U> accentChannels = unpackRgb(
         m_features.clickGuiAccentColor);
-    const ImVec4 guiAccent(accentChannels[0U], accentChannels[1U],
-                           accentChannels[2U], 1.0F);
+    const auto darkAccent=ui::readableAccent(accentChannels,{0.14F,0.13F,0.18F},false);
+    const auto lightAccent=ui::readableAccent(accentChannels,{0.965F,0.956F,0.975F},true);
+    const ImVec4 guiAccent=mixColor(
+        ImVec4(darkAccent[0],darkAccent[1],darkAccent[2],1),
+        ImVec4(lightAccent[0],lightAccent[1],lightAccent[2],1),theme);
+    const ImVec4 guiSelected=mixColor(guiFrame,guiAccent,0.22F);
+    const ImVec4 guiDanger=mixColor(ImVec4(1,.48F,.43F,1),ImVec4(.70F,.12F,.16F,1),theme);
+    const ImVec4 guiWarning=mixColor(ImVec4(1,.70F,.38F,1),ImVec4(.53F,.29F,.06F,1),theme);
+    const ImVec4 guiSuccess=mixColor(ImVec4(.42F,.84F,.78F,1),ImVec4(.07F,.40F,.34F,1),theme);
 
     // One-to-one port of google_dynamic_island_search.html. The island keeps
     // Minecraft's session cursor unchanged; ImGui never requests an I-beam,
@@ -4136,7 +4159,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
         const auto flags=ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|
             ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollWithMouse|
             ImGuiWindowFlags_NoNavFocus|
-            ((!interactive||m_blacklistAddOpen)?ImGuiWindowFlags_NoInputs:0);
+            (!interactive?ImGuiWindowFlags_NoInputs:0);
         if(ImGui::Begin("##FeatureSearchIsland",nullptr,flags)) {
             ImDrawList* const draw=ImGui::GetWindowDrawList();
             // Flat material surface: no shadow and no cursor override. Hover
@@ -4317,13 +4340,20 @@ bool OverlayRenderer::render(HDC const deviceContext,
         ImGui::PushStyleColor(ImGuiCol_CheckMark, guiAccent);
         ImGui::PushStyleColor(ImGuiCol_Button, guiFrame);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              ImVec4(guiAccent.x, guiAccent.y, guiAccent.z, 0.76F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, guiAccent);
+                              mixColor(guiFrame,guiAccent,0.16F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, guiSelected);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, mixColor(guiSurface,guiFrame,0.12F));
+        ImGui::PushStyleColor(ImGuiCol_Border, mixColor(guiFrame,guiMuted,0.30F));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, guiSelected);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, guiAccent);
+        ImGui::PushStyleColor(ImGuiCol_Header, guiSelected);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, mixColor(guiFrame,guiAccent,0.16F));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, guiSelected);
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, guiScrollbarTrack);
         ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, guiScrollbarGrab);
         ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered,
-                              ImVec4(1, 1, 1, 0.90F));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ImVec4(1, 1, 1, 1));
+                              mixColor(guiScrollbarGrab,guiAccent,0.35F));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, guiAccent);
         const ImGuiWindowFlags clickFlags = ImGuiWindowFlags_NoTitleBar |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
@@ -4405,11 +4435,11 @@ bool OverlayRenderer::render(HDC const deviceContext,
             windowDraw->AddText(boldFont, ImGui::GetFontSize(),
                                 ImVec2(windowPosition.x + 20.0F * uiScale,
                                        windowPosition.y + 17.0F * uiScale),
-                                fadedGuiColor(guiText), "MC OVERLAY");
+                                fadedGuiColor(guiText), "ARCVEIL");
             windowDraw->AddText(ImVec2(windowPosition.x + 20.0F * uiScale,
                                        windowPosition.y + 38.0F * uiScale),
                                 fadedGuiColor(guiMuted),
-                                "Native workspace");
+                                "WORKSPACE / v51");
 
             // A clipped child owns scrolling. Row height is independent of
             // window height: resizing changes the viewport, never row spacing.
@@ -4439,6 +4469,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 case 21: return m_features.localVelocityEnabled;
                 case 22: return m_features.freeLookEnabled;
                 case 23: return m_features.smartHotbarEnabled;
+                case 24: return m_features.sprintEnabled;
+                case 25: return m_features.attackShieldEnabled;
                 default: return false;
                 }
             };
@@ -4451,26 +4483,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             ImDrawList* const navDraw = ImGui::GetWindowDrawList();
             const ImVec2 navOrigin = ImGui::GetCursorScreenPos();
             const float rowWidth = ImGui::GetContentRegionAvail().x;
-            float contentY = 0, targetNavY = 0;
-            bool selectedVisible=false;
-            for (const auto& row : rows) {
-                if (row.page == m_clickGuiPage) { targetNavY = contentY; selectedVisible=true; }
-                contentY += row.page < 0 ? 28.0F : 32.0F;
-            }
-            if (m_clickGuiNavPosition <= 0.0F) m_clickGuiNavPosition = targetNavY;
-            m_clickGuiNavPosition += (targetNavY - m_clickGuiNavPosition) *
-                (1.0F - std::exp(-15.0F * delta));
-            const ImVec2 selectedMin(navOrigin.x + 2.0F * uiScale,
-                navOrigin.y + m_clickGuiNavPosition * uiScale);
-            if(selectedVisible) {
-            navDraw->AddRectFilled(selectedMin,
-                ImVec2(navOrigin.x + rowWidth, selectedMin.y + 30.0F * uiScale),
-                fadedGuiColor(ImVec4(guiAccent.x, guiAccent.y, guiAccent.z, 0.18F)), 9.0F * uiScale);
-            navDraw->AddRectFilled(ImVec2(selectedMin.x + 2.0F * uiScale, selectedMin.y + 7.0F * uiScale),
-                ImVec2(selectedMin.x + 5.0F * uiScale, selectedMin.y + 23.0F * uiScale),
-                fadedGuiColor(guiAccent), 1.5F * uiScale);
-            }
-            contentY = 0;
+            float contentY=0;
             for (const auto& row : rows) {
                 const ImVec2 position(navOrigin.x + 2.0F * uiScale,
                     navOrigin.y + contentY * uiScale);
@@ -4483,13 +4496,87 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 }
                 ImGui::SetCursorScreenPos(position);
                 ImGui::PushID(row.page);
-                if (ImGui::InvisibleButton("##nav", ImVec2(rowWidth - 2.0F * uiScale, 30.0F * uiScale)) &&
+                ImGui::InvisibleButton("##nav", ImVec2(rowWidth - 2.0F * uiScale, 30.0F * uiScale),
+                    ImGuiButtonFlags_MouseButtonLeft|ImGuiButtonFlags_MouseButtonRight);
+                if(ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                    bool* toggle=nullptr;
+                    switch(row.page) {
+                    case 0:toggle=&m_features.entityEspEnabled;break;
+                    case 1:toggle=&m_features.bedEspEnabled;break;
+                    case 2:toggle=&m_features.nametagEnabled;break;
+                    case 3:toggle=&m_features.bedThreatAlertsEnabled;break;
+                    case 4:toggle=&m_features.safewalkEnabled;break;
+                    case 5:toggle=&m_features.scaffoldEnabled;break;
+                    case 6:toggle=&m_features.flyEnabled;break;
+                    case 7:toggle=&m_features.bhopEnabled;break;
+                    case 8:toggle=&m_features.aimAssistEnabled;break;
+                    case 9:toggle=&m_features.hypixelPanelEnabled;break;
+                    case 10:toggle=&m_features.debugChatEnabled;break;
+                    case 11:
+                        m_blacklist.showWithClickGui=!m_blacklist.showWithClickGui;
+                        m_blacklistAction={};
+                        m_blacklistAction.type=BlacklistAction::Type::Settings;
+                        m_blacklistAction.panelEnabled=m_blacklist.panelEnabled;
+                        m_blacklistAction.matchAlertsEnabled=m_blacklist.matchAlertsEnabled;
+                        m_blacklistAction.allowIdOnlyNicks=m_blacklist.allowIdOnlyNicks;
+                        m_blacklistAction.showWithClickGui=m_blacklist.showWithClickGui;
+                        m_blacklistAction.collapsed=m_blacklist.collapsed;
+                        m_blacklistAction.panelOpacity=m_blacklist.panelOpacity;
+                        m_blacklistAction.contentScale=m_blacklist.contentScale;
+                        m_blacklistAction.panelColor=m_blacklist.panelColor;
+                        m_blacklistActionDirty=true;
+                        break;
+                    case 12:toggle=&m_features.textGuiEnabled;break;
+                    case 14:toggle=&m_features.fireballEspEnabled;break;
+                    case 16: {
+                        const bool enabled=!(m_features.bowPredictionEnabled||m_features.knockbackPredictionEnabled);
+                        m_features.bowPredictionEnabled=enabled;
+                        m_features.knockbackPredictionEnabled=enabled;
+                        changed=true;
+                        break;
+                    }
+                    case 18:toggle=&m_features.fullscreenImeFixEnabled;break;
+                    case 19:m_mediaSettings.enabled=!m_mediaSettings.enabled;m_mediaSettingsDirty=true;break;
+                    case 20:toggle=&m_features.bedBreakerEnabled;break;
+                    case 21:toggle=&m_features.localVelocityEnabled;break;
+                    case 22:toggle=&m_features.freeLookEnabled;break;
+                    case 23:toggle=&m_features.smartHotbarEnabled;break;
+                    case 24:toggle=&m_features.sprintEnabled;break;
+                    case 25:toggle=&m_features.attackShieldEnabled;break;
+                    }
+                    if(toggle) {*toggle=!*toggle;changed=true;}
+                }
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Right) &&
                     m_clickGuiPage != row.page) {
                     m_previousClickGuiPage = m_clickGuiPage;
                     m_clickGuiPage = row.page;
                     m_clickGuiPageProgress = 0.0F;
                 }
                 const bool selected = row.page == m_clickGuiPage;
+                // Selection dissolves in place instead of a highlight sliding
+                // through unrelated pages. The trailing marker shares the fade.
+                float& selection=m_clickGuiNavSelection[static_cast<std::size_t>(row.page)];
+                selection+=((selected?1.0F:0.0F)-selection)*(1.0F-std::exp(-20.0F*delta));
+                const bool enabled=enabledPage(row.page);
+                const ImVec2 rowEnd(navOrigin.x+rowWidth,position.y+30.0F*uiScale);
+                const ImVec4 enabledSurface=mixColor(guiRail,ImVec4(.16F,.15F,.20F,1),theme);
+                float& enabledFade=m_clickGuiNavEnabled[static_cast<std::size_t>(row.page)];
+                enabledFade=approachExponential(enabledFade,enabled?1.0F:0.0F,15.0F,delta);
+                if(enabledFade>0.002F) navDraw->AddRectFilled(position,rowEnd,
+                    fadedGuiColor(ImVec4(enabledSurface.x,enabledSurface.y,enabledSurface.z,enabledFade)),7.0F*uiScale);
+                if(selection>0.002F) {
+                    navDraw->AddRectFilled(position,rowEnd,
+                        fadedGuiColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,
+                            selection*(enabled?0.20F:0.12F))),7.0F*uiScale);
+                    navDraw->AddRect(position,rowEnd,
+                        fadedGuiColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,selection*.35F)),
+                        7.0F*uiScale,0,uiScale);
+                    const float right=rowEnd.x-11.0F*uiScale;
+                    const float middle=position.y+15.0F*uiScale;
+                    const ImU32 marker=fadedGuiColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,selection));
+                    navDraw->AddLine(ImVec2(right-3*uiScale,middle-3*uiScale),ImVec2(right,middle),marker,1.5F*uiScale);
+                    navDraw->AddLine(ImVec2(right,middle),ImVec2(right-3*uiScale,middle+3*uiScale),marker,1.5F*uiScale);
+                }
                 float& hover = m_clickGuiNavHover[static_cast<std::size_t>(row.page)];
                 hover += ((ImGui::IsItemHovered() && !selected ? 1.0F : 0.0F) - hover) *
                     (1.0F - std::exp(-18.0F * delta));
@@ -4498,19 +4585,16 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     ImVec2(navOrigin.x + rowWidth, position.y + 30.0F * uiScale),
                     fadedGuiColor(ImVec4(guiAccent.x, guiAccent.y, guiAccent.z, 0.08F * hover)), 9.0F * uiScale);
                 ImFont* font=selected ? boldFont : ImGui::GetFont();
-                ImVec2 textPosition(position.x + 14.0F * uiScale,
+                ImVec2 textPosition(position.x + 16.0F * uiScale,
                     position.y + (30.0F * uiScale-ImGui::GetFontSize())*0.5F);
                 const std::size_t length=std::strlen(row.label);
                 for(std::size_t glyph=0;glyph<length;++glyph) {
-                    const float glow=enabledPage(row.page)
+                    const float glow=enabled
                         ? navigation::glyphGlow(glyph,length,ImGui::GetTime()) : 0;
-                    const ImVec4 color=mixColor(selected ? guiText : guiMuted,ImVec4(1,1,1,1),glow);
-                    // A subtle shadow retains contrast for white glyphs on the
-                    // light theme. The same colour is used for the WHOLE glyph.
-                    if(theme>0.1F && glow>0.01F)
-                        navDraw->AddText(font,ImGui::GetFontSize(),
-                            ImVec2(textPosition.x+0.7F,textPosition.y+0.7F),
-                            fadedGuiColor(ImVec4(0,0,0,theme*glow*0.65F)),row.label+glyph,row.label+glyph+1);
+                    const ImVec4 label=enabled
+                        ? mixColor(selected?guiText:guiMuted,ImVec4(.72F,.70F,.77F,1),theme)
+                        : (selected?guiText:guiMuted);
+                    const ImVec4 color=mixColor(label,ImVec4(1,1,1,1),glow);
                     navDraw->AddText(font,ImGui::GetFontSize(),textPosition,
                         fadedGuiColor(color),row.label+glyph,row.label+glyph+1);
                     textPosition.x+=font->CalcTextSizeA(ImGui::GetFontSize(),1000,0,
@@ -4558,14 +4642,14 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     5.7F * uiScale, fadedGuiColor(guiRail), 24);
             }
 
-            constexpr std::array<const char*, 24U> pageTitles{{
+            constexpr std::array<const char*, 26U> pageTitles{{
                 "Player ESP", "Bed ESP", "Nametags", "Bed Alerts",
                 "SafeWalk", "Scaffold", "Flight", "Bunny Hop", "Aim Assist",
                 "Player Stats", "Diagnostics", "Blacklist", "Module List", "Interface",
                 "Fireball ESP", "", "Trajectories", "",
                 "Input Method", "Now Playing", "Bed Breaker", "Velocity", "FreeLook",
-                "Smart Hotbar"}};
-            constexpr std::array<const char*, 24U> pageDescriptions{{
+                "Smart Hotbar", "Sprint", "Attack Shield"}};
+            constexpr std::array<const char*, 26U> pageDescriptions{{
                 "Player outlines and teammate presentation",
                 "Bed geometry and defense material card",
                 "Confirmed-player identity and live health cards",
@@ -4589,8 +4673,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 "Visible local-world bed path and automatic tool selection",
                 "Probability and independent horizontal/vertical knockback response",
                 "Hold-to-look camera orbit without rotating your player",
-                "Category shortcuts that follow Minecraft's own hotbar bindings"}};
-            const int page = std::clamp(m_clickGuiPage, 0, 23);
+                "Category shortcuts that follow Minecraft's own hotbar bindings",
+                "Automatic sprint with Silent Lock priority",
+                "Source-aware impulse suppression, with an optional wildcard"}};
+            const int page = std::clamp(m_clickGuiPage, 0, 25);
             const float contentX = windowPosition.x + (baseRailWidth + 22.0F) * uiScale;
             windowDraw->AddText(boldFont, ImGui::GetFontSize() * 1.16F,
                 ImVec2(contentX, windowPosition.y + 17.0F * uiScale),
@@ -4650,6 +4736,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
                      pageMasterAnimation = &m_toggleAnimation[54]; break;
             case 23: pageMaster=&m_features.smartHotbarEnabled;
                      pageMasterAnimation=&m_toggleAnimation[55]; break;
+            case 24: pageMaster=&m_features.sprintEnabled;
+                     pageMasterAnimation=&m_toggleAnimation[58]; break;
+            case 25: pageMaster=&m_features.attackShieldEnabled;
+                     pageMasterAnimation=&m_toggleAnimation[59]; break;
             default: break;
             }
             if (pageMaster != nullptr && pageMasterAnimation != nullptr) {
@@ -4755,7 +4845,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             m_clickGuiPageProgress += (1.0F - m_clickGuiPageProgress) *
                 (1.0F - std::exp(-14.0F * delta));
             const float pageEase = std::clamp(m_clickGuiPageProgress, 0.0F, 1.0F);
-            const ImVec2 childPos(contentX + (1.0F - pageEase) * 14.0F * uiScale,
+            const ImVec2 childPos(contentX,
                                   windowPosition.y + 79.0F * uiScale);
             ImGui::SetCursorScreenPos(childPos);
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, pageEase);
@@ -4845,7 +4935,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     if (radius != 3) ImGui::SameLine();
                     ImGui::PushID(radius);
                     const bool selected = radius == m_features.bedDefenseRadius;
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                     char label[4]{};
                     std::snprintf(label, sizeof(label), "%d", radius);
                     if (ImGui::Button(label, ImVec2(38.0F * uiScale, 0.0F)) && !selected) {
@@ -4871,6 +4961,9 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 sectionTitle("PLAYER FILTER");
                 changed |= animatedToggle("Show teammate nametags",
                     m_features.showTeammateNametags, m_toggleAnimation[19], uiScale);
+                changed |= animatedToggle("Show on all servers and in lobbies",
+                    m_features.nametagAlways,m_toggleAnimation[57],uiScale);
+                ImGui::TextWrapped("Uses the server's player name and UUID, including offline-mode identities. No online-account lookup is required.");
                 changed |= animatedToggle("Only nearby enemies",
                     m_features.nametagNearbyEnemiesOnly, m_toggleAnimation[20], uiScale);
                 if (m_features.nametagNearbyEnemiesOnly) {
@@ -4889,7 +4982,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 for (int sizeIndex = 0; sizeIndex < 4; ++sizeIndex) {
                     if (sizeIndex != 0) ImGui::SameLine();
                     const bool selected = sizeIndex == m_features.nametagSizeIndex;
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                     if (ImGui::Button(nametagSizes[static_cast<std::size_t>(sizeIndex)],
                         ImVec2(62.0F * uiScale, 0.0F)) && !selected) {
                         m_features.nametagSizeIndex = sizeIndex;
@@ -4953,7 +5046,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 ImGui::TextDisabled(
                     "When enabled, jumping bridges forward on the takeoff layer instead of towering upward.");
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.34F, 1.0F),
+                ImGui::TextColored(guiDanger,
                     "WARNING: Do not use this on a server. It can cause a ban.");
                 ImGui::TextDisabled("Placement still requires a reachable solid neighbour.");
             } else if (page == 6) {
@@ -4961,7 +5054,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 ImGui::SetNextItemWidth(320.0F * uiScale);
                 changed |= ImGui::SliderInt("Speed", &m_features.flySpeedPercent,
                     10, 500, "%d%%", ImGuiSliderFlags_AlwaysClamp);
-                ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.34F, 1.0F),
+                ImGui::TextColored(guiDanger,
                     "WARNING: Do not use this on a server. It can cause a ban.");
                 ImGui::TextDisabled("This is local motion control and contains no server-correction bypass.");
             } else if (page == 7) {
@@ -4972,7 +5065,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 changed |= ImGui::SliderInt("Air speed",
                     &m_features.bhopAirSpeedPercent, 10, 300, "%d%%",
                     ImGuiSliderFlags_AlwaysClamp);
-                ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.34F, 1.0F),
+                ImGui::TextColored(guiDanger,
                     "WARNING: Do not use this on a server. It can cause a ban.");
                 ImGui::TextDisabled("Airborne horizontal velocity follows current movement input.");
             } else if (page == 8) {
@@ -4981,8 +5074,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     const char* id,const char* title,const char* summary,
                     const float fallbackBodyHeight,auto&& body) noexcept {
                     const float bodyGap=8.0F*uiScale;
-                    const float bodyPaddingX=19.0F*uiScale;
-                    const float bodyPaddingY=13.0F*uiScale;
+                    const float bodyPaddingX=24.0F*uiScale;
+                    const float bodyPaddingY=17.0F*uiScale;
                     const float sectionGap=14.0F*uiScale;
                     const float storedBodyHeight=m_aimSectionBodyHeight[index]>1.0F
                         ? m_aimSectionBodyHeight[index]*uiScale
@@ -4990,7 +5083,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     const float fullBodyHeight=std::max(36.0F*uiScale,storedBodyHeight);
                     const ImVec2 headerMin=ImGui::GetCursorScreenPos();
                     const float headerWidth=ImGui::GetContentRegionAvail().x;
-                    const ImVec2 headerSize(headerWidth,52.0F*uiScale);
+                    const ImVec2 headerSize(headerWidth,60.0F*uiScale);
                     const float parentItemSpacing=ImGui::GetStyle().ItemSpacing.y;
                     ImGui::PushID(id);
                     ImGui::InvisibleButton("##header",headerSize);
@@ -5041,11 +5134,11 @@ bool OverlayRenderer::render(HDC const deviceContext,
                             guiAccent.x,guiAccent.y,guiAccent.z,0.32F)),
                         std::max(1.0F,uiScale));
                     draw->AddText(boldFont,ImGui::GetFontSize()*0.88F,
-                        ImVec2(headerMin.x+18.0F*uiScale,
-                               headerMin.y+9.0F*uiScale),
+                        ImVec2(headerMin.x+24.0F*uiScale,
+                               headerMin.y+12.0F*uiScale),
                         ImGui::ColorConvertFloat4ToU32(guiText),title);
-                    draw->AddText(ImVec2(headerMin.x+18.0F*uiScale,
-                        headerMin.y+31.0F*uiScale),
+                    draw->AddText(ImVec2(headerMin.x+24.0F*uiScale,
+                        headerMin.y+35.0F*uiScale),
                         ImGui::ColorConvertFloat4ToU32(guiMuted),summary);
                     const ImVec2 centre(headerMin.x+headerSize.x-22.0F*uiScale,
                         headerMin.y+headerSize.y*0.5F);
@@ -5063,6 +5156,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     {
                         ImGuiWindow* const parentWindow=ImGui::GetCurrentWindow();
                         const float parentCursorMaxBefore=parentWindow->DC.CursorMaxPos.y;
+                        const float parentIdealMaxBefore=parentWindow->DC.IdealMaxPos.y;
                         const ImVec2 bodyStart(headerMin.x,
                             headerMin.y+headerSize.y+bodyGap);
                         ImGui::SetCursorScreenPos(bodyStart);
@@ -5098,9 +5192,15 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         // cursor metrics while it is collapsing.  Preserve the
                         // last fully-expanded natural height so ScrollMax and
                         // every following card remain stable during animation.
-                        if(phase>=0.999F||m_aimSectionBodyHeight[index]<=1.0F)
-                            m_aimSectionBodyHeight[index]=measuredPixels/
-                                std::max(0.01F,uiScale);
+                        // Offscreen children skip widget layout. Their cursor
+                        // then reports padding only, not natural content size.
+                        // Never replace a measured height with that placeholder.
+                        if(!ImGui::GetCurrentWindow()->SkipItems&&
+                           (phase>=0.999F||m_aimSectionBodyHeight[index]<=1.0F)) {
+                            const float measured=measuredPixels/std::max(0.01F,uiScale);
+                            if(std::abs(measured-m_aimSectionBodyHeight[index])>1.0F)
+                                m_aimSectionBodyHeight[index]=measured;
+                        }
                         ImGui::EndChild();
                         if(spotlightEase>0.985F)
                             appendTransientSoftBlur(bodyDraw,1.0F-progress,uiScale);
@@ -5113,6 +5213,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         // so ScrollMax and all following cards move continuously.
                         parentWindow->DC.CursorMaxPos.y=std::max(
                             parentCursorMaxBefore,outerMax.y);
+                        parentWindow->DC.IdealMaxPos.y=std::max(parentIdealMaxBefore,outerMax.y);
                         ImGui::SetCursorScreenPos(ImVec2(headerMin.x,outerMax.y));
                     }
                     ImGui::PopID();
@@ -5129,7 +5230,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     const float modeButtonWidth=std::max(96.0F*uiScale,
                         (ImGui::GetContentRegionAvail().x-modeGap)*0.5F);
                     const bool smoothSelected=!lockOn;
-                    if(smoothSelected) ImGui::PushStyleColor(ImGuiCol_Button,guiAccent);
+                    if(smoothSelected) ImGui::PushStyleColor(ImGuiCol_Button,guiSelected);
                     if(ImGui::Button("Smooth Aim",ImVec2(modeButtonWidth,0))&&lockOn) {
                         m_features.aimLockOnMode=false;
                         m_features.aimSilentLock=false;
@@ -5142,7 +5243,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     // Pop branch caused PopStyleColor() underflow when switching
                     // from Smooth Aim to Lock On.
                     const bool lockSelected=lockOn;
-                    if(lockSelected) ImGui::PushStyleColor(ImGuiCol_Button,guiAccent);
+                    if(lockSelected) ImGui::PushStyleColor(ImGuiCol_Button,guiSelected);
                     if(ImGui::Button("Lock On",ImVec2(modeButtonWidth,0))&&!lockOn) {
                         m_features.aimLockOnMode=true;lockOn=true;changed=true;
                     }
@@ -5151,7 +5252,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     changed|=animatedToggle("Silent Lock · keep camera free",
                         m_features.aimSilentLock,m_toggleAnimation[46],uiScale);
                     ImGui::EndDisabled();
-                    ImGui::TextDisabled("Silent Lock redirects only real left-click attack intents; it never auto-attacks.");
+                    ImGui::TextDisabled("Hold left click for fixed-CPS attacks. Releasing returns control immediately.");
                 });
                 if(m_features.aimSilentLock&&!m_features.aimLockOnMode) {
                     m_features.aimLockOnMode=true;lockOn=true;changed=true;
@@ -5178,7 +5279,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                         ImGuiSliderFlags_AlwaysClamp);
                     ImGui::EndDisabled();
                     if(m_features.aimSilentLock&&!snapshot.silentAimAvailable)
-                        ImGui::TextColored(ImVec4(1,.65F,.25F,1),
+                        ImGui::TextColored(guiWarning,
                             "Silent rotation bindings are unavailable in this client.");
                 });
 
@@ -5230,14 +5331,14 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 sectionTitle("CARD SURFACE");
                 ImGui::TextDisabled("Background");
                 const bool black = m_features.hypixelPanelColor != 0xFFFFFFU;
-                if (black) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                if (black) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                 if (ImGui::Button("Black", ImVec2(104.0F * uiScale, 0.0F)) && !black) {
                     m_features.hypixelPanelColor = 0x000000U;
                     changed = true;
                 }
                 if (black) ImGui::PopStyleColor();
                 ImGui::SameLine();
-                if (!black) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                if (!black) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                 if (ImGui::Button("White", ImVec2(104.0F * uiScale, 0.0F)) && black) {
                     m_features.hypixelPanelColor = 0xFFFFFFU;
                     changed = true;
@@ -5265,7 +5366,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 for (int fontIndex = 0; fontIndex < 4; ++fontIndex) {
                     if (fontIndex != 0) ImGui::SameLine();
                     const bool selected = fontIndex == m_features.hypixelPanelFontIndex;
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                     if (ImGui::Button(statsFonts[static_cast<std::size_t>(fontIndex)],
                         ImVec2(62.0F * uiScale, 0.0F)) && !selected) {
                         m_features.hypixelPanelFontIndex = fontIndex;
@@ -5374,7 +5475,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     ImGui::PopFont();
                     if (entry.nick) {
                         ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(0.84F, 0.48F, 1.0F, 1.0F), "NICK");
+                        ImGui::TextColored(guiAccent, "NICK");
                     }
                     ImGui::TextWrapped("%s", entry.reason.data());
                     bool warning = entry.warnOnEncounter;
@@ -5398,6 +5499,53 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     ImGui::PopID();
                 }
                 ImGui::EndChild();
+            } else if (page == 25) {
+                sectionTitle("ATTACKER SOURCE");
+                const int selected=shieldAttacker(snapshot,true);
+                const char* preview=selected==-2?"*  All sources (no verification)":"Choose a player in this world";
+                for(std::uint32_t i=0;i<snapshot.entityMarkerCount;++i)
+                    if(snapshot.entityMarkers[i].entityId==selected)
+                        preview=snapshot.entityMarkers[i].displayName[0]
+                            ? snapshot.entityMarkers[i].displayName.data():snapshot.entityMarkers[i].playerName.data();
+                ImGui::SetNextItemWidth(-1.0F);
+                if(ImGui::BeginCombo("##shieldPlayer",preview)) {
+                    if(ImGui::Selectable("*  All sources (no verification)",selected==-2)) {
+                        m_shieldSelectedId=-2;m_shieldWorld=snapshot.worldGeneration;
+                        m_shieldSelectedUuid={};
+                        m_features.attackShieldWildcard=true;
+                        changed=true;
+                    }
+                    for(std::uint32_t i=0;i<snapshot.entityMarkerCount;++i) {
+                        const auto& entity=snapshot.entityMarkers[i];
+                        if(!entity.player||(!entity.playerName[0]&&!entity.displayName[0])||!entity.uuid[0]) continue;
+                        ImGui::PushID(entity.entityId);
+                        if(ImGui::Selectable(entity.displayName[0]?entity.displayName.data():entity.playerName.data(),entity.entityId==selected)) {
+                            m_shieldSelectedId=entity.entityId;
+                            m_shieldSelectedUuid=entity.uuid;
+                            m_shieldWorld=snapshot.worldGeneration;
+                            m_features.attackShieldWildcard=false;
+                            changed=true;
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::Spacing();
+                ImGui::TextWrapped("Blocks a selected player's directly attributed knockback before it changes your velocity. No velocity rollback, nearby-player guessing, or damage cancellation.");
+                ImGui::PushTextWrapPos(0.0F);
+                if(selected==-2) ImGui::TextColored(guiDanger,
+                    "Wildcard also blocks non-attack entity-velocity updates to you.");
+                else ImGui::TextColored(guiWarning,snapshot.integratedSinglePlayer
+                    ? "Direct source hooks are available in this integrated world."
+                    : "Remote server velocity packets do not identify the attacker: those impulses are not blocked.");
+                ImGui::PopTextWrapPos();
+                ImGui::TextWrapped(selected==-2
+                    ? "The wildcard choice is saved with your Arcveil settings."
+                    : "A specific player remains session-only and tied to this world's entity ID and UUID. Additional unattributed impulses remain untouched.");
+            } else if (page == 24) {
+                sectionTitle("SPRINT OWNERSHIP");
+                ImGui::TextWrapped("Automatically sprint while moving forward. Silent Lock always has priority: sprint stays off throughout silent aiming, including when SCA is disabled.");
+                ImGui::TextDisabled("Release attack to return sprint control to this module.");
             } else if (page == 12) {
                 sectionTitle("ENABLED MODULE LIST");
                 ImGui::TextWrapped(
@@ -5427,7 +5575,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 for (int alignment = 0; alignment < 3; ++alignment) {
                     if (alignment != 0) ImGui::SameLine();
                     const bool selected = m_features.textGuiAlignment == alignment;
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                     if (ImGui::Button(alignLabels[static_cast<std::size_t>(alignment)],
                         ImVec2(88.0F * uiScale, 0.0F)) && !selected) {
                         m_features.textGuiAlignment = alignment;
@@ -5450,7 +5598,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     m_features.fireballEspColor = packRgb(fireballColor);
                     changed = true;
                 }
-                ImGui::TextColored(ImVec4(1.0F, 0.58F, 0.30F, 1.0F),
+                ImGui::TextColored(guiWarning,
                     "LOCAL WORLD ONLY: automatically disabled on every multiplayer server.");
             } else if (page == 15) {
                 sectionTitle("JUMP IMPULSE");
@@ -5460,7 +5608,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     ImGuiSliderFlags_AlwaysClamp);
                 ImGui::TextWrapped(
                     "Applies a forward jump impulse at the next grounded movement step, with a bounded cooldown.");
-                ImGui::TextColored(ImVec4(1.0F, 0.58F, 0.30F, 1.0F),
+                ImGui::TextColored(guiWarning,
                     "LOCAL WORLD ONLY: automatically disabled on every multiplayer server.");
             } else if (page == 16) {
                 sectionTitle("TRAJECTORY SOURCES");
@@ -5491,7 +5639,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 changed |= ImGui::SliderInt("Attack interval",
                     &m_features.localAttackDelayMs, 100, 1500, "%d ms",
                     ImGuiSliderFlags_AlwaysClamp);
-                ImGui::TextColored(ImVec4(1.0F, 0.58F, 0.30F, 1.0F),
+                ImGui::TextColored(guiWarning,
                     "INTEGRATED SINGLE-PLAYER ONLY: Agent hard-disables this page elsewhere.");
                 ImGui::TextWrapped(
                     "The attack helper accepts only non-player hostile candidates; it never targets players.");
@@ -5505,7 +5653,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 ImGui::TextDisabled(
                     "The original IME remains the text owner. The overlay only observes WM_IME messages and never commits or replaces characters.");
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.42F, 0.84F, 0.78F, 1.0F),
+                ImGui::TextColored(guiSuccess,
                     "Candidate card appears at the top-center while composing and briefly after an input-method switch.");
             } else if (page == 19) {
                 bool mediaChanged = false;
@@ -5558,7 +5706,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 ImGui::TextWrapped(
                     "Line of sight and normal controller reach are mandatory. Hidden blocks and seam/through-wall hits are never synthesized.");
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1.0F, 0.58F, 0.30F, 1.0F),
+                ImGui::TextColored(guiWarning,
                     "INTEGRATED SINGLE-PLAYER ONLY: automatically disabled on multiplayer servers.");
             } else if (page == 21) {
                 sectionTitle("RESPONSE PROFILE");
@@ -5575,7 +5723,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     &m_features.localVelocityVerticalPercent,0,100,"%d%%",
                     ImGuiSliderFlags_AlwaysClamp);
                 ImGui::TextDisabled("100%% keeps vanilla knockback; 0%% removes that component.");
-                ImGui::TextColored(ImVec4(1.0F,0.58F,0.30F,1.0F),
+                ImGui::TextColored(guiWarning,
                     "INTEGRATED SINGLE-PLAYER ONLY: automatically disabled on multiplayer servers.");
             } else if (page == 22) {
                 sectionTitle("CAMERA CONTROL");
@@ -5591,41 +5739,45 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 ImGui::TextWrapped(
                     "Assign a category to each logical hotbar slot. Arcveil reads Minecraft's live Hotbar 1-9 bindings, so a slot rebound to Q or a mouse button follows that binding automatically.");
                 ImGui::Spacing();
-                constexpr std::array<const char*,3U> actionLabels{{
-                    "Normal slot","Sword","Blocks"}};
-                const float gap=10.0F*uiScale;
+                changed |= animatedToggle("Refill depleted blocks",m_features.smartHotbarRefill,
+                    m_toggleAnimation[56],uiScale);
+                constexpr std::array<const char*,6U> actionLabels{{
+                    "Normal slot","Sword","Blocks","Shears","Pickaxe","Axe"}};
                 const float available=ImGui::GetContentRegionAvail().x;
-                const float cardWidth=std::max(120.0F*uiScale,
-                    (available-gap*2.0F)/3.0F);
-                for(std::size_t slot=0;slot<m_features.smartHotbarActions.size();
-                    ++slot) {
-                    if(slot%3U!=0U) ImGui::SameLine(0.0F,gap);
+                const float inset=18.0F*uiScale;
+                const float rowHeight=78.0F*uiScale;
+                const float comboWidth=std::min(194.0F*uiScale,available*0.43F);
+                for(std::size_t slot=0;slot<m_features.smartHotbarActions.size();++slot) {
                     ImGui::PushID(static_cast<int>(slot));
-                    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,12.0F*uiScale);
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                        ImVec2(14.0F*uiScale,12.0F*uiScale));
-                    ImGui::PushStyleColor(ImGuiCol_ChildBg,
-                        mixColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,0.095F),
-                                 ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,0.065F),theme));
-                    ImGui::BeginChild("##smartHotbarCard",
-                        ImVec2(cardWidth,94.0F*uiScale),true,
-                        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-                    ImGui::PushFont(boldFont);
-                    ImGui::Text("HOTBAR %u",static_cast<unsigned>(slot+1U));
-                    ImGui::PopFont();
-                    ImGui::TextDisabled("Minecraft binding");
+                    const ImVec2 start=ImGui::GetCursorScreenPos();
+                    const ImVec2 end(start.x+available,start.y+rowHeight);
+                    ImDrawList* draw=ImGui::GetWindowDrawList();
+                    draw->AddRectFilled(start,end,fadedGuiColor(mixColor(guiSurface,guiFrame,.52F)),12*uiScale);
+                    draw->AddRect(start,end,fadedGuiColor(mixColor(guiFrame,guiMuted,.15F)),12*uiScale);
+                    const ImVec2 badge(start.x+inset,start.y+23*uiScale);
+                    draw->AddRectFilled(badge,ImVec2(badge.x+32*uiScale,badge.y+32*uiScale),
+                        fadedGuiColor(mixColor(guiFrame,guiAccent,.13F)),8*uiScale);
+                    char number[4]{};
+                    std::snprintf(number,sizeof(number),"%u",static_cast<unsigned>(slot+1U));
+                    const ImVec2 numberSize=ImGui::CalcTextSize(number);
+                    draw->AddText(ImVec2(badge.x+(32*uiScale-numberSize.x)*.5F,
+                        badge.y+(32*uiScale-numberSize.y)*.5F),fadedGuiColor(guiText),number);
+                    const float labelX=badge.x+44*uiScale;
+                    char label[24]{};
+                    std::snprintf(label,sizeof(label),"Hotbar %u",static_cast<unsigned>(slot+1U));
+                    draw->AddText(boldFont,ImGui::GetFontSize(),ImVec2(labelX,start.y+18*uiScale),
+                        fadedGuiColor(guiText),label);
+                    draw->AddText(ImVec2(labelX,start.y+43*uiScale),fadedGuiColor(guiMuted),"Minecraft key");
+                    ImGui::SetCursorScreenPos(ImVec2(end.x-inset-comboWidth,
+                        start.y+(rowHeight-ImGui::GetFrameHeight())*.5F));
                     int& action=m_features.smartHotbarActions[slot];
-                    action=std::clamp(action,0,2);
-                    ImGui::SetNextItemWidth(-1.0F);
+                    action=std::clamp(action,0,5);
+                    ImGui::SetNextItemWidth(comboWidth);
                     if(ImGui::Combo("##category",&action,actionLabels.data(),
-                                    static_cast<int>(actionLabels.size())))
-                        changed=true;
-                    ImGui::EndChild();
-                    ImGui::PopStyleColor();
-                    ImGui::PopStyleVar(2);
+                                    static_cast<int>(actionLabels.size()))) changed=true;
+                    ImGui::SetCursorScreenPos(start);
+                    ImGui::Dummy(ImVec2(available,rowHeight+4*uiScale));
                     ImGui::PopID();
-                    if(slot%3U==2U&&slot+1U<m_features.smartHotbarActions.size())
-                        ImGui::Spacing();
                 }
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_TextDisabled,guiMuted);
@@ -5638,7 +5790,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 for (int sizeIndex = 0; sizeIndex < 4; ++sizeIndex) {
                     if (sizeIndex != 0) ImGui::SameLine();
                     const bool selected = m_guiScaleIndex == sizeIndex;
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiAccent);
+                    if (selected) ImGui::PushStyleColor(ImGuiCol_Button, guiSelected);
                     if (ImGui::Button(sizeLabels[static_cast<std::size_t>(sizeIndex)],
                         ImVec2(64.0F * uiScale, 0.0F)) && !selected) {
                         m_guiScaleIndex = sizeIndex;
@@ -5677,13 +5829,13 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 }
                 sectionTitle("SERVER SAFETY");
                 changed |= animatedToggle(
-                    "Allow movement modules on Hypixel",
+                    "Allow restricted modules on Hypixel",
                     m_features.allowHypixelMovement,
                     m_toggleAnimation[34], uiScale);
-                ImGui::TextColored(ImVec4(1.0F, 0.34F, 0.28F, 1.0F),
-                    "DANGER: Fly, BHop and Scaffold can cause a server ban.");
+                ImGui::TextColored(guiDanger,
+                    "DANGER: Aim Assist, Fly, BHop and Scaffold can cause a server ban.");
                 ImGui::TextWrapped(
-                    "By default these three modules are force-disabled whenever the current server address is Hypixel. Enable this exception only if you explicitly accept that risk.");
+                    "By default these four modules are force-disabled whenever the current server address is Hypixel. Enable this exception only if you explicitly accept that risk.");
             }
             // Preserve a full baseline below the final control so exact
             // bottom snapping never clips half of its label.
@@ -5696,7 +5848,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             // cannot leave a high-risk module enabled for even one rendered
             // frame before the next runtime snapshot arrives.
             if (snapshot.hypixelServer && !m_features.allowHypixelMovement &&
-                (m_features.scaffoldEnabled || m_features.flyEnabled ||
+                (m_features.aimAssistEnabled || m_features.scaffoldEnabled || m_features.flyEnabled ||
                  m_features.bhopEnabled)) {
                 if (m_features.scaffoldEnabled && !featuresBefore.scaffoldEnabled)
                     enqueueMessage(
@@ -5710,11 +5862,12 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     enqueueMessage(
                         "WARNING: BHop can cause a server ban. Use only offline.",
                         false);
+                m_features.aimAssistEnabled = false;
                 m_features.scaffoldEnabled = false;
                 m_features.flyEnabled = false;
                 m_features.bhopEnabled = false;
                 enqueueMessage(
-                    "BLOCKED: movement module disabled on Hypixel. See Interface / Server Safety.",
+                    "BLOCKED: restricted module disabled on Hypixel. See Interface / Server Safety.",
                     false);
                 changed = true;
             }
@@ -5810,7 +5963,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 }
             }
         }
-        ImGui::PopStyleColor(15);
+        ImGui::PopStyleColor(22);
         ImGui::PopStyleVar(5);
     }
 
@@ -5827,30 +5980,15 @@ bool OverlayRenderer::render(HDC const deviceContext,
         const float modalEase = modalProgress * modalProgress *
                                 (3.0F - 2.0F * modalProgress);
         const float modalScale = 1.12F - 0.12F * m_blacklistAddProgress;
-        const ImVec2 modalSize(480.0F * uiScale, 438.0F * uiScale);
+        const ImVec2 modalSize(480.0F * uiScale,
+            std::min(480.0F*uiScale,std::max(240.0F,io.DisplaySize.y-12.0F)));
         const ImVec2 modalPosition(
             std::max(6.0F, (io.DisplaySize.x - modalSize.x) * 0.5F),
             std::max(6.0F, (io.DisplaySize.y - modalSize.y) * 0.5F));
-        const ImVec2 modalCenter(modalPosition.x + modalSize.x * 0.5F,
+        ImVec2 modalCenter(modalPosition.x + modalSize.x * 0.5F,
                                  modalPosition.y + modalSize.y * 0.5F);
-        ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        if (ImGui::Begin("##BlacklistAddModalBlocker", nullptr,
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav)) {
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(0.0F, 0.0F), io.DisplaySize,
-                IM_COL32(5, 4, 9, static_cast<int>(82.0F * modalEase)));
-            ImGui::InvisibleButton("##blacklistModalOutside", io.DisplaySize);
-            if (interactive && modalProgress > 0.985F &&
-                ImGui::IsItemClicked(ImGuiMouseButton_Left))
-                m_blacklistAddOpen = false;
-        }
-        ImGui::End();
-        ImGui::PopStyleVar();
-        ImGui::SetNextWindowPos(modalPosition, ImGuiCond_Always);
+        // Independent floating editor, not a page child or fullscreen blocker.
+        ImGui::SetNextWindowPos(modalPosition, ImGuiCond_Appearing);
         ImGui::SetNextWindowSize(modalSize, ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
@@ -5864,13 +6002,18 @@ bool OverlayRenderer::render(HDC const deviceContext,
         ImGui::PushStyleColor(ImGuiCol_FrameBg, guiFrame);
         ImGui::PushStyleColor(ImGuiCol_Button, guiFrame);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-            ImVec4(guiAccent.x, guiAccent.y, guiAccent.z, 0.76F));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, guiAccent);
+            mixColor(guiFrame,guiAccent,0.16F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, guiSelected);
         ImGui::PushStyleColor(ImGuiCol_CheckMark, guiAccent);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,mixColor(guiFrame,guiAccent,0.12F));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive,guiSelected);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,guiScrollbarTrack);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab,guiScrollbarGrab);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered,guiAccent);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive,guiAccent);
         ImGuiWindowFlags modalFlags = ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
         if (!interactive || modalProgress < 0.985F)
             modalFlags |= ImGuiWindowFlags_NoInputs;
         ImDrawList* modalDraw = nullptr;
@@ -5879,6 +6022,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
         if (ImGui::Begin("##BlacklistAddDialog", nullptr, modalFlags)) {
             modalDraw = ImGui::GetWindowDrawList();
             modalRoot=ImGui::GetCurrentWindow();
+            modalCenter=ImVec2(modalRoot->Pos.x+modalSize.x*.5F,
+                               modalRoot->Pos.y+modalSize.y*.5F);
             ImFont* const modalBold = m_boldFonts[static_cast<std::size_t>(
                 std::clamp(m_guiScaleIndex, 0, 3))] != nullptr
                 ? m_boldFonts[static_cast<std::size_t>(
@@ -5998,8 +6143,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 if(ImGui::IsItemClicked()) value=!value;
                 const bool hovered=ImGui::IsItemHovered();
                 ImDrawList* const optionDraw=ImGui::GetWindowDrawList();
+                float* optionPhase=ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID("phase"),value?1.0F:0.0F);
+                *optionPhase=approachExponential(*optionPhase,value?1.0F:0.0F,18.0F,delta);
                 const ImVec4 cardColor=mixColor(guiFrame,guiAccent,
-                    value?0.20F:(hovered?0.10F:0.035F));
+                    0.035F+0.165F*(*optionPhase)+(hovered?0.04F:0.0F));
                 optionDraw->AddRectFilled(cardMin,
                     ImVec2(cardMin.x+cardSize.x,cardMin.y+cardSize.y),
                     ImGui::ColorConvertFloat4ToU32(cardColor),9.0F*uiScale);
@@ -6013,14 +6160,15 @@ bool OverlayRenderer::render(HDC const deviceContext,
                 const ImVec2 checkMax(checkMin.x+16.0F*uiScale,
                     checkMin.y+16.0F*uiScale);
                 optionDraw->AddRectFilled(checkMin,checkMax,
-                    ImGui::ColorConvertFloat4ToU32(value?guiAccent:
-                        mixColor(guiSurface,guiText,0.10F)),4.0F*uiScale);
+                    ImGui::ColorConvertFloat4ToU32(mixColor(
+                        mixColor(guiSurface,guiText,0.10F),guiAccent,*optionPhase)),4.0F*uiScale);
                 optionDraw->AddRect(checkMin,checkMax,
                     ImGui::ColorConvertFloat4ToU32(value?guiAccent:
                         ImVec4(guiText.x,guiText.y,guiText.z,0.52F)),4.0F*uiScale,
                     0,std::max(1.0F,uiScale));
-                if(value) {
-                    const ImU32 checkColor=IM_COL32(255,255,255,245);
+                if(*optionPhase>0.01F) {
+                    const ImU32 checkColor=ImGui::ColorConvertFloat4ToU32(
+                        mixColor(ImVec4(.10F,.09F,.14F,*optionPhase),ImVec4(1,1,1,*optionPhase),theme));
                     optionDraw->AddLine(ImVec2(checkMin.x+3.5F*uiScale,
                         checkMin.y+8.3F*uiScale),ImVec2(checkMin.x+7.0F*uiScale,
                         checkMin.y+12.0F*uiScale),checkColor,1.8F*uiScale);
@@ -6046,7 +6194,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
             }
             ImGui::EndChild();
             ImGui::PopStyleColor();
-            ImGui::SetCursorPosY(modalSize.y - 58.0F * uiScale);
+            ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY()+12.0F*uiScale,
+                                         modalSize.y-70.0F*uiScale));
             const float footerWidth=ImGui::GetContentRegionAvail().x;
             if (ImGui::Button("Cancel", ImVec2((footerWidth-10.0F*uiScale)*0.38F,
                     34.0F * uiScale)))
@@ -6082,7 +6231,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             modalVertexEnd = modalDraw->VtxBuffer.Size;
         }
         ImGui::End();
-        ImGui::PopStyleColor(8);
+        ImGui::PopStyleColor(14);
         ImGui::PopStyleVar(5);
         if (modalDraw != nullptr) {
             modalVertexEnd = std::clamp(modalVertexEnd, 0,
@@ -6150,7 +6299,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
         struct TextModule { const char* name; const char* mode; bool enabled; };
         const char* const aimMode=m_features.aimSilentLock ? "Silent Lock"
             : m_features.aimLockOnMode ? "Lock On" : "Smooth";
-        const std::array<TextModule, 20U> modules{{
+        const std::array<TextModule, 22U> modules{{
             {"Player ESP", "", m_features.entityEspEnabled},
             {"Bed ESP", "", m_features.bedEspEnabled},
             {"Nametag", "", m_features.nametagEnabled},
@@ -6170,7 +6319,13 @@ bool OverlayRenderer::render(HDC const deviceContext,
             {"Bow Prediction", "", m_features.bowPredictionEnabled},
             {"Velocity", "", m_features.localVelocityEnabled},
             {"FreeLook", "Hold", m_features.freeLookEnabled},
-            {"Now Playing", "", m_mediaSettings.enabled}}};
+            {"Now Playing", "", m_mediaSettings.enabled},
+            {"Sprint", "", m_features.sprintEnabled},
+            {"Attack Shield", "", m_features.attackShieldEnabled}}};
+        static_assert(modules.size()==std::tuple_size_v<decltype(m_textGuiModuleProgress)>);
+        static_assert(modules.size()==std::tuple_size_v<decltype(m_textGuiModuleVelocity)>);
+        static_assert(modules.size()==std::tuple_size_v<decltype(m_textGuiGlyphBrightness)>);
+        static_assert(modules.size()==std::tuple_size_v<decltype(m_textGuiGlyphTargets)>);
         ImFont* const textGuiFont = m_boldFonts[static_cast<std::size_t>(
             std::clamp(m_guiScaleIndex, 0, 3))] != nullptr
             ? m_boldFonts[static_cast<std::size_t>(
@@ -7160,15 +7315,21 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     const char* reason = entry.reason[0] ? entry.reason.data() : "No reason provided";
                     const float reasonSize=blacklistFontSize*0.92F;
                     const float nameSize=blacklistFontSize*1.03F;
-                    const float metaSize=blacklistFontSize*0.68F;
+                    const float metaSize=blacklistFontSize*0.78F;
                     const float reasonHeight = std::clamp(listFont->CalcTextSizeA(
                         reasonSize, FLT_MAX,
                         std::max(content(80.0F), cardWidth - content(24.0F)), reason).y,
                         reasonSize, reasonSize*3.0F);
                     const ImVec2 cardMax(cardMin.x + cardWidth,
-                                         cardMin.y + content(90.0F) + reasonHeight);
+                                         cardMin.y + content(101.0F) + reasonHeight);
                     entriesDraw->AddRectFilled(cardMin, cardMax, cardSurface,
                                                content(12.0F));
+                    entriesDraw->AddRect(cardMin,cardMax,
+                        packedRgbColor(m_features.clickGuiAccentColor,lightPanel?48:65),content(12.0F));
+                    entriesDraw->AddRectFilled(cardMin,
+                        ImVec2(cardMax.x,cardMin.y+content(52.0F)),
+                        packedRgbColor(m_features.clickGuiAccentColor,lightPanel?16:25),
+                        content(12.0F),ImDrawFlags_RoundCornersTop);
                 unsigned faceTexture = 0U;
                 if (entry.facePath[0U] != '\0') {
                     BlacklistTexture* slot = nullptr;
@@ -7231,7 +7392,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
                                          ink, entry.name.data(), nullptr, 0, &nameClip);
                     entriesDraw->AddText(listFont,metaSize,
                         ImVec2(cardMin.x+content(60.0F),cardMin.y+content(37.0F)),
-                        entry.nick ? IM_COL32(193,122,225,255) : muted,
+                        entry.nick ? (lightPanel?IM_COL32(117,58,153,255):IM_COL32(193,122,225,255)) : muted,
                         entry.nick ? "NICK / ID ONLY" : "UUID LINKED");
                     const ImVec4 reasonClip(cardMin.x+content(12.0F),
                         cardMin.y+content(58.0F),cardMax.x-content(12.0F),
@@ -7244,8 +7405,11 @@ bool OverlayRenderer::render(HDC const deviceContext,
                     char date[24]{};
                     if (::_localtime64_s(&local, &seconds) == 0)
                         std::strftime(date, sizeof(date), "%Y-%m-%d %H:%M", &local);
+                    entriesDraw->AddLine(ImVec2(cardMin.x+content(12.0F),cardMax.y-content(35.0F)),
+                        ImVec2(cardMax.x-content(12.0F),cardMax.y-content(35.0F)),
+                        lightPanel?IM_COL32(0,0,0,18):IM_COL32(255,255,255,20));
                     entriesDraw->AddText(listFont,metaSize,
-                        ImVec2(cardMin.x+content(12.0F),cardMax.y-content(24.0F)),
+                        ImVec2(cardMin.x+content(12.0F),cardMax.y-content(18.0F)-metaSize*.5F),
                                          muted, date);
                     // Two-step removal: the first press arms this record only.
                     // Stable UUID keys keep the confirmation attached after filtering.
@@ -7272,10 +7436,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
                             IM_COL32(236,83,108,30),content(7.0F));
                     const char* removeText = confirming ? "Confirm" : "Remove";
                     const float removeWidth=listFont->CalcTextSizeA(
-                        content(12.0F),FLT_MAX,0,removeText).x;
+                        metaSize,FLT_MAX,0,removeText).x;
                     entriesDraw->AddText(listFont,metaSize,
                         ImVec2(cardMax.x-content(38.0F)-removeWidth*0.5F,
-                               cardMax.y-content(24.0F)),
+                               cardMax.y-content(18.0F)-metaSize*.5F),
                         lightPanel ? IM_COL32(166,32,60,255) : IM_COL32(255,153,167,255), removeText);
                     if (hovered) ImGui::SetTooltip(confirming ? "Click again to remove this record" : "Remove saved record");
                     ImGui::SetCursorScreenPos(ImVec2(cardMin.x,
@@ -7373,6 +7537,10 @@ bool OverlayRenderer::render(HDC const deviceContext,
     // preserving the exact system/game DPI-scaled pointer size and avoiding a
     // second sprite that can race the title-screen cursor.
     io.MouseDrawCursor = false;
+    if(m_blacklistAddProgress>0.005F&&ImGui::GetCurrentContext()->OpenPopupStack.empty()) {
+        if(ImGuiWindow* editor=ImGui::FindWindowByName("##BlacklistAddDialog"))
+            ImGui::BringWindowToDisplayFront(editor);
+    }
     ImGui::Render();
     ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
     return newlyInitialized;
@@ -7399,13 +7567,36 @@ LRESULT OverlayRenderer::onWindowMessage(OverlayInputState& input,
     if (message == imeShutdownMessage() || message == WM_NCDESTROY) {
         if (input.tsf) input.tsf->shutdownOnWindowThread();
         if (message == imeShutdownMessage()) { handled = true; return 0; }
+    } else if(message==WM_INPUTLANGCHANGE||message==WM_INPUTLANGCHANGEREQUEST) {
+        if(input.tsf) input.tsf->resetOnWindowThread();
+    } else if(message==TsfCandidates::refreshMessage()) {
+        if(input.tsf&&input.imeEnabled.load(std::memory_order_acquire))
+            input.tsf->refreshOnWindowThread();
+        handled=true;return 0;
     } else if (input.tsf) {
-        input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire));
+        input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire),window);
     }
     const ImeMessageAction imeAction=classifyImeMessage(message,wParam,
         input.imeEnabled.load(std::memory_order_acquire));
     if(imeAction!=ImeMessageAction::Ignore)
         updateImeState(input,window,imeAction,lParam);
+    // A GSMTC-rejecting player is controlled through the helper's native
+    // media-key fallback. The GUI's blanket keyboard capture used to swallow
+    // those keys before DefWindowProc could turn them into WM_APPCOMMAND.
+    // Route only OS media commands to Windows; gameplay input stays captured.
+    const bool mediaKeyMessage=(message==WM_KEYDOWN||message==WM_KEYUP||
+        message==WM_SYSKEYDOWN||message==WM_SYSKEYUP)&&
+        isNativeMediaKey(static_cast<unsigned>(wParam));
+    const int appCommand=message==WM_APPCOMMAND
+        ? GET_APPCOMMAND_LPARAM(lParam) : 0;
+    const bool mediaCommand=appCommand>=APPCOMMAND_VOLUME_MUTE&&
+        appCommand<=APPCOMMAND_MEDIA_PLAY_PAUSE;
+    if(input.interactive.load(std::memory_order_acquire)&&
+       !input.captureHotkey.load(std::memory_order_acquire)&&
+       (mediaKeyMessage||mediaCommand)) {
+        handled=true;
+        return ::DefWindowProcW(window,message,wParam,lParam);
+    }
     const bool firstKeyDown = (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) &&
                               (lParam & (1LL << 30)) == 0;
     if (firstKeyDown) {

@@ -8,11 +8,11 @@ Window {
     visible: true
     flags: Qt.Window | Qt.FramelessWindowHint
     color: "transparent"
-    title: "Java Overlay Studio — Loading"
+    title: "Arcveil — Loading"
     property bool darkTheme: false
     property bool completed: false
     property bool failed: false
-    property string phaseText: "Starting Java Overlay Studio"
+    property string phaseText: "Starting Arcveil"
     onClosing: Lifecycle.requestExit("startup window close")
     readonly property color ink: darkTheme ? "#F1EEF4" : "#1D1B20"
     readonly property color accent: darkTheme ? "#CFBCFF" : "#6750A4"
@@ -43,7 +43,7 @@ Window {
             anchors.horizontalCenter: parent.horizontalCenter
             y: 42; width: 76; height: 76; radius: 25
             color: splash.darkTheme ? "#4D3D6C" : "#EADDFF"
-            Text { anchors.centerIn: parent; text: "J"; color: splash.accent; font.family: "Segoe UI"; font.pixelSize: 46; font.weight: Font.DemiBold }
+            Text { anchors.centerIn: parent; text: "A"; color: splash.accent; font.family: "Segoe UI"; font.pixelSize: 46; font.weight: Font.DemiBold }
             scale: 1
             SequentialAnimation on scale {
                 running: !splash.completed && !splash.failed
@@ -54,7 +54,7 @@ Window {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            y: 141; text: "Java Overlay Studio"
+            y: 141; text: "Arcveil"
             color: splash.ink; font.family: "Segoe UI"; font.pixelSize: 23; font.weight: Font.DemiBold
         }
         Text {

@@ -3,8 +3,22 @@
 #include <msctf.h>
 #include <array>
 #include <atomic>
+#include <cstdint>
 
 namespace mcoverlay {
+namespace detail {
+// Exact Windows SDK ABI, including the four inherited ITfUIElement methods.
+struct CandidateListElement : ITfUIElement {
+    virtual HRESULT STDMETHODCALLTYPE GetUpdatedFlags(DWORD*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDocumentMgr(ITfDocumentMgr**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetCount(UINT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetSelection(UINT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetString(UINT, BSTR*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPageIndex(UINT*, UINT, UINT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPageIndex(UINT*, UINT) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetCurrentPage(UINT*) = 0;
+};
+}
 struct ImeCandidates {
     std::array<std::array<wchar_t, 64>, 9> words{};
     unsigned count = 0;
@@ -17,7 +31,10 @@ struct ImeCandidates {
 // The render thread only copies the bounded snapshot under a short SRW lock.
 class TsfCandidates final : public ITfUIElementSink {
 public:
-    void enableOnWindowThread(bool enabled) noexcept;
+    void enableOnWindowThread(bool enabled,HWND window) noexcept;
+    static UINT refreshMessage() noexcept;
+    void resetOnWindowThread() noexcept;
+    void refreshOnWindowThread() noexcept;
     void shutdownOnWindowThread() noexcept;
     ImeCandidates snapshot() noexcept;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** result) override;
@@ -27,8 +44,10 @@ public:
     HRESULT STDMETHODCALLTYPE UpdateUIElement(DWORD id) override;
     HRESULT STDMETHODCALLTYPE EndUIElement(DWORD id) override;
 private:
+    friend struct TsfCandidatesTestAccess;
     ~TsfCandidates() = default;
     bool read(DWORD id) noexcept;
+    void restoreHiddenOnWindowThread() noexcept;
     std::atomic<ULONG> m_refs{1};
     SRWLOCK m_lock = SRWLOCK_INIT;
     ImeCandidates m_snapshot{};
@@ -36,7 +55,14 @@ private:
     ITfUIElementMgr* m_elements = nullptr;
     DWORD m_cookie = TF_INVALID_COOKIE;
     DWORD m_activeId = TF_INVALID_COOKIE;
+    DWORD m_hiddenId = TF_INVALID_COOKIE;
+    ITfUIElement* m_hiddenElement = nullptr;
     DWORD m_thread = 0;
+    HWND m_window=nullptr;
+    DWORD m_pendingId=TF_INVALID_COOKIE;
+    std::uint64_t m_generation=0U;
+    bool m_refreshQueued=false;
+    bool m_transitioning=false;
     bool m_enabled = false;
     bool m_activated = false;
     bool m_comInitialized = false;

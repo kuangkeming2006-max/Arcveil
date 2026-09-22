@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QQmlComponent>
 #include <QQmlIncubator>
+#include <QQmlIncubationController>
+#include <QTimer>
 #include <QElapsedTimer>
 #include <QPointer>
 #include <functional>
@@ -37,6 +39,8 @@ private:
     std::function<void()> m_prepare;
     std::function<void()> m_ready;
     QQmlComponent m_component;
+    QQmlIncubationController m_startupIncubation;
+    QTimer m_incubationPulse;
     Incubator m_incubator;
     QPointer<QQuickWindow> m_splash;
     QPointer<QQuickWindow> m_main;

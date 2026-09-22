@@ -2,6 +2,9 @@
 #include <array>
 #include <cstddef>
 namespace mcoverlay {
+[[nodiscard]] constexpr bool isNativeMediaKey(const unsigned key) noexcept {
+    return key>=0xADU&&key<=0xB3U; // mute/volume/transport belong to Windows
+}
 class MediaHotkeyEdges final {
 public:
     bool update(std::size_t index,int key,bool down,bool allowed) noexcept {

@@ -1,4 +1,6 @@
 #include "overlay_renderer.h"
+#include "UiColors.h"
+#include "tsf_candidates.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <QImage>
@@ -11,13 +13,120 @@
 #include <vector>
 
 namespace mcoverlay {
+struct TsfCandidatesTestAccess {
+    struct Candidates final:detail::CandidateListElement {
+        UINT count=2;int showCalls=0;TsfCandidates* sink=nullptr;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** out) override {*out=this;AddRef();return S_OK;}
+        ULONG STDMETHODCALLTYPE AddRef() override {return 2;}
+        ULONG STDMETHODCALLTYPE Release() override {return 1;}
+        HRESULT STDMETHODCALLTYPE GetDescription(BSTR* out) override {*out=SysAllocString(L"fixture");return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetGUID(GUID* out) override {*out={};return S_OK;}
+        HRESULT STDMETHODCALLTYPE Show(BOOL) override {++showCalls;if(sink)sink->UpdateUIElement(11);return S_OK;}
+        HRESULT STDMETHODCALLTYPE IsShown(BOOL* out) override {*out=FALSE;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetUpdatedFlags(DWORD* out) override {*out=0;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetDocumentMgr(ITfDocumentMgr** out) override {*out=nullptr;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetCount(UINT* out) override {*out=count;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetSelection(UINT* out) override {*out=1;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetString(UINT index,BSTR* out) override {*out=SysAllocString(index?L"拟好":L"你好");return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetPageIndex(UINT* out,UINT capacity,UINT* pages) override {*pages=1;if(capacity)out[0]=0;return S_OK;}
+        HRESULT STDMETHODCALLTYPE SetPageIndex(UINT*,UINT) override {return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetCurrentPage(UINT* out) override {*out=0;return S_OK;}
+    };
+    struct Manager final:ITfUIElementMgr {
+        int reads=0;
+        ITfUIElement* candidate=nullptr;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** out) override {*out=nullptr;return E_NOINTERFACE;}
+        ULONG STDMETHODCALLTYPE AddRef() override {return 2;}
+        ULONG STDMETHODCALLTYPE Release() override {return 1;}
+        HRESULT STDMETHODCALLTYPE BeginUIElement(ITfUIElement*,BOOL*,DWORD*) override {return E_NOTIMPL;}
+        HRESULT STDMETHODCALLTYPE UpdateUIElement(DWORD) override {return S_OK;}
+        HRESULT STDMETHODCALLTYPE EndUIElement(DWORD) override {return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetUIElement(DWORD,ITfUIElement** out) override {
+            ++reads;*out=candidate;if(candidate)candidate->AddRef();return S_OK;
+        }
+        HRESULT STDMETHODCALLTYPE EnumUIElements(IEnumTfUIElements**) override {return E_NOTIMPL;}
+    };
+    template<class Check> static void verify(HWND window,Check check) {
+        Manager manager;
+        auto* sink=new TsfCandidates;
+        sink->m_elements=&manager;sink->m_enabled=true;
+        sink->m_thread=GetCurrentThreadId();sink->m_window=window;
+        BOOL show=FALSE;
+        sink->BeginUIElement(7,&show);
+        sink->UpdateUIElement(7);
+        check(show&&manager.reads==0&&sink->m_pendingId==7&&sink->m_refreshQueued,
+            "TSF callback queues candidate read and leaves unidentified system UI visible");
+        sink->refreshOnWindowThread();
+        check(manager.reads==1&&!sink->snapshot().active,
+            "deferred TSF read safely accepts a null element during teardown");
+        sink->UpdateUIElement(7);
+        sink->resetOnWindowThread();
+        sink->refreshOnWindowThread();
+        check(manager.reads==2&&!sink->snapshot().active&&!sink->m_transitioning,
+            "input layout reset settles later and retries a reused candidate ID");
+        sink->UpdateUIElement(8);sink->refreshOnWindowThread();
+        check(manager.reads==3,"Update resumes even when the TIP omits a new Begin callback");
+        sink->BeginUIElement(9,&show);sink->UpdateUIElement(9);
+        sink->EndUIElement(9);sink->refreshOnWindowThread();
+        check(manager.reads==3,"candidate closure cancels pending reads");
+        sink->m_enabled=false;
+        sink->BeginUIElement(10,&show);sink->UpdateUIElement(10);sink->refreshOnWindowThread();
+        check(show&&manager.reads==3,"disabled fullscreen IME never probes candidate objects");
+        Candidates words;words.sink=sink;manager.candidate=&words;
+        sink->m_enabled=true;
+        sink->BeginUIElement(11,&show);
+        sink->refreshOnWindowThread();
+        const auto initial=sink->snapshot();
+        check(initial.active&&initial.count==2&&initial.selected==1&&
+              std::wcscmp(initial.words[0].data(),L"你好")==0,
+              "Begin alone publishes real Chinese candidates without waiting for Update");
+        sink->refreshOnWindowThread();
+        check(words.showCalls==1&&!sink->m_refreshQueued,
+              "candidate Show-triggered Update cannot cause a perpetual query loop");
+        words.count=0;sink->UpdateUIElement(11);sink->refreshOnWindowThread();
+        check(!sink->snapshot().active&&words.showCalls==2,
+              "empty TSF snapshot gives system UI and IMM fallback back their ownership");
+        sink->m_elements=nullptr;sink->Release();
+        MSG queued{};
+        while(PeekMessageW(&queued,window,TsfCandidates::refreshMessage(),
+                          TsfCandidates::refreshMessage(),PM_REMOVE)) {}
+    }
+};
 struct OverlayRendererTestAccess {
+    template<class Check> static void shieldPolicy(OverlayRenderer& r,Check check) {
+        auto snapshot=std::make_unique<GameSnapshot>();
+        snapshot->worldGeneration=10;
+        r.m_shieldWorld=10;r.m_shieldSelectedId=-2;
+        r.m_features.attackShieldEnabled=false;
+        r.m_features.attackShieldWildcard=true;
+        check(r.shieldAttacker(*snapshot)==-1&&r.shieldAttacker(*snapshot,true)==-2,
+            "disabled wildcard remains visible in selection without enabling suppression");
+        r.m_features.attackShieldEnabled=true;
+        check(r.shieldAttacker(*snapshot)==-2,"wildcard activates without an attacker identity");
+        snapshot->worldGeneration=11;
+        check(r.shieldAttacker(*snapshot)==-2,"persisted wildcard applies across world generations");
+        snapshot->worldGeneration=10;snapshot->entityMarkerCount=1;
+        auto& player=snapshot->entityMarkers[0];
+        player.player=true;player.confirmedPlayer=false;player.entityId=42;
+        std::snprintf(player.uuid.data(),player.uuid.size(),"12345678-1234-3123-8123-123456789abc");
+        r.m_features.attackShieldWildcard=false;
+        r.m_shieldSelectedId=42;r.m_shieldSelectedUuid=player.uuid;
+        check(r.shieldAttacker(*snapshot)==42,"offline UUID and no TAB confirmation are accepted");
+        player.uuid[0]='9';
+        check(r.shieldAttacker(*snapshot)==-1,"reused entity ID with another UUID is not selected");
+        r.m_features.attackShieldEnabled=false;
+        r.m_features.attackShieldWildcard=false;
+        r.m_shieldSelectedId=-1;r.m_shieldWorld=0;
+        r.m_shieldSelectedUuid={};
+    }
     static ImGuiContext* context(OverlayRenderer& r) { return r.m_imguiContext; }
     static void prepare(OverlayRenderer& r, int page, int scale, bool light) {
         r.m_clickGuiPage = page;
         r.m_clickGuiProgress = r.m_clickGuiPageProgress = 1;
         r.m_clickGuiVelocity = 0;
         r.m_clickGuiNavPosition = 0;
+        r.m_clickGuiNavSelection.fill(0);
+        r.m_clickGuiNavSelection[static_cast<std::size_t>(page)]=1;
         r.m_guiScaleIndex = scale;
         r.m_animatedGuiScale = 1.0F + 0.25F * static_cast<float>(scale);
         r.m_clickGuiThemeProgress = light ? 1.0F : 0.0F;
@@ -26,12 +135,25 @@ struct OverlayRendererTestAccess {
         r.m_features.clickGuiBlur = 65;
         r.m_clickGuiX = r.m_clickGuiY = 24;
         r.m_blacklist.panelEnabled = r.m_blacklist.showWithClickGui = false;
+        r.m_blacklistPanelProgress=r.m_blacklistPanelVelocity=0;
     }
+    static void startOpening(OverlayRenderer& r) {
+        r.m_clickGuiProgress=r.m_clickGuiVelocity=0;
+    }
+    static float openingProgress(OverlayRenderer& r) {return r.m_clickGuiProgress;}
     static void imePreview(OverlayRenderer& r) {
         r.m_features.fullscreenImeFixEnabled = true;
         r.m_imePositionEditing = true;
         r.m_imePanelProgress = 1;
         r.m_clickGuiProgress = r.m_clickGuiVelocity = 0;
+    }
+    static bool hiddenThemeLoadsWithoutTransition(OverlayRenderer& r) {
+        r.m_clickGuiProgress=0;
+        r.m_featureSnapshotInitialized=false;
+        auto settings=r.m_features;
+        settings.clickGuiLightTheme=true;
+        r.setFeatureSettings(settings);
+        return r.m_clickGuiThemeProgress==1.0F;
     }
     static void freeLookPreview(OverlayRenderer& r) {
         r.m_features.freeLookEnabled=true;
@@ -118,6 +240,24 @@ struct OverlayRendererTestAccess {
     static void hudOnly(OverlayRenderer& r) {r.m_clickGuiProgress=r.m_clickGuiVelocity=0;}
     static int selectedPage(OverlayRenderer& r) {return r.m_clickGuiPage;}
     static void noMedia(OverlayRenderer& r) {r.m_mediaSettings.enabled=false;r.m_mediaPanelProgress=0;}
+    static MediaAction clickMedia(OverlayRenderer& r,int index) {
+        const auto settings=r.m_mediaSettings;
+        r.m_mediaSettings.scalePercent=100;
+        r.m_mediaSettings.panelX=200;r.m_mediaSettings.panelY=100;
+        r.m_mediaPanelProgress=1;r.m_mediaPanelVelocity=0;
+        r.m_mediaAnimatedWidth=720;
+        auto& io=ImGui::GetIO();
+        // Own ImGui input only: no OS pointer movement or real media command.
+        for(const bool down:{false,false,true,false}) {
+            io.AddMousePosEvent(981,156+44.0F*static_cast<float>(index));
+            io.AddMouseButtonEvent(0,down);
+            ImGui::NewFrame();
+            r.renderMediaOverlay(1.0F/60.0F,1.0F,true);
+            ImGui::EndFrame();
+        }
+        r.m_mediaSettings=settings;
+        return r.consumeMediaAction();
+    }
     static void search(OverlayRenderer& r,const char* text) {
         std::snprintf(r.m_featureSearch.data(),r.m_featureSearch.size(),"%s",text);
         r.m_searchIslandOpen=text[0]!='\0';
@@ -257,6 +397,21 @@ int main(int argc, char** argv)
         ++checks;
         if (!ok) { ++failures; std::printf("FAIL: %s\n", message); }
     };
+    for(const auto accent:std::array<mcoverlay::ui::Rgb,6>{{
+        {1,1,1},{0,0,0},{1,0,0},{0,1,0},{0,0,1},{.78F,.66F,1}}}) {
+        for(const bool light:{false,true}) {
+            const mcoverlay::ui::Rgb surface=light
+                ? mcoverlay::ui::Rgb{.965F,.956F,.975F}
+                : mcoverlay::ui::Rgb{.14F,.13F,.18F};
+            check(mcoverlay::ui::contrast(
+                mcoverlay::ui::readableAccent(accent,surface,light),surface)>=4.5F,
+                "custom accent text remains readable in both themes");
+        }
+    }
+    check(mcoverlay::isNativeMediaKey(VK_MEDIA_NEXT_TRACK)&&
+          mcoverlay::isNativeMediaKey(VK_MEDIA_PLAY_PAUSE)&&
+          !mcoverlay::isNativeMediaKey('K'),
+          "Windows media commands bypass GUI capture; gameplay keys do not");
     WNDCLASSW wc{};
     wc.style = CS_OWNDC; wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"McOverlayRendererTest";
@@ -266,6 +421,7 @@ int main(int argc, char** argv)
     HWND window = CreateWindowW(wc.lpszClassName, L"Renderer regression", WS_POPUP,
         -30000, -30000, 1600, 1200, nullptr, nullptr, wc.hInstance, nullptr);
     if (!window) return 2;
+    mcoverlay::TsfCandidatesTestAccess::verify(window,check);
     ShowWindow(window, SW_SHOWNOACTIVATE);
     HDC dc = GetDC(window);
     PIXELFORMATDESCRIPTOR format{};
@@ -381,6 +537,14 @@ int main(int argc, char** argv)
         mcoverlay::OverlayRendererTestAccess::stableMedia(*renderer);
         frame(false);
         saveFrame("now-playing-v42.png");
+        check(mcoverlay::OverlayRendererTestAccess::clickMedia(*renderer,0)==mcoverlay::MediaAction::Previous,
+            "real Now Playing Previous button dispatches through its input surface");
+        check(mcoverlay::OverlayRendererTestAccess::clickMedia(*renderer,1)==mcoverlay::MediaAction::Toggle,
+            "real Now Playing Toggle button dispatches through its input surface");
+        check(mcoverlay::OverlayRendererTestAccess::clickMedia(*renderer,2)==mcoverlay::MediaAction::Next,
+            "real Now Playing Next button dispatches through its input surface");
+        check(renderer->consumeMediaAction()==mcoverlay::MediaAction::None,
+            "each transport click is consumed exactly once");
         mcoverlay::OverlayRendererTestAccess::noMedia(*renderer);
     }
     mcoverlay::SmoothScroll scroll;
@@ -459,7 +623,31 @@ int main(int argc, char** argv)
           mcoverlay::classifyImeMessage(WM_IME_ENDCOMPOSITION,0,true)==
               mcoverlay::ImeMessageAction::ResetComposition,
           "only composition and relevant candidate messages may query IME state");
-    for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<24;++page) {
+    check(mcoverlay::OverlayRendererTestAccess::hiddenThemeLoadsWithoutTransition(*renderer),
+        "first-open light theme is initialized before the first visible frame");
+    const auto surfaceLuminance=[]() {
+        std::array<unsigned char,4> pixel{};
+        glReadBuffer(GL_BACK);
+        glReadPixels(760,1200-480,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+        return (int(pixel[0])+int(pixel[1])+int(pixel[2]))/3;
+    };
+    for(bool light:{false,true}) {
+        mcoverlay::OverlayRendererTestAccess::prepare(*renderer,0,0,light);
+        frame(true);frame(true);
+        const int settled=surfaceLuminance();
+        mcoverlay::OverlayRendererTestAccess::startOpening(*renderer);
+        bool noDarkFlash=true;
+        for(int transition=0;transition<45;++transition) {
+            Sleep(16); // Exercise real Win32 backend time, not 45 sub-ms frames.
+            frame(true);
+            if(!light) noDarkFlash=noDarkFlash&&surfaceLuminance()>=settled-2;
+            if(transition==9) saveFrame(light?"opening-v49-light.png":"opening-v49-dark.png");
+        }
+        check(noDarkFlash,"opening material never darkens below its settled surface");
+        check(mcoverlay::OverlayRendererTestAccess::openingProgress(*renderer)>.98F,
+            "opening regression actually traverses the complete presentation animation");
+    }
+    for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<26;++page) {
         mcoverlay::OverlayRendererTestAccess::prepare(*renderer,page,size,theme!=0);
         if(page==22) mcoverlay::OverlayRendererTestAccess::freeLookPreview(*renderer);
         frame(true);
@@ -474,9 +662,13 @@ int main(int argc, char** argv)
                 if(std::strstr(w->Name,"##navigationScroll")) rail=w;
         check(rail && rail->ScrollMax.y>0, "every page/size has independent scrollable rail");
         if (page==0 && size==0) saveFrame(theme ? "gui-light.png" : "gui-dark.png");
+        if(page==8&&size==0) saveFrame(theme?"aimassist-v48-light.png":"aimassist-v48-dark.png");
         if (page==22 && size==0 && theme==0) saveFrame("freelook-v40.png");
-        if (page==23 && size==0 && theme==0) saveFrame("smart-hotbar-v47.png");
+        if(page==23&&size==0) saveFrame(theme?"smart-hotbar-v49-light.png":"smart-hotbar-v49-dark.png");
+        if(page==24&&size==0) saveFrame(theme?"sprint-v50-light.png":"sprint-v50-dark.png");
+        if(page==25&&size==0) saveFrame(theme?"shield-v50-light.png":"shield-v50-dark.png");
     }
+    mcoverlay::OverlayRendererTestAccess::shieldPolicy(*renderer,check);
     mcoverlay::OverlayRendererTestAccess::prepare(*renderer,8,0,false);
     mcoverlay::OverlayRendererTestAccess::aimMode(*renderer,false);
     frame(true);
@@ -556,6 +748,13 @@ int main(int argc, char** argv)
     mcoverlay::OverlayRendererTestAccess::blacklistModal(*renderer,*snapshot);
     frame(true); frame(true);
     saveFrame("blacklist-add-modal-v42.png");
+    mcoverlay::OverlayRendererTestAccess::prepare(*renderer,11,0,true);
+    mcoverlay::OverlayRendererTestAccess::blacklistModal(*renderer,*snapshot);
+    frame(true);frame(true);
+    saveFrame("blacklist-add-modal-v48-light.png");
+    auto* addDialog=ImGui::FindWindowByName("##BlacklistAddDialog");
+    check(addDialog&&!addDialog->ScrollbarY,
+        "default Add Player dialog fits without a spurious footer scrollbar");
     mcoverlay::OverlayRendererTestAccess::prepare(*renderer,18,0,false);
     mcoverlay::OverlayRendererTestAccess::imePreview(*renderer);
     frame(true); frame(true); saveFrame("ime-position-preview.png");

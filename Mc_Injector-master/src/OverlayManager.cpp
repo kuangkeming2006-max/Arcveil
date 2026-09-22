@@ -1,4 +1,5 @@
 #include "OverlayManager.h"
+#include "../agent/bindings/SmartHotbarPolicy.h"
 
 #include <QCoreApplication>
 #include <QColor>
@@ -34,11 +35,7 @@ constexpr qint64 kGameStateStaleAfterMilliseconds = 3500;
 
 bool validSmartHotbarConfig(const quint32 packed) noexcept
 {
-    constexpr quint32 mask=(1U<<(1U+9U*2U))-1U;
-    if((packed&~mask)!=0U) return false;
-    for(unsigned slot=0;slot<9U;++slot)
-        if(((packed>>(1U+slot*2U))&3U)>2U) return false;
-    return true;
+    return mcoverlay::hotbar::validPacked(packed);
 }
 
 QString normalizedRgbColor(const QString &value)
@@ -2089,7 +2086,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             !hotkeysAOk || !hotkeysBOk || !hotkeysCOk ||
             !validHotkeyPack(hotkeysPackedA, 8) ||
             !validHotkeyPack(hotkeysPackedB, 8) ||
-            hotkeysPackedC > 0x1FFFFU ||
+            hotkeysPackedC > 0x7FFFFU ||
             !validHotkeyPack(hotkeysPackedC, 2) ||
             !fireballEnabledOk || fireballEnabled < 0 || fireballEnabled > 1 ||
             !fireballFilledOk || fireballFilled < 0 || fireballFilled > 1 ||
@@ -2685,7 +2682,7 @@ void OverlayManager::loadFeatureSettings()
         QStringLiteral("featureHotkeysPackedB"), qulonglong(0)).toULongLong();
     m_featureHotkeysPackedC = settings.value(
         QStringLiteral("featureHotkeysPackedC"), quint32(0xA400U)).toUInt();
-    if(m_featureHotkeysPackedC>0x1FFFFU) m_featureHotkeysPackedC=0xA400U;
+    if(m_featureHotkeysPackedC>0x7FFFFU) m_featureHotkeysPackedC=0xA400U;
     m_fireballEspEnabled = settings.value(
         QStringLiteral("fireballEspEnabled"), false).toBool();
     m_fireballEspFilled = settings.value(

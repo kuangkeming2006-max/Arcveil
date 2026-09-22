@@ -12,6 +12,41 @@ int main()
         ++checks; if(!ok) { ++failed; std::printf("FAIL %s\n",message); }
     };
     {
+        using namespace mcoverlay::silent;
+        const Vec3 eye{0,1.62,0};
+        const Bounds box{-0.3,0,2.6,0.3,1.8,3.2};
+        const auto open=[](Vec3,double){BlockRayHit b{};b.querySucceeded=true;return b;};
+        const auto coveredHead=[](Vec3 direction,double){
+            BlockRayHit b{};b.querySucceeded=true;
+            // A slab obscures rays above chest height halfway to the target.
+            if(1.62+direction.y*(1.3/direction.z)>1.48) b.distance=1.3;
+            return b;
+        };
+        const auto chest=chooseCombatAimPoint(eye,box,{0,0},3,true,coveredHead);
+        check(chest.available&&chest.point.y<1.34,
+            "head cover still finds a reachable exposed body point");
+        const auto blocked=[](Vec3,double){BlockRayHit b{};b.querySucceeded=true;b.distance=.2;return b;};
+        const auto hidden=chooseCombatAimPoint(eye,box,{0,0},3,true,blocked);
+        check(!hidden.available&&std::isfinite(hidden.point.y),
+            "fully blocked target keeps finite aim fallback without attack availability");
+        int traces=0;
+        auto unchecked=chooseCombatAimPoint(eye,box,{0,0},3,false,
+            [&](Vec3,double){++traces;return BlockRayHit{};});
+        check(unchecked.available&&traces==0,"availability OFF never invokes strict block gate");
+        const Bounds edge{-0.3,0,2.999,0.3,1.8,3.599};
+        check(chooseCombatAimPoint(eye,edge,{0,0},3,true,open).available,
+            "three-block edge uses box entry instead of center distance");
+        const Bounds outsideReach{-0.3,0,3.001,0.3,1.8,3.601};
+        check(!chooseCombatAimPoint(eye,outsideReach,{0,0},3,true,open).available,
+            "geometry outside legal reach is unavailable");
+        const auto ray=RayTraceCoordinator::direction({0,0});
+        check(RayTraceCoordinator::intersect(eye,ray,box,3)>=0&&
+            RayTraceCoordinator::intersect({0,2.2,0},ray,box,3)<0,
+            "jump rejects previously published rotation against current physics eye");
+        check(RayTraceCoordinator::intersect(eye,ray,{1,0,2.6,1.6,1.8,3.2},3)<0,
+            "target movement invalidates old ray without rewriting its transaction");
+    }
+    {
         using mcoverlay::silent::RuntimeCapabilities;
         constexpr RuntimeCapabilities noOptionalHooks{true,true,false,false};
         static_assert(noOptionalHooks.logicalOutputReady());
@@ -97,32 +132,27 @@ int main()
         for(double yaw=-720.0;yaw<=720.0;yaw+=2.5) {
             for(double modifier:{1.0,0.98,0.294,0.196}) {
                 const auto chosen=movement.coordinateAxes(modifier,0,{19,0},{yaw,0},{0,.1,.2},false,false);
-                check((chosen.forward==0 || std::abs(chosen.forward)==modifier) &&
-                      (chosen.strafe==0 || std::abs(chosen.strafe)==modifier),
-                      "only vanilla axes and inherited sneak/item-use modifier reach movement");
                 const double r=yaw*3.14159265358979323846/180.0;
                 const double x=-std::sin(r)*chosen.forward+std::cos(r)*chosen.strafe;
                 const double z=std::cos(r)*chosen.forward+std::sin(r)*chosen.strafe;
-                const double similarity=(x*chosen.worldIntent.x+z*chosen.worldIntent.z)/
-                    (std::hypot(x,z)*chosen.worldIntent.magnitude);
-                check(similarity>=std::cos(22.5001*3.14159265358979323846/180.0),
-                      "keyboard approximation chooses nearest expressible direction");
+                check(std::abs(std::hypot(chosen.forward,chosen.strafe)-modifier)<1e-9,
+                      "continuous remap preserves the inherited sneak/item-use magnitude");
+                check(std::abs(x-chosen.worldIntent.x)<1e-9&&
+                      std::abs(z-chosen.worldIntent.z)<1e-9,
+                      "continuous inverse rotation exactly preserves world direction");
                 check(!chosen.sprinting && !chosen.onGround,"native sprint state is not rewritten");
             }
         }
-        constexpr std::array<std::array<int,2>,8> expectedDirections{{
-            {{1,0}},{{1,1}},{{0,1}},{{-1,1}},
-            {{-1,0}},{{-1,-1}},{{0,-1}},{{1,-1}}}};
-        for(std::size_t sector=0;sector<expectedDirections.size();++sector) {
+        for(std::size_t sector=0;sector<8U;++sector) {
             const double yaw=static_cast<double>(sector)*45.0;
             const auto sprint=movement.coordinateAxes(1.0,0.0,{0,0},{yaw,0},
                 {0,.1,.2},true,false,sector);
-            check(sprint.forward==expectedDirections[sector][0]&&
-                  sprint.strafe==expectedDirections[sector][1],
-                  "sprint remap chooses the nearest of all eight vanilla directions");
-            check(sprint.sprinting==(expectedDirections[sector][0]>0),
-                  "logical sprint survives only a final forward-bearing remap");
             const double r=yaw*3.14159265358979323846/180.0;
+            check(std::abs(sprint.forward-std::cos(r))<1e-9&&
+                  std::abs(sprint.strafe-std::sin(r))<1e-9,
+                  "sprint consumer receives the continuous committed axes");
+            check(sprint.sprinting==(std::cos(r)>=0.8),
+                  "logical sprint follows the final continuous forward component");
             const double x=-std::sin(r)*sprint.forward+
                            std::cos(r)*sprint.strafe;
             const double z= std::cos(r)*sprint.forward+
@@ -702,13 +732,13 @@ int main()
         (void)controller.advance(input,trace);
         const auto walking=controller.movementCommand(0,1,60);
         check(walking.enabled&&!walking.sprinting&&
-              controller.arbitrateSprint(true)&&
+              !controller.arbitrateSprint(true)&&
               !controller.arbitrateSprint(false),
-              "sprint arbitration treats Lunar true as intent without manufacturing it");
+              "silent aiming vetoes Lunar sprint even when forward movement is compatible");
         input.tick=6001;input.physicsTick=61;input.candidates={&sideTarget,1};
         (void)controller.advance(input,trace);
-        check(controller.arbitrateSprint(true,61),
-              "pre-consumer setSprinting records intent without reading stale axes");
+        check(!controller.arbitrateSprint(true,61),
+              "pre-consumer sprint obeys silent policy without reading stale axes");
         const auto remapped=controller.movementCommand(0,1,61);
         check(!remapped.sprinting&&!controller.arbitrateSprint(true,61),
               "current movement snapshot commits the immutable sprint veto");
@@ -729,8 +759,18 @@ int main()
         const std::uint32_t packed=pack(true,actions);
         check(validPacked(packed)&&enabled(packed)&&unpack(packed)==actions,
               "smart hotbar configuration has an exact bounded roundtrip");
-        check(!validPacked(packed|(3U<<(1U+2U*2U))),
+        check(!validPacked(packed|(7U<<(1U+2U*3U))),
               "smart hotbar rejects reserved action values");
+        check(validPacked(1U|(2U<<7U))&&unpack(1U|(2U<<7U))[3]==2,
+              "v49 two-bit hotbar settings remain readable without shifting assignments");
+        actions[1]=3;actions[5]=4;actions[8]=5;
+        const auto expanded=pack(true,actions,true,true,true);
+        check(validPacked(expanded)&&unpack(expanded)==actions&&
+              (expanded&(Refill|Sprint|AllNames))==(Refill|Sprint|AllNames),
+              "v50 categories and preferences roundtrip without bit overlap");
+        for(int id:{257,270,274,278,285}) check(toolKind(id)==ItemKind::Pickaxe,"every vanilla pickaxe material matches");
+        for(int id:{258,271,275,279,286}) check(toolKind(id)==ItemKind::Axe,"every vanilla axe material matches");
+        check(toolKind(359)==ItemKind::Shears&&toolKind(1)==ItemKind::Other,"shears classify without treating unrelated items as tools");
         std::array<ItemKind,36U> inventory{};
         inventory[7]=ItemKind::Sword;
         inventory[18]=ItemKind::Blocks;
@@ -744,6 +784,12 @@ int main()
     }
     {
         using namespace mcoverlay::silent;
+        MovementIntentResolver resolver;
+        const auto continuous=resolver.resolveAxes(1.0,0.0,0.0,22.5,false,1);
+        const double radians=22.5*3.14159265358979323846/180.0;
+        check(std::abs(continuous.logicalForward-std::cos(radians))<1.0e-9&&
+              std::abs(continuous.logicalStrafe-std::sin(radians))<1.0e-9,
+              "movement inverse rotation remains continuous between WASD sectors");
         for(const int cps:{1,7,20}) {
             FixedCpsAttackScheduler clock;
             int dispatched=0;
@@ -762,6 +808,43 @@ int main()
         const auto cancelled=clock.update(true,true,51000U,20);
         check(cancelled.cancelledIntentId==first.intentId&&clock.pending()==0U,
             "placement or mining priority classifies and cancels a pending intent");
+    }
+    {
+        using namespace mcoverlay::silent;
+        LogicalStateController controller;
+        controller.reset({0,0});
+        TargetCandidate preAim{73,73U,{0,1.62,3.3},
+            {-.3,0,3.0,.3,1.9,3.6},true,false,false};
+        LogicalFrameInput input{};
+        input.tick=7000;input.physicsTick=70;input.worldGeneration=11;
+        input.localEntityId=1;input.enabled=input.silent=input.leftMouseDown=true;
+        input.mode=Mode::LockOn;input.maximumDistance=3.5;input.attackReach=3.0;
+        input.enforceAttackAvailability=true;input.fovDegrees=360;
+        input.eye={0,1.62,0};input.candidates={&preAim,1};
+        const auto clear=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        (void)controller.advance(input,clear);
+        controller.updateAttackClock(true,true,7000000U,20);
+        (void)controller.advance(input,clear);
+        const auto armed=controller.pendingAttack();
+        check(armed.intentId!=0&&armed.entityId==73,
+            "pending CPS intent arms on a legitimate pre-aim target");
+        const auto publish=controller.packetPlan(true,false);
+        controller.acknowledgePacket(publish.rotation,PacketKind::Position,
+            PacketKind::PositionLook,true,true);
+        controller.beginInteractionPre(70);
+        check(controller.clickAtInteractionPre(70).kind==InteractionCommandKind::None&&
+              controller.pendingAttack().intentId==armed.intentId,
+            "temporary lack of 3.0 m availability neither rejects nor consumes the intent");
+        check(controller.revisePendingAttack(controller.pendingAttack(),
+                  armed.committedRotation,true),
+            "current physics geometry can promote the armed intent to READY");
+        controller.beginInteractionPre(71);
+        const auto attack=controller.clickAtInteractionPre(71);
+        check(attack.kind==InteractionCommandKind::AttackEntity&&attack.entityId==73&&
+              attack.intentId==armed.intentId,
+            "an already-published pre-aim rotation dispatches immediately when availability opens");
     }
     for (double phase : {0.0, 0.25, 0.5, 0.999}) {
         const Angles before{178,12}, current{179,15}, output{181,16};
@@ -806,6 +889,103 @@ int main()
         output.reset({-45,0}); // Mode/target changes reset residual mouse counts.
         angle=output.apply({-45,0},{-45,0},dt,0.5,speed);
         check(std::abs(angle.yaw+45)<1e-9,"no old residual kick after reset");
+    }
+    {
+        using namespace mcoverlay::silent;
+        const auto clearTrace=[](const LogicalFramePlan&) noexcept {
+            return BlockRayHit{true,-1.0,{}};
+        };
+        for(bool adaptation:{false,true}) for(int step=0;step<40;++step) {
+            LogicalStateController controller;
+            controller.reset({0,0});
+            TargetCandidate target{42,42U,{0,1.62,2.5},{-.3,0,2.2,.3,1.9,2.8},true};
+            LogicalFrameInput input{};
+            input.tick=1000;input.physicsTick=20;input.worldGeneration=1;input.localEntityId=1;
+            input.enabled=input.silent=input.leftMouseDown=true;
+            input.coordinateMovement=adaptation;input.mode=Mode::LockOn;
+            input.maximumDistance=3;input.fovDegrees=360;
+            input.eye={0,1.62,0};input.candidates={&target,1};
+            (void)controller.advance(input,clearTrace);
+            controller.updateAttackClock(true,true,1000000U,10);
+            (void)controller.advance(input,clearTrace);
+            const auto old=controller.pendingAttack();
+            check(old.intentId!=0,"moving transaction binds immediately");
+            const Vec3 currentEye{.4*std::cos(step*.31),1.62+.5*std::sin(step*.43),.1};
+            const auto point=chooseCombatAimPoint(currentEye,target.bounds,old.committedRotation,3,true,
+                [](Vec3,double) noexcept {return BlockRayHit{true,-1,{}};});
+            const double dx=point.point.x-currentEye.x,dy=point.point.y-currentEye.y,dz=point.point.z-currentEye.z;
+            const Angles angle{std::atan2(dz,dx)*180.0/3.14159265358979323846-90,
+                -std::atan2(dy,std::hypot(dx,dz))*180.0/3.14159265358979323846};
+            check(point.available&&controller.revisePendingAttack(old,angle,true),
+                "publication refresh accepts current strafe/jump geometry independent of SCA");
+            const auto revised=controller.pendingAttack();
+            check(revised.intentId==old.intentId&&revised.entityId==old.entityId&&
+                revised.rotationEpoch>old.rotationEpoch,"revision preserves CPS intent and target, replaces publication proof");
+            check(!controller.revisePendingAttack(old,{0,0},true),"stale revision cannot overwrite a newer transaction");
+            if(adaptation) {
+                const auto move=controller.movementCommand(0,.98,20);
+                check(move.enabled&&std::abs(wrap(move.logicalRotation.yaw-angle.yaw))<.0005,
+                    "movement consumer commits the refreshed transaction yaw");
+                check(!controller.revisePendingAttack(revised,{angle.yaw+5,angle.pitch},true),
+                    "publication cannot change the yaw already consumed by movement in this tick");
+                const auto jump=controller.jumpCommand(0,.98,true,20);
+                check(jump.snapshotVersion==move.snapshotVersion&&
+                    jump.logicalRotation.yaw==move.logicalRotation.yaw,
+                    "jump, sprint and packet retain the immutable physics decision after rejected revision");
+            }
+            controller.acknowledgePacket(old.committedRotation,PacketKind::Look,PacketKind::Look,false,true);
+            controller.beginInteractionPre(20);
+            check(controller.clickAtInteractionPre(20).kind==InteractionCommandKind::None,
+                "old published angle cannot release revised attack");
+            check(!controller.arbitrateSprint(true),
+                "silent aiming vetoes sprint independently of SCA");
+            if(adaptation) {
+                controller.endMovementPhase(20);
+                controller.beginInteractionPre(20);
+                check(controller.revisePendingAttack(revised,{angle.yaw+.1,angle.pitch},true),
+                    "new PRE may refresh geometry after the previous immutable movement consumer");
+                check(controller.pendingAttack().intentId==old.intentId&&
+                    controller.pendingAttack().entityId==old.entityId&&
+                    controller.clickAtInteractionPre(20).kind==InteractionCommandKind::None,
+                    "PRE refresh retains target and intent but requires fresh publication");
+            }
+            const auto packet=controller.packetPlan(true,false);
+            controller.acknowledgePacket(packet.rotation,PacketKind::Position,PacketKind::PositionLook,true,true);
+            controller.endMovementPhase(20);
+            check(controller.clickAtInteractionPre(20).kind==InteractionCommandKind::None,
+                "refresh at publication never dispatches in POST");
+            controller.beginInteractionPre(20);
+            const auto attack=controller.clickAtInteractionPre(20);
+            check(attack.entityId==42&&attack.kind==InteractionCommandKind::AttackEntity&&
+                RayTraceCoordinator::intersect(currentEye,RayTraceCoordinator::direction(attack.committedRotation),
+                    target.bounds,3)>=0,"next PRE dispatches the published current-physics hit without movement starvation");
+            controller.attackDispatched(attack,true);
+            check(controller.pendingAttack().intentId==0,"completed attack releases its revised transaction");
+            input.leftMouseDown=false;
+            (void)controller.advance(input,clearTrace);
+            check(!controller.revisePendingAttack(revised,angle,true),"LMB release cannot be resurrected by late publication");
+        }
+    }
+    {
+        using namespace mcoverlay::silent;
+        for(bool nearest:{false,true}) for(bool retain:{false,true}) {
+            TargetSelector selector;
+            std::array<TargetCandidate,2> candidates{{
+                {1,1,{0,1.62,1.0},{-.3,0,.7,.3,1.9,1.3},true,false,false},
+                {2,2,{.8,1.62,2.2},{.5,0,1.9,1.1,1.9,2.5},true,true,true}}};
+            const auto pick=[&](bool strict) {return selector.select(candidates,{0,1.62,0},
+                {0,0},0,6,180,180,nearest,retain,strict);};
+            check(pick(false).entityId==1,"availability OFF keeps normal range/angle priority");
+            const auto available=pick(true);
+            check(available.entityId==2&&available.attackReady,
+                "availability ON chooses reachable enemy over unavailable retained/closer target");
+            candidates[1].attackAvailable=false;
+            check(!pick(true).attackReady,
+                "no attackable enemy leaves passive rotation only, never an attack selection");
+            candidates[0].attackAvailable=true;
+            check(pick(true).entityId==1&&pick(true).attackReady,
+                "newly exposed hitbox becomes eligible immediately");
+        }
     }
     std::printf("%d checks, %d failures\n",checks,failed);
     return failed ? 1 : 0;

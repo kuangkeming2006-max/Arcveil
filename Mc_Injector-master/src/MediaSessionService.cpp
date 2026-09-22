@@ -74,6 +74,10 @@ void MediaSessionService::readOutput()
         m_buffer.remove(0, newline + 1);
         const QList<QByteArray> fields = line.split('\t');
         if (fields.isEmpty()) continue;
+        if(fields[0]==QByteArrayLiteral("RECEIVED")&&fields.size()==2) {
+            qInfo().noquote()<<"Now Playing bridge received:"<<fields[1];
+            continue;
+        }
         if (fields[0] == QByteArrayLiteral("SPECTRUM") && fields.size() == 2) {
             const QList<QByteArray> values = fields[1].split(',');
             bool valid = values.size() == 10;
@@ -99,7 +103,7 @@ void MediaSessionService::readOutput()
             const QString detail = fields.size() >= 5 ? decode(fields[4]) : QString{};
             if (accepted)
                 qInfo().noquote() << "Now Playing action" << fields[1]
-                                  << "accepted via" << fields[3];
+                                  << "accepted via" << fields[3] << detail;
             else
                 qWarning().noquote() << "Now Playing action" << fields[1]
                                      << "failed via" << fields[3] << detail;
@@ -139,7 +143,9 @@ void MediaSessionService::send(const QByteArray &command)
 {
     if (m_bridge.state() == QProcess::Running) {
         qInfo().noquote() << "Now Playing action queued:" << command;
-        m_bridge.write(command + '\n');
+        const QByteArray line=command+'\n';
+        if(m_bridge.write(line)!=line.size())
+            qWarning().noquote()<<"Now Playing bridge write failed:"<<m_bridge.errorString();
     } else {
         qWarning().noquote() << "Now Playing action rejected; bridge is not running:"
                              << command;
@@ -148,6 +154,7 @@ void MediaSessionService::send(const QByteArray &command)
 
 void MediaSessionService::clearState()
 {
+    m_buffer.clear();
     m_available = false; m_playing = false; m_title.clear();
     m_artist.clear(); m_source.clear(); m_coverPath.clear();
     m_positionMs = m_durationMs = 0;

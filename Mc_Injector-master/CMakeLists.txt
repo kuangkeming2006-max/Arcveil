@@ -47,6 +47,7 @@ qt_add_executable(MinecraftOverlayManager
     src/MediaSessionService.h
     src/MediaSessionService.cpp
 )
+set_target_properties(MinecraftOverlayManager PROPERTIES OUTPUT_NAME Arcveil)
 
 if(WIN32)
     set(MC_MEDIA_HELPER "${CMAKE_CURRENT_BINARY_DIR}/tools/WindowsMediaBridge.exe")

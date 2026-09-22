@@ -148,6 +148,12 @@ struct MappingDictionary final {
     std::string getEyeHeight;
     std::string hitVectorField;
     std::string clickMouse;
+    std::string rightClickMouse;
+    std::string knockBack;
+    std::string velocityPacketName;
+    std::string velocityPacketSignature;
+    std::string handleEntityVelocity;
+    std::string velocityEntityId;
     // Authoritative logical-input hooks.  These names are optional so a
     // render-only mapping pack can still load, but Silent Lock is exposed only
     // when all of them resolve together.
@@ -275,6 +281,8 @@ struct MappingDictionary final {
     std::string getCollidingBoundingBoxes;
     std::string keyBindSneakField;
     std::string keyBindsHotbarField;
+    std::string keyBindingIsPressed;
+    std::string syncCurrentPlayItem;
     std::array<std::string, 5U> movementKeyFields;
     std::string getKeyCode;
     std::string setKeyBindState;

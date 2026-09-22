@@ -19,6 +19,12 @@ StartupLoader::StartupLoader(QQmlApplicationEngine& engine,
 {
     connect(&m_component, &QQmlComponent::statusChanged, this,
             [this] { componentReady(); });
+    // Startup must make progress even when the splash is occluded or stops
+    // swapping frames. Keep each incubation slice bounded so input stays live.
+    m_incubationPulse.setInterval(8);
+    connect(&m_incubationPulse,&QTimer::timeout,this,[this] {
+        m_startupIncubation.incubateFor(2);
+    });
 }
 
 StartupLoader::~StartupLoader()
@@ -26,6 +32,7 @@ StartupLoader::~StartupLoader()
     // The main QWindow must remain top-level (QObject parenting a window to
     // the engine is not a valid substitute for owning a top-level QWindow).
     m_engine.setIncubationController(nullptr);
+    m_incubationPulse.stop();
     m_incubator.clear();
     delete m_main.data();
 }
@@ -44,7 +51,7 @@ void StartupLoader::start()
     }
     m_splash = qobject_cast<QQuickWindow*>(m_engine.rootObjects().first());
     if (!m_splash) { fail(QStringLiteral("Invalid startup window.")); return; }
-    m_engine.setIncubationController(m_splash->incubationController());
+    m_engine.setIncubationController(&m_startupIncubation);
     connect(m_splash, &QQuickWindow::frameSwapped, this, [this] {
         qInfo() << "Startup first frame (ms):" << m_clock.elapsed();
         const QString captureDirectory = qEnvironmentVariable("MC_OVERLAY_STARTUP_CAPTURE_DIR");
@@ -72,6 +79,7 @@ void StartupLoader::componentReady()
     m_creating = true;
     m_splash->setProperty("phaseText", QStringLiteral("Loading your interface"));
     m_incubator.setInitialProperties({{QStringLiteral("startupReady"), false}});
+    m_incubationPulse.start();
     m_component.create(m_incubator);
 }
 
@@ -98,6 +106,7 @@ void StartupLoader::showMain()
     // create(incubator) doesn't put it in engine.rootObjects(). Own it here,
     // without assigning any QWindow parent (which would prevent top-level exposure).
     QQmlEngine::setObjectOwnership(m_main, QQmlEngine::CppOwnership);
+    m_incubationPulse.stop();
     m_engine.setIncubationController(m_main->incubationController());
     connect(m_main, &QQuickWindow::frameSwapped, this, [this] {
         qInfo() << "Startup workspace ready (ms):" << m_clock.elapsed();
@@ -131,6 +140,7 @@ void StartupLoader::showMain()
 void StartupLoader::fail(const QString& message)
 {
     m_failed = true;
+    m_incubationPulse.stop();
     qCritical().noquote() << "Startup failed:" << message;
     if (m_splash) {
         m_splash->setProperty("failed", true);
