@@ -16,6 +16,7 @@ namespace mcoverlay {
 struct TsfCandidatesTestAccess {
     struct Candidates final:detail::CandidateListElement {
         UINT count=2;int showCalls=0;TsfCandidates* sink=nullptr;
+        bool reenterOnCount=false;
         HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** out) override {*out=this;AddRef();return S_OK;}
         ULONG STDMETHODCALLTYPE AddRef() override {return 2;}
         ULONG STDMETHODCALLTYPE Release() override {return 1;}
@@ -25,7 +26,10 @@ struct TsfCandidatesTestAccess {
         HRESULT STDMETHODCALLTYPE IsShown(BOOL* out) override {*out=FALSE;return S_OK;}
         HRESULT STDMETHODCALLTYPE GetUpdatedFlags(DWORD* out) override {*out=0;return S_OK;}
         HRESULT STDMETHODCALLTYPE GetDocumentMgr(ITfDocumentMgr** out) override {*out=nullptr;return S_OK;}
-        HRESULT STDMETHODCALLTYPE GetCount(UINT* out) override {*out=count;return S_OK;}
+        HRESULT STDMETHODCALLTYPE GetCount(UINT* out) override {
+            if(reenterOnCount&&sink)sink->UpdateUIElement(11);
+            *out=count;return S_OK;
+        }
         HRESULT STDMETHODCALLTYPE GetSelection(UINT* out) override {*out=1;return S_OK;}
         HRESULT STDMETHODCALLTYPE GetString(UINT index,BSTR* out) override {*out=SysAllocString(index?L"拟好":L"你好");return S_OK;}
         HRESULT STDMETHODCALLTYPE GetPageIndex(UINT* out,UINT capacity,UINT* pages) override {*pages=1;if(capacity)out[0]=0;return S_OK;}
@@ -53,38 +57,48 @@ struct TsfCandidatesTestAccess {
         sink->m_thread=GetCurrentThreadId();sink->m_window=window;
         BOOL show=FALSE;
         sink->BeginUIElement(7,&show);
+        check(show&&manager.reads==0&&!sink->snapshot().active,
+            "Begin only tracks the candidate and leaves native UI visible");
         sink->UpdateUIElement(7);
-        check(show&&manager.reads==0&&sink->m_pendingId==7&&sink->m_refreshQueued,
-            "TSF callback queues candidate read and leaves unidentified system UI visible");
-        sink->refreshOnWindowThread();
         check(manager.reads==1&&!sink->snapshot().active,
-            "deferred TSF read safely accepts a null element during teardown");
-        sink->UpdateUIElement(7);
-        sink->resetOnWindowThread();
+            "Update reads its live UIElement synchronously");
         sink->refreshOnWindowThread();
-        check(manager.reads==2&&!sink->snapshot().active&&!sink->m_transitioning,
-            "input layout reset settles later and retries a reused candidate ID");
-        sink->UpdateUIElement(8);sink->refreshOnWindowThread();
-        check(manager.reads==3,"Update resumes even when the TIP omits a new Begin callback");
-        sink->BeginUIElement(9,&show);sink->UpdateUIElement(9);
+        check(manager.reads==1,
+            "deferred message never reads a UIElement ID");
+        sink->resetOnWindowThread();
+        sink->BeginUIElement(8,&show);
+        sink->UpdateUIElement(8);
+        check(manager.reads==1&&sink->m_transitioning,
+            "Begin and Update cannot end an input-language transition early");
+        sink->refreshOnWindowThread();
+        check(manager.reads==1&&!sink->snapshot().active&&!sink->m_transitioning,
+            "layout settle clears transition without retrying a stale ID");
+        sink->UpdateUIElement(8);
+        check(manager.reads==2,"live Update resumes without a new Begin callback");
+        sink->BeginUIElement(9,&show);
         sink->EndUIElement(9);sink->refreshOnWindowThread();
-        check(manager.reads==3,"candidate closure cancels pending reads");
+        check(manager.reads==2,"candidate closure does not read an ended element");
         sink->m_enabled=false;
         sink->BeginUIElement(10,&show);sink->UpdateUIElement(10);sink->refreshOnWindowThread();
-        check(show&&manager.reads==3,"disabled fullscreen IME never probes candidate objects");
-        Candidates words;words.sink=sink;manager.candidate=&words;
+        check(show&&manager.reads==2,"disabled fullscreen IME never probes candidate objects");
+        Candidates words;words.sink=sink;words.reenterOnCount=true;
+        manager.candidate=&words;
         sink->m_enabled=true;
         sink->BeginUIElement(11,&show);
-        sink->refreshOnWindowThread();
+        check(!sink->snapshot().active,"Begin cannot publish an incomplete candidate element");
+        const int readsBeforeLiveUpdate=manager.reads;
+        sink->UpdateUIElement(11);
         const auto initial=sink->snapshot();
         check(initial.active&&initial.count==2&&initial.selected==1&&
               std::wcscmp(initial.words[0].data(),L"你好")==0,
-              "Begin alone publishes real Chinese candidates without waiting for Update");
+              "Update publishes real Chinese candidates from a live element");
+        check(manager.reads==readsBeforeLiveUpdate+1,
+              "synchronous TSF candidate read rejects nested Update re-entry");
         sink->refreshOnWindowThread();
-        check(words.showCalls==1&&!sink->m_refreshQueued,
-              "candidate Show-triggered Update cannot cause a perpetual query loop");
-        words.count=0;sink->UpdateUIElement(11);sink->refreshOnWindowThread();
-        check(!sink->snapshot().active&&words.showCalls==2,
+        check(words.showCalls==0&&!sink->m_refreshQueued,
+              "TSF snapshot never hides the native candidate fallback");
+        words.count=0;sink->UpdateUIElement(11);
+        check(!sink->snapshot().active&&words.showCalls==0,
               "empty TSF snapshot gives system UI and IMM fallback back their ownership");
         sink->m_elements=nullptr;sink->Release();
         MSG queued{};
@@ -619,7 +633,9 @@ int main(int argc, char** argv)
     check(mcoverlay::classifyImeMessage(WM_IME_NOTIFY,IMN_SETOPENSTATUS,true)==
               mcoverlay::ImeMessageAction::Ignore&&
           mcoverlay::classifyImeMessage(WM_IME_NOTIFY,IMN_CHANGECANDIDATE,true)==
-              mcoverlay::ImeMessageAction::QueryComposition&&
+              mcoverlay::ImeMessageAction::QueryCandidates&&
+          mcoverlay::classifyImeMessage(WM_IME_NOTIFY,IMN_CLOSECANDIDATE,true)==
+              mcoverlay::ImeMessageAction::ClearCandidates&&
           mcoverlay::classifyImeMessage(WM_IME_ENDCOMPOSITION,0,true)==
               mcoverlay::ImeMessageAction::ResetComposition,
           "only composition and relevant candidate messages may query IME state");

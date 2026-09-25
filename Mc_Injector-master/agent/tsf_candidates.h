@@ -59,7 +59,6 @@ private:
     ITfUIElement* m_hiddenElement = nullptr;
     DWORD m_thread = 0;
     HWND m_window=nullptr;
-    DWORD m_pendingId=TF_INVALID_COOKIE;
     std::uint64_t m_generation=0U;
     bool m_refreshQueued=false;
     bool m_transitioning=false;

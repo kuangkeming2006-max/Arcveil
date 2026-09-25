@@ -6,6 +6,9 @@ public final class LogicalPipelineFixture {
     public float observedStrafe;
     public float observedForward;
     public boolean sprinting;
+    public boolean observedHeadingSprint;
+    public boolean observedLunarSprintRequest;
+    public float observedHeadingSpeed;
     public float observedJumpYaw;
     public boolean observedJumpSprinting;
     public float jumpImpulseX;
@@ -35,6 +38,12 @@ public final class LogicalPipelineFixture {
         observedYaw = yaw;
         observedStrafe = strafe;
         observedForward = forward;
+    }
+    public void moveEntityWithHeading(float strafe,float forward) {
+        observedHeadingSprint=sprinting;
+        observedHeadingSpeed=sprinting?0.13F:0.10F;
+        setSprinting(true); // Mimics Lunar Force Sprint during the same travel tick.
+        observedLunarSprintRequest=sprinting;
     }
 
     public boolean isSprinting() { return sprinting; }

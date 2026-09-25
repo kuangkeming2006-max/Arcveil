@@ -159,6 +159,8 @@ struct MappingDictionary final {
     // when all of them resolve together.
     std::string sendClickBlock;
     std::string moveFlying;
+    std::string moveEntityWithHeading;
+    std::string getAIMoveSpeed;
     std::string isSprinting;
     std::string setSprinting;
     std::string swingItem;
@@ -280,6 +282,7 @@ struct MappingDictionary final {
     std::string guiScreenSignature;
     std::string getCollidingBoundingBoxes;
     std::string keyBindSneakField;
+    std::string keyBindSprintField;
     std::string keyBindsHotbarField;
     std::string keyBindingIsPressed;
     std::string syncCurrentPlayItem;

@@ -286,6 +286,12 @@ void clearImeComposition(OverlayInputState& input) noexcept
     input.composingInput.store(false,std::memory_order_release);
 }
 
+UINT imeCandidateRefreshMessage() noexcept
+{
+    static const UINT value=::RegisterWindowMessageW(L"Arcveil.IME.Candidates.Refresh");
+    return value;
+}
+
 void updateImeState(OverlayInputState& input, const HWND window,
                     const ImeMessageAction action,const LPARAM lParam) noexcept
 {
@@ -300,6 +306,18 @@ void updateImeState(OverlayInputState& input, const HWND window,
     std::uint32_t candidateCount = 0U;
     std::uint32_t candidateSelection = 0U;
     bool composing = false;
+    if(action==ImeMessageAction::QueryComposition||
+       action==ImeMessageAction::QueryCandidates||
+       action==ImeMessageAction::ClearCandidates) {
+        ::AcquireSRWLockShared(&input.imeLock);
+        candidates=input.imeCandidates;
+        candidateCount=input.imeCandidateCount;
+        candidateSelection=input.imeCandidateSelection;
+        ::ReleaseSRWLockShared(&input.imeLock);
+    }
+    if(action==ImeMessageAction::ClearCandidates) {
+        candidates={};candidateCount=0U;candidateSelection=0U;
+    }
 
     DWORD processId = 0U;
     const DWORD threadId = ::GetWindowThreadProcessId(window, &processId);
@@ -319,7 +337,7 @@ void updateImeState(OverlayInputState& input, const HWND window,
     // Layout changes are reset-only. The original WndProc has not completed
     // its input-context transition yet, so touching HIMC here can observe or
     // retain the old composition/candidate list.
-    HIMC const ime = action==ImeMessageAction::QueryComposition
+    HIMC const ime = action!=ImeMessageAction::ResetLayout
         ? ::ImmGetContext(window) : nullptr;
     if (ime != nullptr) {
         const LONG bytes = ::ImmGetCompositionStringW(
@@ -332,13 +350,21 @@ void updateImeState(OverlayInputState& input, const HWND window,
             composing = true;
         }
 
+        if(action==ImeMessageAction::QueryCandidates) {
+        candidates={};candidateCount=0U;candidateSelection=0U;
         alignas(CANDIDATELIST) std::array<unsigned char, 8192U> candidateBytes{};
-        const DWORD required = ::ImmGetCandidateListW(ime, 0U, nullptr, 0U);
+        const DWORD candidateMask=static_cast<DWORD>(lParam);
+        DWORD candidateIndex=0U;
+        if(candidateMask!=0U) {
+            while(candidateIndex<31U &&
+                  (candidateMask&(1U<<candidateIndex))==0U) ++candidateIndex;
+        }
+        const DWORD required = ::ImmGetCandidateListW(ime,candidateIndex,nullptr,0U);
         if (required >= sizeof(CANDIDATELIST) &&
             required <= candidateBytes.size()) {
             auto* const list = reinterpret_cast<CANDIDATELIST*>(
                 candidateBytes.data());
-            if (::ImmGetCandidateListW(ime, 0U, list,
+            if (::ImmGetCandidateListW(ime,candidateIndex,list,
                     static_cast<DWORD>(candidateBytes.size())) > 0U) {
                 const DWORD pageStart = std::min(list->dwPageStart, list->dwCount);
                 const DWORD pageCount = std::min<DWORD>(
@@ -371,8 +397,10 @@ void updateImeState(OverlayInputState& input, const HWND window,
                 composing = composing || candidateCount != 0U;
             }
         }
+        }
         ::ImmReleaseContext(window, ime);
     }
+    composing=composing||candidateCount!=0U;
 
     ::AcquireSRWLockExclusive(&input.imeLock);
     input.imeName = name;
@@ -4439,7 +4467,7 @@ bool OverlayRenderer::render(HDC const deviceContext,
             windowDraw->AddText(ImVec2(windowPosition.x + 20.0F * uiScale,
                                        windowPosition.y + 38.0F * uiScale),
                                 fadedGuiColor(guiMuted),
-                                "WORKSPACE / v51");
+                                "WORKSPACE / v53");
 
             // A clipped child owns scrolling. Row height is independent of
             // window height: resizing changes the viewport, never row spacing.
@@ -7573,12 +7601,18 @@ LRESULT OverlayRenderer::onWindowMessage(OverlayInputState& input,
         if(input.tsf&&input.imeEnabled.load(std::memory_order_acquire))
             input.tsf->refreshOnWindowThread();
         handled=true;return 0;
+    } else if(message==imeCandidateRefreshMessage()) {
+        if(input.imeEnabled.load(std::memory_order_acquire))
+            updateImeState(input,window,ImeMessageAction::QueryCandidates,lParam);
+        handled=true;return 0;
     } else if (input.tsf) {
         input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire),window);
     }
     const ImeMessageAction imeAction=classifyImeMessage(message,wParam,
         input.imeEnabled.load(std::memory_order_acquire));
-    if(imeAction!=ImeMessageAction::Ignore)
+    if(imeAction==ImeMessageAction::QueryCandidates)
+        (void)::PostMessageW(window,imeCandidateRefreshMessage(),0,lParam);
+    else if(imeAction!=ImeMessageAction::Ignore)
         updateImeState(input,window,imeAction,lParam);
     // A GSMTC-rejecting player is controlled through the helper's native
     // media-key fallback. The GUI's blanket keyboard capture used to swallow

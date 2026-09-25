@@ -778,6 +778,16 @@ int main()
               "smart hotbar prefers a matching hotbar item without swapping");
         check(selectSource(inventory,2,static_cast<int>(Action::Blocks))==18,
               "smart hotbar falls back to a matching main-inventory stack");
+        inventory[4]=ItemKind::Blocks;
+        check(selectRefillSource(inventory,2)==4,
+              "block refill prioritizes a ready hotbar stack over inventory");
+        inventory[18]=ItemKind::Empty;
+        check(selectRefillSource(inventory,2)==4,
+              "block refill can still use a ready hotbar stack");
+        inventory[4]=ItemKind::Empty;
+        inventory[18]=ItemKind::Blocks;
+        check(selectRefillSource(inventory,2)==18,
+              "block refill falls back to a main-inventory stack");
         inventory[2]=ItemKind::Sword;
         check(selectSource(inventory,2,static_cast<int>(Action::Sword))==2,
               "smart hotbar keeps an already-held matching item selected");

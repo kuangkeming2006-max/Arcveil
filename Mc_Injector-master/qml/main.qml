@@ -77,7 +77,7 @@ ApplicationWindow {
                                                    || (activeTargetPid === 0 ? "" : "PID " + activeTargetPid))
     readonly property var setupNavigationItems: [
         { "icon": "⌕", "label": "Scanner", "description": "Discover Java processes", "route": "scanner" },
-        { "icon": "i", "label": "About", "description": "Arcveil · v51", "route": "about" },
+        { "icon": "i", "label": "About", "description": "Arcveil · v53", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Discovery preferences", "route": "settings" }
     ]
     // Process-specific information architecture. Hypixel is intentionally a
@@ -2426,7 +2426,7 @@ ApplicationWindow {
                         id: aboutContent
                         x: 34; y: 28; width: parent.width - 68; spacing: 18
                         Text { text: "About"; color: app.textColor; font.pixelSize: 32; font.weight: Font.DemiBold }
-                        Text { objectName: "aboutBuildLabel"; text: "Arcveil · Internal build v51"; color: app.secondaryTextColor; font.pixelSize: 14 }
+                        Text { objectName: "aboutBuildLabel"; text: "Arcveil · Internal build v53"; color: app.secondaryTextColor; font.pixelSize: 14 }
 
                         Rectangle {
                             Layout.fillWidth: true; Layout.preferredHeight: 210

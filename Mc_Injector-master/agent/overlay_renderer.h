@@ -25,7 +25,9 @@ enum class ImeMessageAction : std::uint8_t {
     Ignore,
     ResetLayout,
     ResetComposition,
-    QueryComposition
+    QueryComposition,
+    QueryCandidates,
+    ClearCandidates
 };
 
 [[nodiscard]] constexpr ImeMessageAction classifyImeMessage(
@@ -41,9 +43,10 @@ enum class ImeMessageAction : std::uint8_t {
     if(message==WM_IME_STARTCOMPOSITION||message==WM_IME_COMPOSITION)
         return ImeMessageAction::QueryComposition;
     if(message==WM_IME_NOTIFY&&
-       (wParam==IMN_OPENCANDIDATE||wParam==IMN_CHANGECANDIDATE||
-        wParam==IMN_CLOSECANDIDATE))
-        return ImeMessageAction::QueryComposition;
+       (wParam==IMN_OPENCANDIDATE||wParam==IMN_CHANGECANDIDATE))
+        return ImeMessageAction::QueryCandidates;
+    if(message==WM_IME_NOTIFY&&wParam==IMN_CLOSECANDIDATE)
+        return ImeMessageAction::ClearCandidates;
     return ImeMessageAction::Ignore;
 }
 

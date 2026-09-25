@@ -1806,6 +1806,13 @@ private:
         command.sprinting=physicalSprinting&&
             (silentOwnsSprint?m_sprintDecisionAllowed:
                               m_committedMovement.sprinting);
+        // Publish the actual immutable sprint verdict, not the preliminary
+        // movement resolver's suggestion. Otherwise diagnostics misleadingly
+        // report logicalSprint=1 after SilentCombat has vetoed this tick.
+        m_committedMovement.sprinting=command.sprinting;
+        m_committedMovement.sprintSuppressed=physicalSprinting&&!command.sprinting;
+        m_state.movement.sprinting=command.sprinting;
+        m_state.movement.sprintSuppressed=m_committedMovement.sprintSuppressed;
         m_lastMovementTick=tick; m_movementCommand=command;
         return command;
     }

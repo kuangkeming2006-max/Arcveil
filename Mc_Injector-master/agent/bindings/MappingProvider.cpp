@@ -308,6 +308,7 @@ private:
     mapping.guiScreenSignature = "Lnet/minecraft/client/gui/GuiScreen;";
     mapping.getCollidingBoundingBoxes = "func_72945_a";
     mapping.keyBindSneakField = "field_74311_E";
+    mapping.keyBindSprintField = "field_151444_V";
     mapping.keyBindsHotbarField = "field_151456_ac";
     mapping.keyBindingIsPressed = "func_151468_f";
     mapping.syncCurrentPlayItem = "func_78750_j";
@@ -339,6 +340,8 @@ private:
     mapping.velocityEntityId = "func_149412_c";
     mapping.sendClickBlock = "func_147115_a";
     mapping.moveFlying = "func_70060_a";
+    mapping.moveEntityWithHeading = "func_70612_e";
+    mapping.getAIMoveSpeed = "func_70689_ay";
     mapping.isSprinting = "func_70051_ag";
     mapping.setSprinting = "func_70031_b";
     mapping.swingItem = "func_71038_i";
@@ -566,6 +569,7 @@ private:
     mapping.guiScreenSignature = "Laxu;";
     mapping.getCollidingBoundingBoxes = "a";
     mapping.keyBindSneakField = "ad";
+    mapping.keyBindSprintField = "ae";
     mapping.keyBindsHotbarField = "aw";
     mapping.keyBindingIsPressed = "f";
     mapping.syncCurrentPlayItem = "j";
@@ -595,6 +599,8 @@ private:
     mapping.velocityEntityId = "a";
     mapping.sendClickBlock = "b";
     mapping.moveFlying = "a";
+    mapping.moveEntityWithHeading = "g";
+    mapping.getAIMoveSpeed = "bI";
     mapping.isSprinting = "aw";
     mapping.setSprinting = "d";
     mapping.swingItem = "bw";
@@ -794,6 +800,7 @@ private:
     mapping.getCollidingBoundingBoxes = "getCollidingBoundingBoxes";
     mapping.keyBindSneakField = "keyBindSneak";
     mapping.keyBindsHotbarField = "keyBindsHotbar";
+    mapping.keyBindSprintField = "keyBindSprint";
     mapping.keyBindingIsPressed = "isPressed";
     mapping.syncCurrentPlayItem = "syncCurrentPlayItem";
     mapping.movementKeyFields = {"keyBindForward", "keyBindBack",
@@ -824,6 +831,8 @@ private:
     mapping.velocityEntityId = "getEntityID";
     mapping.sendClickBlock = "sendClickBlockToController";
     mapping.moveFlying = "moveFlying";
+    mapping.moveEntityWithHeading = "moveEntityWithHeading";
+    mapping.getAIMoveSpeed = "getAIMoveSpeed";
     mapping.isSprinting = "isSprinting";
     mapping.setSprinting = "setSprinting";
     mapping.swingItem = "swingItem";
@@ -1054,7 +1063,8 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         return reject("invalid GuiScreen JNI signature");
     const auto members = std::to_array<std::string_view>({
         clickMouse,
-        sendClickBlock, moveFlying, isSprinting, setSprinting, swingItem,
+        sendClickBlock, moveFlying, moveEntityWithHeading, getAIMoveSpeed,
+        isSprinting, setSprinting, swingItem,
         rayBlockPosField, raySideHitField,
         blockPosCoordinateMethods[0], blockPosCoordinateMethods[1],
         blockPosCoordinateMethods[2], facingIndexMethod,
@@ -1117,6 +1127,8 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         if (!member.empty() && !validMemberName(member))
             return reject("invalid movement-key field name");
     }
+    if(!keyBindSprintField.empty()&&!validMemberName(keyBindSprintField))
+        return reject("invalid sprint-key field name");
     for (const std::string& member : motionFields) {
         if (!member.empty() && !validMemberName(member))
             return reject("invalid motion field name");

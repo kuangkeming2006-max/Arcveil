@@ -90,6 +90,8 @@ struct GameBindings::BindingCache final {
     jmethodID velocityEntityId=nullptr;
     jmethodID sendClickBlock = nullptr;
     jmethodID moveFlying = nullptr;
+    jmethodID moveEntityWithHeading = nullptr;
+    jmethodID getAIMoveSpeed = nullptr;
     jmethodID isSprinting = nullptr;
     jmethodID setSprinting = nullptr;
     jmethodID swingItem = nullptr;
@@ -187,6 +189,7 @@ struct GameBindings::BindingCache final {
     jmethodID aabbConstructor = nullptr;
     jmethodID getCollidingBoxes = nullptr;
     jfieldID keyBindSneakField = nullptr;
+    jfieldID keyBindSprintField = nullptr;
     jfieldID keyBindsHotbar = nullptr;
     jmethodID keyBindingIsPressed = nullptr;
     jmethodID syncCurrentPlayItem = nullptr;
@@ -1417,6 +1420,11 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         log::info(std::string("Safewalk capability disabled for profile: ") +
                   profile.label + " (auxiliary mapping did not resolve).");
     }
+    if(safewalkCapability&&!profile.keyBindSprintField.empty()) {
+        candidate.keyBindSprintField=env->GetFieldID(gameSettings,
+            profile.keyBindSprintField.c_str(),profile.keyBindingSignature.c_str());
+        clearException(env); // Sprint is optional; never disable locomotion.
+    }
 
     bool serverGuardCapability = serverDataClassLoaded &&
         !profile.getCurrentServerData.empty() && !profile.serverIpField.empty();
@@ -1753,6 +1761,9 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         }
         method(candidate.sendClickBlock,minecraft,profile.sendClickBlock,"(Z)V");
         method(candidate.moveFlying,entity,profile.moveFlying,"(FFF)V");
+        method(candidate.moveEntityWithHeading,living,
+               profile.moveEntityWithHeading,"(FF)V");
+        method(candidate.getAIMoveSpeed,living,profile.getAIMoveSpeed,"()F");
         method(candidate.isSprinting,entity,profile.isSprinting,"()Z");
         method(candidate.setSprinting,entity,profile.setSprinting,"(Z)V");
         method(candidate.swingItem,player,profile.swingItem,"()V");
@@ -2494,6 +2505,9 @@ bool GameBindings::onItemUse(JNIEnv* env,jobject minecraft,const bool entering) 
     // produces rightClick -> CLICK_WINDOW -> HELD_ITEM_CHANGE (PacketOrderE).
     // Queue the destination and let the next stable input/PRE boundary decide
     // whether a hotbar-only switch or a neutral inventory move is safe.
+    m_refillQueuedPacketSerial.store(
+        m_movementPacketSerial.load(std::memory_order_acquire),
+        std::memory_order_release);
     m_smartHotbarRefillRequest.store(selected+1,std::memory_order_release);
     return false;
 }
@@ -2539,17 +2553,83 @@ bool GameBindings::consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept
     return true;
 }
 
+void GameBindings::setHotbarMovementPaused(JNIEnv* env,jobject player) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!c||!c->keyBindingClass||!c->setKeyBindState) return;
+    for(const int code:m_hotbarPauseKeys) if(code!=0)
+        env->CallStaticVoidMethod(c->keyBindingClass,c->setKeyBindState,
+                                  static_cast<jint>(code),JNI_FALSE);
+    if(player&&c->setSprinting) env->CallVoidMethod(player,c->setSprinting,JNI_FALSE);
+    clearException(env);
+}
+
+void GameBindings::restoreHotbarMovement(JNIEnv* env) noexcept
+{
+    if(m_hotbarPausePhase==HotbarPausePhase::None) return;
+    const auto* c=m_cache.get();
+    if(env&&c&&c->keyBindingClass&&c->setKeyBindState) {
+        for(const int code:m_hotbarPauseKeys) if(code!=0) {
+            bool physicallyDown=false;
+            if(queryMinecraftBindingDown(env,code,physicallyDown))
+                env->CallStaticVoidMethod(c->keyBindingClass,c->setKeyBindState,
+                    static_cast<jint>(code),physicallyDown?JNI_TRUE:JNI_FALSE);
+        }
+        clearException(env);
+    }
+    m_hotbarPauseKeys.fill(0);
+    m_hotbarPausePhase=HotbarPausePhase::None;
+    m_hotbarPausePacketSerial=0U;
+    m_hotbarPauseStartedMs=0U;
+}
+
 bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noexcept
 {
     int encoded=m_smartHotbarRequest.exchange(0,std::memory_order_acq_rel);
     const bool refill=encoded==0;
     if(refill) encoded=m_smartHotbarRefillRequest.exchange(0,std::memory_order_acq_rel);
-    if(encoded<=0||encoded>9) return false;
+    const auto serial=m_movementPacketSerial.load(std::memory_order_acquire);
+    if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket&&
+       serial>m_hotbarPausePacketSerial) restoreHotbarMovement(env);
     const auto requeue=[&]() noexcept {
         auto& queue=refill?m_smartHotbarRefillRequest:m_smartHotbarRequest;
         int empty=0;(void)queue.compare_exchange_strong(empty,encoded,
             std::memory_order_release,std::memory_order_relaxed);
     };
+    if(m_hotbarPausePhase!=HotbarPausePhase::None&&
+       GetTickCount64()-m_hotbarPauseStartedMs>500U) {
+        restoreHotbarMovement(env);
+        m_logicalController.debug().event("HOTBAR_PAUSE_TIMEOUT",
+            m_logicalController.latest(),"movement packet boundary unavailable",true);
+        if(encoded>0&&encoded<=9) requeue();
+        return false;
+    }
+    if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
+        const auto* c=m_cache.get();
+        jobject player=env&&minecraft&&c&&c->playerField
+            ?env->GetObjectField(minecraft,c->playerField):nullptr;
+        setHotbarMovementPaused(env,player);
+        if(player) env->DeleteLocalRef(player);
+        clearException(env);
+        if(encoded>0&&encoded<=9) requeue();
+        return false;
+    }
+    if(encoded<=0||encoded>9) {
+        if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket)
+            restoreHotbarMovement(env);
+        return false;
+    }
+    // Grim keeps the preceding use/right-click transaction open until a
+    // subsequent movement packet. Never send CLICK_WINDOW or HELD_ITEM_CHANGE
+    // from either source before that boundary, or while an action is held.
+    const bool actionHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
+        (GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0||
+        m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
+    if(actionHeld||(refill&&m_movementPacketSerial.load(std::memory_order_acquire)<=
+        m_refillQueuedPacketSerial.load(std::memory_order_acquire))) {
+        if(actionHeld) restoreHotbarMovement(env);
+        requeue();return false;
+    }
     const auto* c=m_cache.get();
     if(!env||!minecraft||!c||!hotbar::enabled(
            m_smartHotbarConfig.load(std::memory_order_acquire))||
@@ -2561,6 +2641,11 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
     auto stacks=inventory?static_cast<jobjectArray>(env->GetObjectField(inventory,c->mainInventory)):nullptr;
     jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
     if(screen||!player||!inventory||!stacks||!controller||env->ExceptionCheck()) {
+        restoreHotbarMovement(env);
+        requeue();return false;
+    }
+    if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
+        setHotbarMovementPaused(env,player);
         requeue();return false;
     }
     const int destination=encoded-1;
@@ -2589,10 +2674,12 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
     }
     const int current=std::clamp(static_cast<int>(env->GetIntField(inventory,c->currentItem)),0,8);
     if(env->ExceptionCheck()) {requeue();return false;}
-    const int source=hotbar::selectSource(
-        std::span<const hotbar::ItemKind>(kinds.data(),static_cast<std::size_t>(length)),
-        current,wanted);
+    const auto available=std::span<const hotbar::ItemKind>(
+        kinds.data(),static_cast<std::size_t>(length));
+    const int source=refill?hotbar::selectRefillSource(available,current):
+        hotbar::selectSource(available,current,wanted);
     if(source<0) {
+        restoreHotbarMovement(env);
         // A configured shortcut with no matching item keeps the normal hotbar
         // selection instead of silently swallowing the player's key press.
         if(refill) return false;
@@ -2601,37 +2688,77 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
         return env->ExceptionCheck()!=JNI_TRUE;
     }
     if(source>=9) {
-        // The last render snapshot can be a tick old here. Inventory transfer
-        // requires current key/velocity state at this exact input boundary.
-        bool moving=false;
+        if(!m_silentRotationHook.ready()) {requeue();return false;}
+        // Use raw key states, not residual velocity. A held key is temporarily
+        // masked across a real movement POST before CLICK_WINDOW, then restored
+        // from raw LWJGL state after another POST. Held input resumes without
+        // requiring a release/repress gesture.
         jobject settings=c->gameSettingsField
             ?env->GetObjectField(minecraft,c->gameSettingsField):nullptr;
         if(!settings||env->ExceptionCheck()) {requeue();return false;}
-        for(std::size_t axis=0;axis<4U;++axis) {
-            if(!c->movementKeyFields[axis]||!c->getKeyCode) {requeue();return false;}
-            jobject binding=env->GetObjectField(settings,c->movementKeyFields[axis]);
+        std::array<int,6U> codes{};
+        bool physicalMovement=false;
+        for(std::size_t axis=0;axis<codes.size();++axis) {
+            const jfieldID field=axis<5U?c->movementKeyFields[axis]:c->keyBindSprintField;
+            if(!field||!c->getKeyCode) {requeue();return false;}
+            jobject binding=env->GetObjectField(settings,field);
             if(!binding||env->ExceptionCheck()) {requeue();return false;}
             const int code=env->CallIntMethod(binding,c->getKeyCode);
             bool down=false;
-            if(env->ExceptionCheck()||!queryMinecraftBindingDown(env,code,down)) {
+            if(env->ExceptionCheck()||
+               (code!=0&&!queryMinecraftBindingDown(env,code,down))) {
                 requeue();return false;
             }
-            moving=moving||down;
+            codes[axis]=code;
+            physicalMovement=physicalMovement||down;
         }
-        if(!c->motionFields[0]||!c->motionFields[2]) {requeue();return false;}
-        const double velocityX=env->GetDoubleField(player,c->motionFields[0]);
-        const double velocityZ=env->GetDoubleField(player,c->motionFields[2]);
-        moving=moving||std::hypot(velocityX,velocityZ)>0.01;
         const bool sprinting=c->isSprinting&&
             env->CallBooleanMethod(player,c->isSprinting)==JNI_TRUE;
-        const bool action=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
-            (GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0||
-            m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
-        if(env->ExceptionCheck()||moving||sprinting||action) {requeue();return false;}
+        if(env->ExceptionCheck()) {requeue();return false;}
+        if(m_hotbarPausePhase==HotbarPausePhase::None) {
+            if(!c->setKeyBindState||!c->setSprinting) {requeue();return false;}
+            m_hotbarPauseKeys=codes;
+            m_hotbarPausePhase=HotbarPausePhase::AwaitNeutralPacket;
+            m_hotbarPausePacketSerial=serial;
+            m_hotbarPauseStartedMs=GetTickCount64();
+            setHotbarMovementPaused(env,player);
+            char detail[128]{};
+            std::snprintf(detail,sizeof(detail),
+                "source=%d destination=%d rawMovement=%d sprint=%d serial=%llu",
+                source,destination,physicalMovement?1:0,sprinting?1:0,
+                static_cast<unsigned long long>(serial));
+            m_logicalController.debug().event("HOTBAR_NEUTRAL_WAIT",
+                m_logicalController.latest(),detail,true);
+            requeue();return false;
+        }
+        if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket) {
+            setHotbarMovementPaused(env,player);
+            if(serial<=m_hotbarPausePacketSerial||sprinting) {
+                m_hotbarPausePacketSerial=serial;
+                requeue();return false;
+            }
+        }
         jobject result=env->CallObjectMethod(controller,c->windowClick,
             0,source,destination,2,player);
         if(result) env->DeleteLocalRef(result);
-        if(env->ExceptionCheck()) {requeue();return false;}
+        if(env->ExceptionCheck()) {
+            restoreHotbarMovement(env);requeue();return false;
+        }
+        if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket) {
+            m_hotbarPausePhase=HotbarPausePhase::AwaitResumePacket;
+            m_hotbarPausePacketSerial=serial;
+        }
+        m_logicalController.debug().event("HOTBAR_TRANSFER",
+            m_logicalController.latest(),"inventory swap after neutral packet",true);
+    } else {
+        restoreHotbarMovement(env);
+        char detail[128]{};
+        std::snprintf(detail,sizeof(detail),
+            "source=%d destination=%d serial=%llu noPositionRun=%u",
+            source,destination,static_cast<unsigned long long>(serial),
+            m_noPositionPacketRun.load(std::memory_order_relaxed));
+        m_logicalController.debug().event("HOTBAR_SWITCH",
+            m_logicalController.latest(),detail,true);
     }
     env->SetIntField(inventory,c->currentItem,source<9?source:destination);
     if(!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
@@ -2647,10 +2774,18 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if(!m_logicalController.debug().enabled() && m_interactionObserver.ready())
         m_interactionObserver.setEnabled(false);
     if (env == nullptr) return false;
+    if(!requested.aimAssist||!requested.aimSilentLock||
+       !requested.silentControlAdaptation) {
+        m_sprintFeatureEnabled.store(false,std::memory_order_release);
+        m_sprintOwner.store(SprintOwner::Vanilla,std::memory_order_release);
+    }
 
     BindingCache* const cache =
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved
         ? m_cache.get() : nullptr;
+    if(m_hotbarPausePhase!=HotbarPausePhase::None&&
+       (!requested.smartHotbar||!cache||gameScreenOpen(env)))
+        restoreHotbarMovement(env);
     // These two diagnostics are intentionally impossible to activate on a
     // remote server. The guard is duplicated here (below the UI/runtime
     // guard) so a malformed IPC frame still cannot broaden their scope.
@@ -2658,7 +2793,6 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         !snapshot.hypixelServer;
     const bool localMobAuraRequested = requested.localMobAura && localWorld;
     const bool localVelocityRequested = requested.localVelocity && localWorld;
-    m_forceSprint.store(requested.forceSprint,std::memory_order_release);
     const bool shield=requested.shieldAttackerId==-2||
         (localWorld&&requested.shieldAttackerId>=0);
     m_shieldAttacker.store(shield?requested.shieldAttackerId:-1,std::memory_order_release);
@@ -2862,6 +2996,17 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         m_safewalkReleaseAt = 0U;
         return released;
     };
+    const auto releaseForcedSprint = [&]() noexcept {
+        if(!m_sprintKeyForced) return;
+        bool physicalDown=false;
+        (void)queryLwjglKeyDown(env,m_sprintKeyCode,physicalDown);
+        if(cache->keyBindingClass&&cache->setKeyBindState&&m_sprintKeyCode>0)
+            env->CallStaticVoidMethod(cache->keyBindingClass,
+                cache->setKeyBindState,m_sprintKeyCode,
+                physicalDown?JNI_TRUE:JNI_FALSE);
+        clearException(env);
+        m_sprintKeyForced=false;m_sprintKeyCode=0;
+    };
 
     const bool movementCapability = safewalkCapability &&
         std::all_of(cache->movementKeyFields.begin(), cache->movementKeyFields.end(),
@@ -2906,6 +3051,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         std::memory_order_release);
     m_itemUseHook.setEnabled(smartHotbarRequested&&requested.smartHotbarRefill);
     if(!smartHotbarRequested) {
+        restoreHotbarMovement(env);
         m_smartHotbarRequest.store(0,std::memory_order_release);
         m_smartHotbarRefillRequest.store(0,std::memory_order_release);
         m_refillSlot=-1;
@@ -2928,6 +3074,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
          !freeLookCapability && !smartHotbarCapability)) {
         if(!aimCapability||!anyRequested) deactivateSilentOutput();
         (void)releaseForcedSneak();
+        releaseForcedSprint();
         m_scaffoldPlatformYValid = false;
         m_lastLocalHealth = -1.0F;
         m_lastLocalEntityId = -1;
@@ -2936,6 +3083,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if (env->PushLocalFrame(96) < 0) {
         clearException(env);
         (void)releaseForcedSneak();
+        releaseForcedSprint();
         return false;
     }
     const auto finish = [&](const bool result) noexcept {
@@ -2945,7 +3093,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const auto fail = [&]() noexcept {
         deactivateSilentOutput();
         clearException(env);
+        restoreHotbarMovement(env);
+        m_sprintFeatureEnabled.store(false,std::memory_order_release);
+        m_sprintOwner.store(SprintOwner::Vanilla,std::memory_order_release);
         (void)releaseForcedSneak();
+        releaseForcedSprint();
         m_logicalController.deactivate();
         m_bedBreakerTargetValid = false;
         return finish(false);
@@ -2966,6 +3118,37 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     jobject world = env->GetObjectField(minecraft, cache->worldField);
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr ||
         settings == nullptr || world == nullptr) return fail();
+    // Ask vanilla's input path to sprint. Writing setSprinting(true) from
+    // moveFlying occurs after the movement-speed decision and produces a
+    // client/server mismatch, especially on diagonal input.
+    if(requested.forceSprint&&cache->keyBindSprintField&&
+       cache->setKeyBindState&&cache->getKeyCode) {
+        jobject sprintBinding=env->GetObjectField(settings,cache->keyBindSprintField);
+        jobject forwardBinding=cache->movementKeyFields[0]
+            ?env->GetObjectField(settings,cache->movementKeyFields[0]):nullptr;
+        if(sprintBinding&&forwardBinding&&!env->ExceptionCheck()) {
+            const int sprintCode=env->CallIntMethod(sprintBinding,cache->getKeyCode);
+            const int forwardCode=env->CallIntMethod(forwardBinding,cache->getKeyCode);
+            bool forwardDown=false;
+            if(!env->ExceptionCheck()&&
+               queryMinecraftBindingDown(env,forwardCode,forwardDown)) {
+                const bool silentHeld=requested.aimAssist&&requested.aimSilentLock&&
+                    (::GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+                const bool desired=forwardDown&&!silentHeld&&
+                    m_hotbarPausePhase==HotbarPausePhase::None;
+                if(desired&&sprintCode>0) {
+                    if(m_sprintKeyForced&&m_sprintKeyCode!=sprintCode)
+                        releaseForcedSprint();
+                    env->CallStaticVoidMethod(cache->keyBindingClass,
+                        cache->setKeyBindState,sprintCode,JNI_TRUE);
+                    if(!env->ExceptionCheck()) {
+                        m_sprintKeyForced=true;m_sprintKeyCode=sprintCode;
+                    }
+                } else releaseForcedSprint();
+            }
+        }
+        clearException(env);
+    } else releaseForcedSprint();
     const jfloat pitch = env->GetFloatField(player, cache->rotationPitch);
     if(shield&&cache->knockBack&&(!m_impulseHook.ready()||
        (requested.shieldAttackerId==-2&&!m_velocityHook.ready()))&&tickMilliseconds>=m_nextImpulseHookAttempt) {
@@ -3071,7 +3254,6 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const aim::Mode mode = (requested.aimLockOnMode || requested.aimSilentLock)
         ? aim::Mode::LockOn : aim::Mode::Smooth;
     const bool wantsSilent = requested.aimAssist && requested.aimSilentLock;
-    m_forceSprint.store(requested.forceSprint,std::memory_order_release);
     if (wantsSilent || requested.forceSprint || smartHotbarRequested ||
         m_logicalController.debug().enabled()) {
         if (!m_silentRotationHook.ready() &&
@@ -3123,6 +3305,34 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                         static_cast<GameBindings*>(owner)->endLogicalJump(jni,entity);
                     });
             }
+        }
+        if(wantsSilent&&requested.silentControlAdaptation&&
+           !m_headingHook.ready()&&cache->moveEntityWithHeading&&
+           tickMilliseconds>=m_nextHeadingHookAttemptTick) {
+            m_nextHeadingHookAttemptTick=tickMilliseconds+5000U;
+            const bool installed=m_headingHook.install(
+                m_vm,cache->moveEntityWithHeading,this,
+                [](void* owner,JNIEnv* jni,jobject entity) noexcept {
+                    static_cast<GameBindings*>(owner)->beginLogicalHeading(jni,entity);
+                },
+                [](void* owner,JNIEnv* jni,jobject entity) noexcept {
+                    static_cast<GameBindings*>(owner)->endLogicalHeading(jni,entity);
+                });
+            char detail[96]{};
+            std::snprintf(detail,sizeof(detail),"ready=%d jvmtiError=%d",
+                installed?1:0,m_headingHook.lastError());
+            m_logicalController.debug().event("HEADING_HOOK",
+                m_logicalController.latest(),detail,true);
+            log::info(installed?"Heading PRE/POST hook installed.":
+                "Heading PRE/POST hook unavailable; SprintOwner remains Vanilla.");
+        }
+        if(wantsSilent&&requested.silentControlAdaptation&&
+           !cache->moveEntityWithHeading&&!m_headingMappingMissingLogged) {
+            m_headingMappingMissingLogged=true;
+            m_logicalController.debug().event("HEADING_HOOK",
+                m_logicalController.latest(),
+                "ready=0 reason=moveEntityWithHeading_mapping_missing",true);
+            log::info("Heading PRE/POST mapping unavailable; SprintOwner remains Vanilla.");
         }
         if (!m_logicalInteractionHook.ready() && cache->sendClickBlock &&
             tickMilliseconds >= m_nextLogicalInteractionHookAttemptTick) {
@@ -3279,7 +3489,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         if(!combatEyeReady||!cache->getEntityById) continue;
         jobject liveTarget=env->CallObjectMethod(world,cache->getEntityById,
                                                 entity.entityId);
-        if(diagnostic) targetDiag.lookup=liveTarget&&env->ExceptionCheck()==JNI_FALSE;
+        if(diagnostic) {
+            targetDiag.lookup=liveTarget&&env->ExceptionCheck()==JNI_FALSE;
+            targetDiag.livePlayer=targetDiag.lookup&&cache->playerClass&&
+                env->IsInstanceOf(liveTarget,cache->playerClass)==JNI_TRUE;
+        }
         silent::Bounds bounds{};
         const bool boundsReady=liveTarget&&env->ExceptionCheck()==JNI_FALSE&&
             readCombatBounds(env,liveTarget,bounds);
@@ -3349,6 +3563,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const bool canAim = requested.aimAssist && aimCapability && combatEyeReady &&
         snapshot.state == GameSnapshot::State::Ready && snapshot.health > 0.0F &&
         std::isfinite(yaw) && std::isfinite(pitch);
+    const bool sprintFeature=canAim&&wantsSilent&&requested.silentControlAdaptation&&
+        m_headingHook.ready()&&m_logicalMovementHook.ready()&&
+        m_logicalJumpHook.ready();
+    m_sprintFeatureEnabled.store(sprintFeature,std::memory_order_release);
+    (void)syncSprintOwner();
     const jfloat sensitivity = env->GetFloatField(settings, cache->mouseSensitivity);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
     const bool silentRotationReady = silentAvailable();
@@ -3510,9 +3729,13 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     }
     const bool logicalMovementReady=m_logicalMovementHook.ready()&&
         m_logicalJumpHook.ready();
-    const bool logicalMovementEnabled=(logicalPlan.silentActive||requested.forceSprint)&&logicalMovementReady;
+    // Hook ownership is feature-scoped. The physics consumer decides whether
+    // the current target requires a transform or a vanilla passthrough.
+    const bool logicalMovementEnabled=canAim&&wantsSilent&&
+        requested.silentControlAdaptation&&logicalMovementReady;
     m_logicalMovementHook.setEnabled(logicalMovementEnabled);
     m_logicalJumpHook.setEnabled(logicalMovementEnabled);
+    m_headingHook.setEnabled(sprintFeature);
     const bool logicalAttackEnabled=logicalPlan.silentActive&&
         silentCapabilities.attackSchedulerReady();
     m_logicalInteractionHook.setEnabled(
@@ -3524,7 +3747,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         (logicalPlan.silentActive && silentRotationReady) ||
         m_logicalController.restoring() ||
         m_logicalController.packetContinuityRequired() ||
-        m_logicalController.debug().enabled());
+        m_logicalController.debug().enabled() ||
+        smartHotbarRequested);
 
     // Aim-only operation intentionally stops here. The remainder reads block
     // support, movement keys and inventory/controller mappings.
@@ -5003,10 +5227,13 @@ bool GameBindings::silentAttackAvailable() const noexcept
 void GameBindings::deactivateSilentOutput() noexcept
 {
     m_logicalController.deactivate();
+    m_sprintFeatureEnabled.store(false,std::memory_order_release);
+    m_sprintOwner.store(SprintOwner::Vanilla,std::memory_order_release);
     m_silentRotationHook.setEnabled(m_logicalController.restoring()||
         m_logicalController.packetContinuityRequired());
     m_logicalMovementHook.setEnabled(false);
     m_logicalJumpHook.setEnabled(false);
+    m_headingHook.setEnabled(false);
     m_attackOwnershipHook.setEnabled(false);
     m_logicalInteractionHook.setEnabled(false);
 }
@@ -5033,10 +5260,15 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
     jobject world=env->GetObjectField(mc,c->worldField);
     if(!player||!world||env->ExceptionCheck()) {cancel("world_unavailable");return;}
     jobject target=env->CallObjectMethod(world,c->getEntityById,pending.entityId);
-    if(!target||env->ExceptionCheck()||
-       env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE||
-       (c->playerClass&&env->IsInstanceOf(target,c->playerClass)!=JNI_TRUE)) {
+    if(!target||env->ExceptionCheck()) {
         cancel("entity_lookup_failed");return;
+    }
+    // Selection has already established player identity using the live world
+    // player list. Some offline-server player wrappers do not satisfy the
+    // optional cached EntityPlayer class test even though their entity id is
+    // present in that list. Require only the living-entity methods used below.
+    if(env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE||env->ExceptionCheck()) {
+        cancel("entity_not_living");return;
     }
     if(c->getHealth) {
         const float health=env->CallFloatMethod(target,c->getHealth);
@@ -5097,15 +5329,15 @@ jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcep
        env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
     const jboolean onGround=env->GetBooleanField(packet,c->packetOnGround);
     if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
+    // A transformed client may subclass C04/C05/C06. Exact-class comparison
+    // mislabels such packets as Ground, then a rotation rewrite can discard
+    // their position payload and violate the 1.8 position-reminder cadence.
+    const bool exactPositionLook=env->IsInstanceOf(packet,c->positionLookPacketClass)==JNI_TRUE;
+    const bool exactPosition=env->IsInstanceOf(packet,c->positionPacketClass)==JNI_TRUE;
+    const bool exactLook=env->IsInstanceOf(packet,c->lookPacketClass)==JNI_TRUE;
     jclass packetClass=env->GetObjectClass(packet);
-    const bool exactBase=packetClass &&
+    const bool exactBase=packetClass&&
         env->IsSameObject(packetClass,c->movementPacketClass)==JNI_TRUE;
-    const bool exactPosition=packetClass &&
-        env->IsSameObject(packetClass,c->positionPacketClass)==JNI_TRUE;
-    const bool exactLook=packetClass &&
-        env->IsSameObject(packetClass,c->lookPacketClass)==JNI_TRUE;
-    const bool exactPositionLook=packetClass &&
-        env->IsSameObject(packetClass,c->positionLookPacketClass)==JNI_TRUE;
     if(packetClass) env->DeleteLocalRef(packetClass);
     if(env->ExceptionCheck()==JNI_TRUE) { clearException(env); return packet; }
     const bool hasPosition=exactPosition || exactPositionLook;
@@ -5113,6 +5345,9 @@ jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcep
     const silent::PacketKind original=exactPositionLook ? silent::PacketKind::PositionLook :
         exactPosition ? silent::PacketKind::Position : exactLook ? silent::PacketKind::Look :
         exactBase ? silent::PacketKind::Ground : silent::PacketKind::Unknown;
+    // Unknown movement derivatives must pass through intact; do not guess
+    // their payload shape when an adapter injects a custom packet subclass.
+    if(original==silent::PacketKind::Unknown) return packet;
     aim::Angles originalRotation{};
     bool originalRotationValid=false;
     if(hasRotation) {
@@ -5139,10 +5374,15 @@ jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcep
             rawYaw=env->GetFloatField(value,c->packetYaw); rawPitch=env->GetFloatField(value,c->packetPitch);
         }
         if(env->ExceptionCheck()) {clearException(env);return;}
+        m_movementPacketSerial.fetch_add(1U,std::memory_order_release);
         const auto before=m_logicalController.latest();
-        char detail[280]{};
-        std::snprintf(detail,sizeof(detail),"originalType=%u finalType=%u hasPosition=%d hasRotation=%d pos=(%.8f,%.8f,%.8f) yaw=%.6f pitch=%.6f",
-            static_cast<unsigned>(original),static_cast<unsigned>(finalKind),hasPosition,rotation,x,y,z,rawYaw,rawPitch);
+        const auto noPositionRun=hasPosition?0U:
+            m_noPositionPacketRun.fetch_add(1U,std::memory_order_relaxed)+1U;
+        if(hasPosition) m_noPositionPacketRun.store(0U,std::memory_order_relaxed);
+        char detail[320]{};
+        std::snprintf(detail,sizeof(detail),"originalType=%u finalType=%u hasPosition=%d hasRotation=%d noPositionRun=%u pos=(%.8f,%.8f,%.8f) yaw=%.6f pitch=%.6f",
+            static_cast<unsigned>(original),static_cast<unsigned>(finalKind),hasPosition,rotation,
+            noPositionRun,x,y,z,rawYaw,rawPitch);
         m_logicalController.debug().event("PACKET",before,detail);
         if(rotation) m_logicalController.acknowledgePacket({rawYaw,rawPitch},original,finalKind,hasPosition,true);
         if(restore) {
@@ -5476,17 +5716,20 @@ jfloat GameBindings::beginLogicalMovement(JNIEnv* env,jobject entity,
     refreshAttackAtPublication(env);
     const silent::MovementCommand command=m_logicalController.movementCommand(
         static_cast<double>(strafe),static_cast<double>(forward),tick);
-    if(c->setSprinting&&c->isSprinting) {
-        const bool silent=m_logicalController.active();
-        const bool force=m_forceSprint.load(std::memory_order_acquire);
-        if(silent||force) {
-            const bool sneaking=c->isSneaking&&env->CallBooleanMethod(entity,c->isSneaking)==JNI_TRUE;
-            const bool usingItem=c->isUsingItem&&env->CallBooleanMethod(entity,c->isUsingItem)==JNI_TRUE;
-            if(!env->ExceptionCheck())
-                env->CallVoidMethod(entity,c->setSprinting,
-                    (!silent&&force&&forward>=0.8F&&!sneaking&&!usingItem)?JNI_TRUE:JNI_FALSE);
-            clearException(env);
+    if(c->isSprinting&&c->motionFields[0]&&c->motionFields[2]) {
+        const bool sprinting=env->CallBooleanMethod(entity,c->isSprinting)==JNI_TRUE;
+        const double x=env->GetDoubleField(entity,c->motionFields[0]);
+        const double z=env->GetDoubleField(entity,c->motionFields[2]);
+        if(!env->ExceptionCheck()) {
+            char detail[180]{};
+            std::snprintf(detail,sizeof(detail),
+                "tick=%llu sprinting=%d owner=%u motion=(%.7f,%.7f)",
+                static_cast<unsigned long long>(tick),sprinting?1:0,
+                static_cast<unsigned>(m_sprintOwner.load(std::memory_order_acquire)),x,z);
+            m_logicalController.debug().event("MOVE_FLYING",
+                m_logicalController.latest(),detail);
         }
+        clearException(env);
     }
     if(!command.enabled || entityId!=m_logicalController.localPlayerId()) return strafe;
     g_logicalMovementHook.entityId=entityId;
@@ -5495,11 +5738,6 @@ jfloat GameBindings::beginLogicalMovement(JNIEnv* env,jobject entity,
         command.forward);
     env->SetFloatField(entity,c->rotationYaw,
                        static_cast<jfloat>(command.logicalRotation.yaw));
-    g_logicalMovementHook.sprintChanged=
-        command.physicalSprinting!=command.sprinting;
-    if(g_logicalMovementHook.sprintChanged)
-        env->CallVoidMethod(entity,c->setSprinting,
-                            command.sprinting?JNI_TRUE:JNI_FALSE);
     if(env->ExceptionCheck()==JNI_TRUE) {
         clearException(env);
         env->SetFloatField(entity,c->rotationYaw,
@@ -5508,14 +5746,6 @@ jfloat GameBindings::beginLogicalMovement(JNIEnv* env,jobject entity,
         g_logicalMovementHook.mappedForward=forward; return strafe;
     }
     g_logicalMovementHook.applied=true;
-    if(g_logicalMovementHook.sprintChanged) {
-        char detail[120]{};
-        std::snprintf(detail,sizeof(detail),"consumer=MOVE snapshot=%llu allowed=%d",
-            static_cast<unsigned long long>(command.snapshotVersion),
-            command.sprinting?1:0);
-        m_logicalController.debug().event("SPRINT",m_logicalController.latest(),
-            detail,true);
-    }
     return static_cast<jfloat>(command.strafe);
 }
 
@@ -5568,16 +5798,95 @@ bool GameBindings::arbitrateLogicalSprint(JNIEnv* env,jobject entity,
         clearException(env);
         return requested;
     }
-    // setSprinting may run before this tick's moveFlying/jump consumer, while
-    // EntityLivingBase still contains the preceding tick's action-state axes.
-    // It is therefore an intent/arbitration boundary only.  The immutable
-    // movement-derived decision is committed by movementCommand/jumpCommand.
-    const bool allowed=m_logicalController.arbitrateSprint(requested,tick);
-    if(requested&&!allowed) {
-        m_logicalController.debug().event("SPRINT_VETO",
-            m_logicalController.latest(),"source=setSprinting",true);
-    }
+    const SprintOwner owner=syncSprintOwner();
+    const bool allowed=requested&&owner!=SprintOwner::SilentCombat;
+    char detail[136]{};
+    std::snprintf(detail,sizeof(detail),
+        "tick=%llu requested=%d owner=%u veto=%d result=%d",
+        static_cast<unsigned long long>(tick),requested?1:0,
+        static_cast<unsigned>(owner),requested&&!allowed?1:0,allowed?1:0);
+    m_logicalController.debug().event("SPRINT_SET",
+        m_logicalController.latest(),detail,requested&&!allowed);
     return allowed;
+}
+
+GameBindings::SprintOwner GameBindings::syncSprintOwner() noexcept
+{
+    const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    const SprintOwner desired=m_sprintFeatureEnabled.load(std::memory_order_acquire)&&
+        leftHeld?SprintOwner::SilentCombat:SprintOwner::Vanilla;
+    const SprintOwner previous=m_sprintOwner.exchange(desired,std::memory_order_acq_rel);
+    if(previous!=desired) {
+        char detail[80]{};
+        std::snprintf(detail,sizeof(detail),"old=%u new=%u leftHeld=%d",
+            static_cast<unsigned>(previous),static_cast<unsigned>(desired),leftHeld?1:0);
+        m_logicalController.debug().event("SPRINT_OWNER",
+            m_logicalController.latest(),detail,true);
+    }
+    return desired;
+}
+
+void GameBindings::beginLogicalHeading(JNIEnv* env,jobject entity) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!entity||!c||!c->getEntityId||!c->isSprinting||
+       !c->setSprinting) return;
+    const int entityId=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()||entityId!=m_logicalController.localPlayerId()) {
+        clearException(env);return;
+    }
+    const auto tick=c->entityTicks
+        ?static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks)):0U;
+    const SprintOwner owner=syncSprintOwner();
+    const bool tracing=m_logicalController.debug().enabled();
+    const bool before=tracing&&
+        env->CallBooleanMethod(entity,c->isSprinting)==JNI_TRUE;
+    if(env->ExceptionCheck()) {clearException(env);return;}
+    if(owner==SprintOwner::SilentCombat)
+        env->CallVoidMethod(entity,c->setSprinting,JNI_FALSE);
+    if(env->ExceptionCheck()) {clearException(env);return;}
+    if(!tracing) return;
+    const bool after=env->CallBooleanMethod(entity,c->isSprinting)==JNI_TRUE;
+    const float speed=c->getAIMoveSpeed
+        ?env->CallFloatMethod(entity,c->getAIMoveSpeed):0.0F;
+    if(env->ExceptionCheck()) {clearException(env);return;}
+    char detail[160]{};
+    std::snprintf(detail,sizeof(detail),
+        "tick=%llu owner=%u sca=%d actualBefore=%d actualAfter=%d",
+        static_cast<unsigned long long>(tick),static_cast<unsigned>(owner),
+        m_sprintFeatureEnabled.load(std::memory_order_acquire)?1:0,
+        before?1:0,after?1:0);
+    m_logicalController.debug().event("SPRINT_PRE",
+        m_logicalController.latest(),detail);
+    std::snprintf(detail,sizeof(detail),
+        "tick=%llu sprinting=%d moveSpeed=%.7f",
+        static_cast<unsigned long long>(tick),after?1:0,speed);
+    m_logicalController.debug().event("MOVE_HEADING_PRE",
+        m_logicalController.latest(),detail);
+}
+
+void GameBindings::endLogicalHeading(JNIEnv* env,jobject entity) noexcept
+{
+    const auto* c=m_cache.get();
+    if(!env||!entity||!c||!c->getEntityId||!c->isSprinting||
+       !c->motionFields[0]||!c->motionFields[2]) return;
+    const int entityId=env->CallIntMethod(entity,c->getEntityId);
+    if(env->ExceptionCheck()||entityId!=m_logicalController.localPlayerId()) {
+        clearException(env);return;
+    }
+    const auto tick=c->entityTicks
+        ?static_cast<std::uint64_t>(env->GetIntField(entity,c->entityTicks)):0U;
+    const bool sprinting=env->CallBooleanMethod(entity,c->isSprinting)==JNI_TRUE;
+    const double x=env->GetDoubleField(entity,c->motionFields[0]);
+    const double z=env->GetDoubleField(entity,c->motionFields[2]);
+    if(env->ExceptionCheck()) {clearException(env);return;}
+    char detail[170]{};
+    std::snprintf(detail,sizeof(detail),
+        "tick=%llu sprinting=%d owner=%u motion=(%.7f,%.7f)",
+        static_cast<unsigned long long>(tick),sprinting?1:0,
+        static_cast<unsigned>(m_sprintOwner.load(std::memory_order_acquire)),x,z);
+    m_logicalController.debug().event("MOVE_HEADING_POST",
+        m_logicalController.latest(),detail);
 }
 
 void GameBindings::beginLogicalJump(JNIEnv* env,jobject entity) noexcept
@@ -5610,34 +5919,17 @@ void GameBindings::beginLogicalJump(JNIEnv* env,jobject entity) noexcept
     refreshAttackAtPublication(env);
     const silent::MovementCommand command=m_logicalController.jumpCommand(
         physicalStrafe,physicalForward,physicalSprinting,tick);
-    if(m_logicalController.active()) {
-        env->CallVoidMethod(entity,c->setSprinting,JNI_FALSE);
-        clearException(env);
-    }
     if(!command.enabled) return;
     g_logicalJumpHook.entityId=entityId;
     g_logicalJumpHook.originalYaw=env->GetFloatField(entity,c->rotationYaw);
     env->SetFloatField(entity,c->rotationYaw,
                        static_cast<jfloat>(command.logicalRotation.yaw));
-    g_logicalJumpHook.sprintChanged=
-        command.physicalSprinting!=command.sprinting;
-    if(g_logicalJumpHook.sprintChanged)
-        env->CallVoidMethod(entity,c->setSprinting,
-                            command.sprinting?JNI_TRUE:JNI_FALSE);
     if(env->ExceptionCheck()==JNI_TRUE) {
         clearException(env);
         env->SetFloatField(entity,c->rotationYaw,g_logicalJumpHook.originalYaw);
         clearException(env);g_logicalJumpHook={};return;
     }
     g_logicalJumpHook.applied=true;
-    if(g_logicalJumpHook.sprintChanged) {
-        char detail[120]{};
-        std::snprintf(detail,sizeof(detail),"consumer=JUMP snapshot=%llu allowed=%d",
-            static_cast<unsigned long long>(command.snapshotVersion),
-            command.sprinting?1:0);
-        m_logicalController.debug().event("SPRINT",m_logicalController.latest(),
-            detail,true);
-    }
 }
 
 void GameBindings::endLogicalJump(JNIEnv* env,jobject entity) noexcept
@@ -5860,12 +6152,22 @@ bool GameBindings::consumeLogicalInteraction(
     JNIEnv* env,jobject minecraft,const LiveInteractionTransform::Entry entry,
     const bool heldDown) noexcept
 {
+    const auto* c=m_cache.get();
     // This transformed per-tick input entry is the clean boundary shared by
     // Smart Hotbar and combat. Processing the queue here keeps inventory
     // mutation out of key/right-click hooks and out of render-driven update.
     (void)processSmartHotbarRequests(env,minecraft);
     const bool down=entry==LiveInteractionTransform::Entry::Click || heldDown;
     if(!observeLogicalCamera(env,minecraft,down)) return false;
+    // Input/PRE may run before heading PRE. Both boundaries honor the same
+    // feature-level owner, never a transient target/rotation phase.
+    if(env&&minecraft&&c&&syncSprintOwner()==SprintOwner::SilentCombat&&
+       c->setSprinting&&c->playerField) {
+        jobject player=env->GetObjectField(minecraft,c->playerField);
+        if(player&&!env->ExceptionCheck())
+            env->CallVoidMethod(player,c->setSprinting,JNI_FALSE);
+        clearException(env);
+    }
     m_logicalController.debug().event(entry==LiveInteractionTransform::Entry::Click
         ? "CLICK_PULSE" : "HELD_PULSE",
         m_logicalController.latest());
@@ -7634,6 +7936,7 @@ void GameBindings::release(JNIEnv* const env) noexcept
     // native bookkeeping and could leave PlayerControllerMP mid-dig.
     if (env != nullptr &&
         (m_logicalController.requiresDrain() || m_safewalkSneakForced ||
+         m_sprintKeyForced ||
          m_aimSensitivityModified)) {
         (void)updateGameplay(env, GameplaySettings{}, m_snapshot, 0U);
     }
@@ -7645,8 +7948,10 @@ void GameBindings::release(JNIEnv* const env) noexcept
     m_interactionObserver.stop();
     m_logicalInteractionHook.stop();
     m_logicalJumpHook.stop();
+    m_headingHook.stop();
     m_logicalMovementHook.stop();
     m_smartHotbarHook.stop();
+    restoreHotbarMovement(env);
     m_itemUseHook.stop();
     m_impulseHook.stop();
     m_velocityHook.stop();
@@ -7716,6 +8021,8 @@ void GameBindings::release(JNIEnv* const env) noexcept
     m_inputGrabStateKnown = false;
     m_inputWasGrabbed = true;
     m_safewalkSneakForced = false;
+    m_sprintKeyForced = false;
+    m_sprintKeyCode = 0;
     m_safewalkSneakKeyCode = 0;
     m_safewalkSupportMask = 0U;
     m_safewalkReleaseAt = 0U;
@@ -7745,7 +8052,10 @@ void GameBindings::abandon() noexcept
     m_attackOwnershipHook.abandon();
     m_logicalInteractionHook.abandon();
     m_logicalJumpHook.abandon();
+    m_headingHook.abandon();
     m_logicalMovementHook.abandon();
+    m_sprintFeatureEnabled.store(false,std::memory_order_release);
+    m_sprintOwner.store(SprintOwner::Vanilla,std::memory_order_release);
     m_smartHotbarHook.abandon();
     m_itemUseHook.abandon();
     m_impulseHook.abandon();

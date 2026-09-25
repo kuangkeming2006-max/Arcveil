@@ -11,7 +11,10 @@ namespace mcoverlay {
 inline jbyteArray weaveJumpMethod(JNIEnv* env,
                                  std::span<const unsigned char> bytes,
                                  const char* name,
-                                 const char* descriptor) noexcept {
+                                 const char* descriptor,
+                                 const char* bridgeClass="mcoverlay/NativeLogicalBridge_v32",
+                                 const char* preMethod="beginJump",
+                                 const char* postMethod="endJump") noexcept {
 #define JUMP_GET(var, expression) auto var=(expression); if(env->ExceptionCheck() || !var) return nullptr
 #define JUMP_DO(expression) expression; if(env->ExceptionCheck()) return nullptr
     JUMP_GET(readerClass,env->FindClass("jdk/internal/org/objectweb/asm/ClassReader"));
@@ -47,9 +50,9 @@ inline jbyteArray weaveJumpMethod(JNIEnv* env,
     JUMP_GET(equals,env->GetMethodID(stringClass,"equals","(Ljava/lang/Object;)Z"));
     JUMP_GET(wantedName,env->NewStringUTF(name));
     JUMP_GET(wantedDesc,env->NewStringUTF(descriptor));
-    JUMP_GET(bridgeName,env->NewStringUTF("mcoverlay/NativeLogicalBridge_v32"));
-    JUMP_GET(beginName,env->NewStringUTF("beginJump"));
-    JUMP_GET(endName,env->NewStringUTF("endJump"));
+    JUMP_GET(bridgeName,env->NewStringUTF(bridgeClass));
+    JUMP_GET(beginName,env->NewStringUTF(preMethod));
+    JUMP_GET(endName,env->NewStringUTF(postMethod));
     JUMP_GET(boundaryDesc,env->NewStringUTF("(Ljava/lang/Object;)V"));
     JUMP_GET(input,env->NewByteArray(static_cast<jsize>(bytes.size())));
     JUMP_DO(env->SetByteArrayRegion(input,0,static_cast<jsize>(bytes.size()),

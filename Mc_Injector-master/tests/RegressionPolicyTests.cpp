@@ -79,10 +79,34 @@ int main()
     check(itemUse!=std::string::npos&&hotbarHook!=std::string::npos&&
         bindingSource.substr(itemUse,hotbarHook-itemUse).find("windowClick")==std::string::npos,
         "right-click refill hook only enqueues and cannot create PacketOrderE");
-    check(bindingSource.substr(hotbarProcess,
-            bindingSource.find("bool GameBindings::updateGameplay",hotbarProcess)-hotbarProcess)
-            .find("moving||sprinting||action")!=std::string::npos,
-        "main-inventory hotbar moves wait for a neutral input boundary");
+    const auto hotbarBody=bindingSource.substr(hotbarProcess,
+        bindingSource.find("bool GameBindings::updateGameplay",hotbarProcess)-hotbarProcess);
+    check(hotbarBody.find("if(actionHeld")!=std::string::npos&&
+          hotbarBody.find("m_refillQueuedPacketSerial")!=std::string::npos,
+        "hotbar changes await action release and a post-use movement boundary");
+    check(hotbarBody.find("HotbarPausePhase::AwaitNeutralPacket")!=std::string::npos&&
+          hotbarBody.find("setHotbarMovementPaused(env,player)")!=std::string::npos&&
+          hotbarBody.find("std::hypot(velocityX,velocityZ)")==std::string::npos,
+        "inventory transfer waits for neutral packet, not residual horizontal velocity");
+    const auto packetSerializer=bindingSource.find("jobject GameBindings::serializeLogicalPacket");
+    const auto packetEnd=bindingSource.find("bool GameBindings::setFreeLookPerspective",packetSerializer);
+    const auto packetBody=bindingSource.substr(packetSerializer,packetEnd-packetSerializer);
+    check(packetBody.find("IsInstanceOf(packet,c->positionPacketClass)")!=std::string::npos&&
+          packetBody.find("IsInstanceOf(packet,c->positionLookPacketClass)")!=std::string::npos&&
+          packetBody.find("if(original==silent::PacketKind::Unknown) return packet;")!=std::string::npos,
+        "packet rewrite preserves position for adapted C04/C06 subclasses and passes unknown payloads");
+    const auto headingPre=bindingSource.find("void GameBindings::beginLogicalHeading");
+    const auto headingPost=bindingSource.find("void GameBindings::endLogicalHeading",headingPre);
+    const auto headingBody=bindingSource.substr(headingPre,headingPost-headingPre);
+    check(headingBody.find("setSprinting,JNI_FALSE")!=std::string::npos&&
+          headingBody.find("c->getAIMoveSpeed")!=std::string::npos&&
+          headingBody.find("setSprinting,JNI_FALSE")<headingBody.find("c->getAIMoveSpeed"),
+        "heading PRE clears sprint before vanilla movement speed is observed");
+    const auto moveBegin=bindingSource.find("jfloat GameBindings::beginLogicalMovement");
+    const auto moveForward=bindingSource.find("jfloat GameBindings::logicalMovementForward",moveBegin);
+    check(bindingSource.substr(moveBegin,moveForward-moveBegin).find(
+              "CallVoidMethod(entity,c->setSprinting")==std::string::npos,
+        "moveFlying never applies a late sprint-speed patch");
     check(bindingSource.find("(!snapshot.hypixelServer && entity.player)")!=std::string::npos&&
         bindingSource.find("IsInstanceOf(entity,cache->playerClass)")!=std::string::npos,
         "offline combat recognizes player class without online TAB membership");
@@ -100,9 +124,10 @@ int main()
         "candidate COM declaration preserves SDK inherited slots exactly once");
     const auto update=tsf.find("HRESULT TsfCandidates::UpdateUIElement");
     const auto end=tsf.find("HRESULT TsfCandidates::EndUIElement",update);
-    check(tsf.substr(update,end-update).find("read(id)")==std::string::npos&&
-          tsf.substr(update,end-update).find("PostMessageW")!=std::string::npos,
-        "TIP update callback only queues reads, avoiding candidate COM reentrancy");
+    check(tsf.substr(update,end-update).find("read(id)")!=std::string::npos&&
+          tsf.substr(update,end-update).find("PostMessageW")==std::string::npos&&
+          tsfHeader.find("m_pendingId")==std::string::npos,
+        "TIP update reads only its live ID; no deferred ID is retained");
     check(tsf.find("restoreHiddenOnWindowThread();")!=std::string::npos&&
           tsf.find("if(m_transitioning) m_transitioning=false;")!=std::string::npos,
         "layout reset restores native UI and deferred settle cannot wait forever for Begin");

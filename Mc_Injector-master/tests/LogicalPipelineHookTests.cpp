@@ -4,6 +4,7 @@
 #include "../agent/bindings/LiveImpulseTransform.h"
 #include "../agent/bindings/LiveInteractionObserver.h"
 #include "../agent/bindings/LiveJumpTransform.h"
+#include "../agent/bindings/LiveHeadingTransform.h"
 #include "../agent/bindings/LiveFreeLookTransform.h"
 #include "../agent/bindings/LiveMovementTransform.h"
 #include "../agent/bindings/LivePacketTransform.h"
@@ -33,6 +34,9 @@ struct State final {
     float originalJumpYaw = 0.0F;
     bool originalJumpSprinting = false;
     bool jumpApplied = false;
+    int headingPreCalls=0;
+    int headingPostCalls=0;
+    bool headingOwner=false;
     double previousPacketYaw = 0.0;
     bool havePacketYaw = false;
     bool packetContinuous = true;
@@ -101,6 +105,7 @@ struct State final {
     static bool arbitrateSprint(void* owner,JNIEnv*,jobject,
                                 const bool requested) noexcept {
         auto& state=*static_cast<State*>(owner);
+        if(state.headingOwner) return false;
         return state.controller.arbitrateSprint(requested,state.minecraftTick);
     }
     static void beginJump(void* owner,JNIEnv* env,jobject fixture) noexcept {
@@ -123,6 +128,14 @@ struct State final {
         if(state.jumpApplied)
             env->SetFloatField(fixture,state.yaw,state.originalJumpYaw);
         state.jumpApplied=false;
+    }
+    static void headingPre(void* owner,JNIEnv* env,jobject fixture) noexcept {
+        auto& state=*static_cast<State*>(owner);
+        ++state.headingPreCalls;
+        env->SetBooleanField(fixture,state.sprinting,JNI_FALSE);
+    }
+    static void headingPost(void* owner,JNIEnv*,jobject) noexcept {
+        ++static_cast<State*>(owner)->headingPostCalls;
     }
     static bool interact(void* owner, JNIEnv* env, jobject fixture,
                          const mcoverlay::LiveInteractionTransform::Entry entry,
@@ -210,6 +223,7 @@ int main(int argc, char** argv)
         ? env->NewObject(fixtureClass,constructor):nullptr;
     if (!fixtureClass || !fixture || !alternateTarget || env->ExceptionCheck()) return 5;
     jmethodID move = env->GetMethodID(fixtureClass, "moveFlying", "(FFF)V");
+    jmethodID heading=env->GetMethodID(fixtureClass,"moveEntityWithHeading","(FF)V");
     jmethodID setSprinting=env->GetMethodID(fixtureClass,"setSprinting","(Z)V");
     jmethodID jump = env->GetMethodID(fixtureClass, "jump", "()V");
     jmethodID click = env->GetMethodID(fixtureClass, "click", "()V");
@@ -224,6 +238,12 @@ int main(int argc, char** argv)
     state.arbitratedTarget=env->NewGlobalRef(alternateTarget);
     state.yaw = env->GetFieldID(fixtureClass, "yaw", "F");
     state.sprinting = env->GetFieldID(fixtureClass, "sprinting", "Z");
+    jfieldID observedHeadingSprint=env->GetFieldID(
+        fixtureClass,"observedHeadingSprint","Z");
+    jfieldID observedLunarSprintRequest=env->GetFieldID(
+        fixtureClass,"observedLunarSprintRequest","Z");
+    jfieldID observedHeadingSpeed=env->GetFieldID(
+        fixtureClass,"observedHeadingSpeed","F");
     state.command = env->GetFieldID(fixtureClass, "vanillaHeld", "I");
     jfieldID observedYaw = env->GetFieldID(fixtureClass, "observedYaw", "F");
     jfieldID observedStrafe = env->GetFieldID(fixtureClass, "observedStrafe", "F");
@@ -239,8 +259,9 @@ int main(int argc, char** argv)
         fixtureClass,"lastAttackTarget","Ljava/lang/Object;");
     jfieldID queuedPacket = env->GetFieldID(
         fixtureClass, "queuedPacket", "Ljava/lang/Object;");
-    check(move && setSprinting && jump && click && held && queuePacket && attackMethod && state.yaw &&
+    check(move && heading && setSprinting && jump && click && held && queuePacket && attackMethod && state.yaw &&
           state.sprinting && state.command && queuedPacket && observedJumpYaw &&
+          observedHeadingSprint && observedLunarSprintRequest && observedHeadingSpeed &&
           observedJumpSprinting && jumpImpulseX && jumpImpulseZ &&
           vanillaAttacks && lastAttackTarget && state.expectedTarget &&
           state.arbitratedTarget &&
@@ -327,6 +348,7 @@ int main(int argc, char** argv)
 
     mcoverlay::LiveMovementTransform movementHook;
     mcoverlay::LiveJumpTransform jumpHook;
+    mcoverlay::LiveHeadingTransform headingHook;
     mcoverlay::LiveInteractionTransform interactionHook;
     mcoverlay::LiveAttackTransform attackHook;
     mcoverlay::LivePacketTransform packetHook;
@@ -336,6 +358,8 @@ int main(int argc, char** argv)
           "live moveFlying transform installs");
     check(jumpHook.install(vm,jump,&state,&State::beginJump,&State::endJump),
           "live jump transform installs");
+    check(headingHook.install(vm,heading,&state,&State::headingPre,&State::headingPost),
+          "live moveEntityWithHeading PRE/POST transform installs");
     check(interactionHook.install(vm, click, held, &state, &State::interact),
           "live click and held transform installs");
     check(attackHook.install(vm,attackMethod,&state,&State::arbitrateAttack),
@@ -352,7 +376,8 @@ int main(int argc, char** argv)
         "live FreeLook camera transform installs");
     check(!env->ExceptionCheck(),
           "all live transform installs leave the JNI exception state clear");
-    if (!movementHook.ready() || !jumpHook.ready() || !interactionHook.ready() ||
+    if (!movementHook.ready() || !jumpHook.ready() || !headingHook.ready() ||
+        !interactionHook.ready() ||
         !attackHook.ready() ||
         !packetHook.ready() || !freeLookHook.ready()||!freeLookHook.terrainReady()) {
         std::printf("JVMTI errors movement=%d jump=%d interaction=%d attack=%d packet=%d freelook=%d\n",
@@ -363,9 +388,24 @@ int main(int argc, char** argv)
     }
     movementHook.setEnabled(true);
     jumpHook.setEnabled(true);
+    headingHook.setEnabled(true);
     interactionHook.setEnabled(true);
     attackHook.setEnabled(true);
     packetHook.setEnabled(true);
+
+    // The fixture's Force Sprint call must be vetoed independently of target
+    // acquisition; heading itself commits no movement snapshot in this test.
+    state.headingOwner=true;
+    env->SetBooleanField(fixture,state.sprinting,JNI_TRUE);
+    env->CallVoidMethod(fixture,heading,0.0F,0.98F);
+    check(!env->ExceptionCheck()&&state.headingPreCalls==1&&
+          state.headingPostCalls==1&&
+          env->GetBooleanField(fixture,observedHeadingSprint)==JNI_FALSE&&
+          env->GetBooleanField(fixture,observedLunarSprintRequest)==JNI_FALSE&&
+          std::abs(env->GetFloatField(fixture,observedHeadingSpeed)-0.10F)<0.0001F&&
+          env->GetBooleanField(fixture,state.sprinting)==JNI_FALSE,
+          "heading PRE veto reaches native speed calculation; POST does not restore sprint");
+    state.headingOwner=false;
 
     env->SetIntField(fixture,vanillaAttacks,0);
     env->CallVoidMethod(fixture,attackMethod,fixture,fixture);
@@ -707,6 +747,7 @@ int main(int argc, char** argv)
     packetHook.stop();
     interactionHook.stop();
     jumpHook.stop();
+    headingHook.stop();
     movementHook.stop();
     env->SetIntField(fixture, vanillaClicks, 0);
     env->CallVoidMethod(fixture, click);

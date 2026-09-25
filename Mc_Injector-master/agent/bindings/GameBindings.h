@@ -22,6 +22,7 @@
 #include "LiveInteractionObserver.h"
 #include "LiveMovementTransform.h"
 #include "LiveJumpTransform.h"
+#include "LiveHeadingTransform.h"
 #include "LivePacketTransform.h"
 #include "LiveFreeLookTransform.h"
 #include "FreeLookDiagnostics.h"
@@ -402,6 +403,10 @@ private:
     void endLogicalMovement(JNIEnv* env, jobject entity) noexcept;
     [[nodiscard]] bool arbitrateLogicalSprint(JNIEnv* env,jobject entity,
                                                bool requested) noexcept;
+    enum class SprintOwner : std::uint8_t { Vanilla, SilentCombat };
+    [[nodiscard]] SprintOwner syncSprintOwner() noexcept;
+    void beginLogicalHeading(JNIEnv* env,jobject entity) noexcept;
+    void endLogicalHeading(JNIEnv* env,jobject entity) noexcept;
     void beginLogicalJump(JNIEnv* env, jobject entity) noexcept;
     void endLogicalJump(JNIEnv* env, jobject entity) noexcept;
     void rotateFreeLookCamera(JNIEnv* env,jobject entity,jfloat yawDelta,
@@ -539,10 +544,21 @@ private:
     bool m_inputGrabStateKnown = false;
     bool m_inputWasGrabbed = true;
     bool m_safewalkSneakForced = false;
+    bool m_sprintKeyForced = false;
+    int m_sprintKeyCode = 0;
     std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
     std::atomic<int> m_smartHotbarRequest{0};
     std::atomic<int> m_smartHotbarRefillRequest{0};
-    std::atomic<bool> m_forceSprint{false};
+    std::atomic<std::uint64_t> m_movementPacketSerial{0U};
+    std::atomic<std::uint32_t> m_noPositionPacketRun{0U};
+    std::atomic<std::uint64_t> m_refillQueuedPacketSerial{0U};
+    enum class HotbarPausePhase : std::uint8_t { None, AwaitNeutralPacket, AwaitResumePacket };
+    HotbarPausePhase m_hotbarPausePhase=HotbarPausePhase::None;
+    std::array<int,6U> m_hotbarPauseKeys{};
+    std::uint64_t m_hotbarPausePacketSerial=0U;
+    std::uint64_t m_hotbarPauseStartedMs=0U;
+    void setHotbarMovementPaused(JNIEnv* env,jobject player) noexcept;
+    void restoreHotbarMovement(JNIEnv* env) noexcept;
     LiveHotbarTransform m_smartHotbarHook;
     LiveItemUseTransform m_itemUseHook;
     LiveImpulseTransform m_impulseHook;
@@ -564,6 +580,9 @@ private:
     LivePacketTransform m_silentRotationHook;
     LiveMovementTransform m_logicalMovementHook;
     LiveJumpTransform m_logicalJumpHook;
+    LiveHeadingTransform m_headingHook;
+    std::atomic<bool> m_sprintFeatureEnabled{false};
+    std::atomic<SprintOwner> m_sprintOwner{SprintOwner::Vanilla};
     LiveInteractionTransform m_logicalInteractionHook;
     LiveAttackTransform m_attackOwnershipHook;
     FreeLookDiagnostics m_freeLookDiagnostics;
@@ -573,6 +592,8 @@ private:
     // a cooldown instead of being permanently poisoned by a one-shot flag.
     std::uint64_t m_nextSilentRotationHookAttemptTick = 0U;
     std::uint64_t m_nextLogicalMovementHookAttemptTick = 0U;
+    std::uint64_t m_nextHeadingHookAttemptTick = 0U;
+    bool m_headingMappingMissingLogged=false;
     std::uint64_t m_nextLogicalInteractionHookAttemptTick = 0U;
     std::uint64_t m_nextAttackOwnershipHookAttemptTick = 0U;
     std::uint64_t m_nextFreeLookHookAttemptTick = 0U;

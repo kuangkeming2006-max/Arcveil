@@ -39,7 +39,6 @@ UINT TsfCandidates::refreshMessage() noexcept
 
 void TsfCandidates::resetOnWindowThread() noexcept
 {
-    const DWORD settleId=m_activeId!=TF_INVALID_COOKIE?m_activeId:m_pendingId;
     // Show(FALSE) is ownership we must explicitly return before discarding the
     // generation. Keeping the interface alive avoids querying a transitioning
     // input context from WM_INPUTLANGCHANGE.
@@ -47,12 +46,11 @@ void TsfCandidates::resetOnWindowThread() noexcept
     ++m_generation;
     m_transitioning=true;
     m_activeId=TF_INVALID_COOKIE;
-    m_pendingId=settleId;
     AcquireSRWLockExclusive(&m_lock);
     m_snapshot={};
     ReleaseSRWLockExclusive(&m_lock);
-    // Some TIPs reuse the same UI element and issue Update without a new
-    // Begin. This deferred settle clears the transition after WndProc returns.
+    // This message only settles the layout transition after WndProc returns.
+    // A UIElement ID from the old generation must never be read later.
     if(m_enabled&&m_window&&!m_refreshQueued)
         m_refreshQueued=PostMessageW(m_window,refreshMessage(),0,0)!=FALSE;
 }
@@ -60,11 +58,7 @@ void TsfCandidates::resetOnWindowThread() noexcept
 void TsfCandidates::refreshOnWindowThread() noexcept
 {
     m_refreshQueued=false;
-    const DWORD id=m_pendingId;
-    m_pendingId=TF_INVALID_COOKIE;
     if(m_transitioning) m_transitioning=false;
-    if(m_enabled&&m_thread==GetCurrentThreadId()&&id!=TF_INVALID_COOKIE)
-        (void)read(id);
 }
 
 void TsfCandidates::restoreHiddenOnWindowThread() noexcept
@@ -205,18 +199,11 @@ bool TsfCandidates::read(DWORD id) noexcept
     if(generation!=m_generation||!m_enabled||m_transitioning) {
         element->Release();return false;
     }
-    // Only hide an identified candidate UI after obtaining a usable snapshot.
-    // BeginUIElement can describe other TSF UI and must never hide it blindly.
-    // Show() can itself emit UpdateUIElement. Only change visibility when its
-    // ownership changes, avoiding a self-sustaining posted-message/query loop.
-    if(next.count>0U&&m_hiddenId!=id) {
-        restoreHiddenOnWindowThread();
-        m_hiddenId=id;
-        if(FAILED(element->Show(FALSE))) m_hiddenId=TF_INVALID_COOKIE;
-        else {m_hiddenElement=element;m_hiddenElement->AddRef();}
-    } else if(next.count==0U&&m_hiddenId==id) {
-        restoreHiddenOnWindowThread();
-    }
+    // Keep the native candidate UI visible as a fail-open second channel.
+    // Hiding it here races the render thread: a successful TSF read does not
+    // prove that the fullscreen overlay has presented even one candidate
+    // frame. Previously this could leave both channels invisible.
+    if(m_hiddenId!=TF_INVALID_COOKIE) restoreHiddenOnWindowThread();
     element->Release();
     if(generation!=m_generation||!m_enabled||m_transitioning) return false;
     m_activeId = id;
@@ -233,28 +220,21 @@ HRESULT TsfCandidates::BeginUIElement(DWORD id, BOOL* show)
     // Begin is deliberately bookkeeping-only. Calling back into the TIP while it
     // is constructing the element can re-enter TSF and corrupt its COM stack.
     m_activeId = id;
-    m_transitioning=false;
     AcquireSRWLockExclusive(&m_lock);
     m_snapshot = {};
     ReleaseSRWLockExclusive(&m_lock);
-    // A TIP is not required to emit Update after its initial Begin. Schedule
-    // the initial snapshot too, without querying COM inside this callback.
-    return UpdateUIElement(id);
+    return S_OK;
 }
 HRESULT TsfCandidates::UpdateUIElement(DWORD id)
 {
-    // A TIP callback is not a safe place to call back into its candidate COM
-    // object. Coalesce updates and read after the callback/WndProc unwinds.
-    if(!m_enabled||!m_window) return S_OK;
-    m_pendingId=id;
-    if(!m_refreshQueued)
-        m_refreshQueued=PostMessageW(m_window,refreshMessage(),0,0)!=FALSE;
+    // The TIP guarantees this ID is live only during its Update callback.
+    // read() guards against re-entry and generation changes.
+    if(m_enabled) (void)read(id);
     return S_OK;
 }
 HRESULT TsfCandidates::EndUIElement(DWORD id)
 {
     if(id==m_hiddenId) restoreHiddenOnWindowThread();
-    if(id==m_pendingId) m_pendingId=TF_INVALID_COOKIE;
     if (id == m_activeId) {
         m_activeId = TF_INVALID_COOKIE;
         AcquireSRWLockExclusive(&m_lock);

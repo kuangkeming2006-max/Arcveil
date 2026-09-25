@@ -97,4 +97,11 @@ inline constexpr std::uint32_t PackedMask=0xFFFFFFFFU;
     return -1;
 }
 
+// Switching to a ready hotbar stack is safer than an inventory click and is
+// therefore always the first refill choice.
+[[nodiscard]] inline int selectRefillSource(
+    const std::span<const ItemKind> inventory,const int currentSlot) noexcept {
+    return selectSource(inventory,currentSlot,static_cast<int>(Action::Blocks));
+}
+
 } // namespace mcoverlay::hotbar

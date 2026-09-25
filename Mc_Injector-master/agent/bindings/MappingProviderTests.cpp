@@ -122,6 +122,8 @@ int main()
         forgeCandidates.items[0]->clickMouse == "func_147116_af" &&
         forgeCandidates.items[0]->sendClickBlock == "func_147115_a" &&
         forgeCandidates.items[0]->moveFlying == "func_70060_a" &&
+        forgeCandidates.items[0]->moveEntityWithHeading == "func_70612_e" &&
+        forgeCandidates.items[0]->getAIMoveSpeed == "func_70689_ay" &&
         forgeCandidates.items[0]->isSprinting == "func_70051_ag" &&
         forgeCandidates.items[0]->setSprinting == "func_70031_b" &&
         forgeCandidates.items[0]->entityRendererName ==
@@ -177,6 +179,8 @@ int main()
         lunarCandidates.items[0]->clickMouse == "aw" &&
         lunarCandidates.items[0]->sendClickBlock == "b" &&
         lunarCandidates.items[0]->moveFlying == "a" &&
+        lunarCandidates.items[0]->moveEntityWithHeading == "g" &&
+        lunarCandidates.items[0]->getAIMoveSpeed == "bI" &&
         lunarCandidates.items[0]->isSprinting == "aw" &&
         lunarCandidates.items[0]->setSprinting == "d" &&
         lunarCandidates.items[0]->entityRendererName == "bfk" &&
@@ -233,6 +237,7 @@ int main()
                          lunarCandidates.items[0]->keyBindingName == "avb" &&
                          lunarCandidates.items[0]->gameSettingsField == "t" &&
                          lunarCandidates.items[0]->keyBindSneakField == "ad" &&
+                         lunarCandidates.items[0]->keyBindSprintField == "ae" &&
                          lunarCandidates.items[0]->getKeyCode == "i" &&
                          lunarCandidates.items[0]->setKeyBindState == "a" &&
                          lunarCandidates.items[0]->rotationPitchField == "z" &&
@@ -266,6 +271,8 @@ int main()
         lunarNamedCandidates.items[0]->sendClickBlock ==
             "sendClickBlockToController" &&
         lunarNamedCandidates.items[0]->moveFlying == "moveFlying" &&
+        lunarNamedCandidates.items[0]->moveEntityWithHeading == "moveEntityWithHeading" &&
+        lunarNamedCandidates.items[0]->getAIMoveSpeed == "getAIMoveSpeed" &&
         lunarNamedCandidates.items[0]->isSprinting == "isSprinting" &&
         lunarNamedCandidates.items[0]->setSprinting == "setSprinting" &&
         lunarNamedCandidates.items[0]->movementInputFields[0] == "moveStrafing" &&
@@ -296,6 +303,8 @@ int main()
                              "gameSettings" &&
                          lunarNamedCandidates.items[0]->keyBindSneakField ==
                              "keyBindSneak" &&
+                         lunarNamedCandidates.items[0]->keyBindSprintField ==
+                             "keyBindSprint" &&
                          lunarNamedCandidates.items[0]->setKeyBindState ==
                              "setKeyBindState" &&
                          lunarNamedCandidates.items[0]->isAirBlock == "isAirBlock",
