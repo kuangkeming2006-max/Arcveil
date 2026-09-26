@@ -67,3 +67,6 @@
 
 
 完成记录见 [REFACTOR_PLAN](REFACTOR_PLAN.md)，后续架构议题见 [REFACTOR_FOLLOWUPS](REFACTOR_FOLLOWUPS.md)。
+
+Mapping packs / Analyzer / pre-injection mapping tasks: start at
+[mapping-pipeline](modules/mapping-pipeline.md), then follow the listed boundaries.

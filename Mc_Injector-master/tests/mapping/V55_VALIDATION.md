@@ -14,3 +14,13 @@ Baseline: main fd480a8. External pack migration only; no automatic mapper.
 The first hook invocation lacked two fixture classes and failed; after compiling
 all existing fixtures the full suite passed. No real Minecraft/Lunar runtime
 compatibility claim is made from these tests.
+
+## v55.2
+
+- MappingAnalyzer / MappingProbe Release builds passed.
+- Real private JVM Attach test passed after a premain class transformer changed
+  MappingCaptureSubject; captured installed constant pool contains the changed
+  value and offline inspect preserves the fingerprint.
+- Analyzer inventory/tamper/schema/diff tests: 8 checks, 0 failures.
+- All v55.1 mapping and Agent regression suites rerun and passed unchanged.
+- Real Lunar has not been exercised; unsupported Attach/capabilities fail closed.

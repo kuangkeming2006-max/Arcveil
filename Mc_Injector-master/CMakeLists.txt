@@ -238,3 +238,4 @@ if(EXISTS "${CMAKE_ROOT}/Licenses/LGPLv3.txt")
     install(FILES "${CMAKE_ROOT}/Licenses/LGPLv3.txt"
         DESTINATION licenses RENAME Qt-LGPL-3.0.txt)
 endif()
+add_subdirectory(mapping)

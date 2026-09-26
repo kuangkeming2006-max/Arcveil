@@ -92,3 +92,12 @@ jvm bootstrap 与 runtime 有双向源码依赖，属于启停入口与 VM 适�
 - game-bindings registry → MappingPack loader → P/mapping/Json.h（纯 C++、无 Qt/JNI）。契约见 MappingPack.h；解析整包后才注册，freeze 后不替换。
 - Agent 构建/部署 → mappings/default-v1.json 外部数据。DLL 相对路径解析；controller runtime copy 与 install 必须同时携带 pack。
 - Gameplay → BindingCache 的接口不变；实际混淆名仅存在于外部 pack。
+
+## Mapping pipeline v55.2
+
+- mapping-pipeline → attach-helper CLI → MappingProbe Agent_OnAttach. This probe
+  is independent of the main Agent and its freeze lifecycle; it has no gameplay
+  hooks. Contract: hex UTF-8 JSON request with output path / UUID; bounded JSON
+  snapshot with installed class data, process identity and matching UUID.
+- Analyzer → shared MappingPack schema and Qt Core process/hash/atomic files.
+  No Agent runtime/renderer dependency. See modules/mapping-pipeline.md.
