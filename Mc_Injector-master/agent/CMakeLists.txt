@@ -160,6 +160,9 @@ add_library(McOverlayAgent SHARED
     bindings/GameBindingsCache.internal.h
     bindings/GameBindings.h
     bindings/MappingProvider.cpp
+    bindings/MappingPack.cpp
+    bindings/MappingPack.h
+    bindings/MappingSymbols.inc
     bindings/MappingProvider.h
     ipc_client.cpp
     ipc_client.h
@@ -240,6 +243,9 @@ set_target_properties(McOverlayAgent PROPERTIES
 # environment selection, Lunar legacy namespace, and freeze boundary.
 add_executable(McOverlayMappingProviderTests EXCLUDE_FROM_ALL
     bindings/MappingProvider.cpp
+    bindings/MappingPack.cpp
+    bindings/MappingPack.h
+    bindings/MappingSymbols.inc
     bindings/MappingProvider.h
     bindings/MappingProviderTests.cpp)
 target_compile_features(McOverlayMappingProviderTests PRIVATE cxx_std_20)
@@ -289,4 +295,24 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "${MC_AGENT_MINHOOK_SOURCE_DIR}/LICENSE.txt" PARENT_SCOPE)
     set(MC_AGENT_IMGUI_LICENSE_FILE
         "${MC_AGENT_IMGUI_SOURCE_DIR}/LICENSE.txt" PARENT_SCOPE)
+endif()
+
+add_custom_target(mc_mapping_packs ALL
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/mappings"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/../mapping/packs/default-v1.json"
+        "${CMAKE_BINARY_DIR}/mappings/default-v1.json"
+    VERBATIM)
+add_dependencies(McOverlayAgent mc_mapping_packs)
+add_dependencies(McOverlayMappingProviderTests mc_mapping_packs)
+add_executable(McOverlayMappingPackTests EXCLUDE_FROM_ALL
+    bindings/MappingProvider.cpp bindings/MappingPack.cpp ../tests/mapping/MappingPackTests.cpp)
+target_compile_features(McOverlayMappingPackTests PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayMappingPackTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+    MC_MAPPING_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../mapping"
+    MC_MAPPING_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/mapping")
+set_target_properties(McOverlayMappingPackTests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+add_dependencies(McOverlayMappingPackTests mc_mapping_packs)
+if(MINGW)
+    target_link_options(McOverlayMappingPackTests PRIVATE -static -static-libgcc -static-libstdc++)
 endif()

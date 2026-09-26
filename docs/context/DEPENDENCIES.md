@@ -86,3 +86,9 @@ jvm bootstrap 与 runtime 有双向源码依赖，属于启停入口与 VM 适�
 - renderer 后端资源 → overlay_renderer_backend.cpp；输入 → _input.cpp；绘图 → _draw.cpp 与各 private render 块。内部头不供 runtime/controller 消费。
 - QML 组件通过显式 host 读取根状态、信号写回；根仍连接同一套 controller singletons。未建立新的跨进程通道。
 - 两个直接编译产品实现的测试目标均已同步全部对应 source；十二个新增 QML 全部入资源清单。
+
+## Mapping pipeline v55.1
+
+- game-bindings registry → MappingPack loader → P/mapping/Json.h（纯 C++、无 Qt/JNI）。契约见 MappingPack.h；解析整包后才注册，freeze 后不替换。
+- Agent 构建/部署 → mappings/default-v1.json 外部数据。DLL 相对路径解析；controller runtime copy 与 install 必须同时携带 pack。
+- Gameplay → BindingCache 的接口不变；实际混淆名仅存在于外部 pack。

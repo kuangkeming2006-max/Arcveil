@@ -1374,44 +1374,36 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         method(candidate.getItemUseDuration,player,profile.getItemUseDuration,"()I");
         method(candidate.getEyeHeight,entity,profile.getEyeHeight,"()F");
         field(candidate.hitVector,rayHit,profile.hitVectorField,profile.vec3Signature);
-        // Forge's 1.8.9 joined.srg: ave/s, auh/d and pk/W. Named/SRG clients
-        // use the first two alternatives; descriptors disambiguate Notch IDs.
-        for(const char* name:{"objectMouseOver","field_71476_x","s"}) {
+        // Ordered alternatives are pack data, never namespace heuristics.
+        for(const auto& name:profile.cameraMouseOverCandidates) {
             field(candidate.cameraMouseOver,minecraft,name,profile.rayHitSignature);
             if(candidate.cameraMouseOver) break;
         }
-        for(const char* name:{"entityHit","field_72308_g","d"}) {
+        for(const auto& name:profile.cameraHitEntityCandidates) {
             field(candidate.cameraHitEntity,rayHit,name,profile.entitySignature);
             if(candidate.cameraHitEntity) break;
         }
-        const bool notchHit=profile.rayHitName.find('.')==std::string::npos;
-        const std::string hitTypeSignature=notchHit ? "Lauh$a;" :
-            "Lnet/minecraft/util/MovingObjectPosition$MovingObjectType;";
-        for(const char* name:{"typeOfHit","field_72313_a","a"}) {
-            field(candidate.cameraHitType,rayHit,name,hitTypeSignature);
+        for(const auto& name:profile.cameraHitTypeCandidates) {
+            field(candidate.cameraHitType,rayHit,name,profile.hitTypeSignature);
             if(candidate.cameraHitType) break;
         }
         jclass enumClass=env->FindClass("java/lang/Enum");
         if(enumClass) {method(candidate.enumOrdinal,enumClass,"ordinal","()I");env->DeleteLocalRef(enumClass);}
-        for(const char* name:{"ticksExisted","field_70173_aa","W"}) {
+        for(const auto& name:profile.entityTicksCandidates) {
             field(candidate.entityTicks,entity,name,"I"); if(candidate.entityTicks) break;
         }
-        for(const char* name:{"isSneaking","func_70093_af","av"}) {
+        for(const auto& name:profile.isSneakingCandidates) {
             method(candidate.isSneaking,entity,name,"()Z"); if(candidate.isSneaking) break;
         }
         jclass digging=nullptr;
-        const bool notch=profile.movementPacketName.find('.')==std::string::npos;
-        const std::string digName=notch ? "ir" : "net.minecraft.network.play.client.C07PacketPlayerDigging";
-        if(loadFeatureClass(digging,digName,"Interaction diagnostics","C07PacketPlayerDigging") &&
+        if(loadFeatureClass(digging,profile.diggingPacketName,"Interaction diagnostics","C07PacketPlayerDigging") &&
            makeGlobal(digging,candidate.diggingPacketClass)) {
-            const std::string actionSignature=notch ? "()Lir$a;" :
-                "()Lnet/minecraft/network/play/client/C07PacketPlayerDigging$Action;";
-            for(const char* name:{"getPosition","func_179715_a","a"}) {
+            for(const auto& name:profile.diggingPositionCandidates) {
                 method(candidate.diggingPosition,digging,name,"()"+profile.blockPosSignature);
                 if(candidate.diggingPosition) break;
             }
-            for(const char* name:{"getStatus","func_180762_c","c"}) {
-                method(candidate.diggingAction,digging,name,actionSignature);
+            for(const auto& name:profile.diggingActionCandidates) {
+                method(candidate.diggingAction,digging,name,profile.diggingActionSignature);
                 if(candidate.diggingAction) break;
             }
         }

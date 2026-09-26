@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <filesystem>
 #include <mutex>
 #include <span>
 #include <string>
@@ -348,6 +349,18 @@ struct MappingDictionary final {
     std::string getTexture;
     std::string getGlTextureId;
 
+    // Versioned pack data for the legacy resolver alternatives, in lookup order.
+    std::array<std::string, 3U> cameraMouseOverCandidates{};
+    std::array<std::string, 3U> cameraHitEntityCandidates{};
+    std::array<std::string, 3U> cameraHitTypeCandidates{};
+    std::array<std::string, 3U> entityTicksCandidates{};
+    std::array<std::string, 3U> isSneakingCandidates{};
+    std::array<std::string, 3U> diggingPositionCandidates{};
+    std::array<std::string, 3U> diggingActionCandidates{};
+    std::string hitTypeSignature;
+    std::string diggingPacketName;
+    std::string diggingActionSignature;
+
     // Strict validation prevents a partially filled or malformed external
     // dictionary from ever reaching JNI GetMethodID/GetFieldID calls.
     [[nodiscard]] bool validate(std::string* error = nullptr) const noexcept;
@@ -396,6 +409,7 @@ struct MappingCandidates final {
 class MappingRegistry final {
 public:
     MappingRegistry() noexcept;
+    explicit MappingRegistry(const std::filesystem::path& packFile) noexcept;
     ~MappingRegistry();
 
     MappingRegistry(const MappingRegistry&) = delete;

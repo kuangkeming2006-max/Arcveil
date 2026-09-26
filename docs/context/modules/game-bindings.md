@@ -23,6 +23,7 @@
 ## 内部边界
 
 MappingProvider 是纯字典/环境/registry：客户端 family 检测、候选映射、schema 校验、注册冻结。
+MappingPack.h/.cpp 读取 versioned JSON pack；MappingSymbols.inc 仅维护稳定 logical keys。默认数据来自 DLL 旁 mappings/default-v1.json（源文件 P/mapping/packs/default-v1.json），缺失或损坏会 fail closed，没有编译进 DLL 的 symbol fallback。Gameplay 仍仅消费 BindingCache。
 BedWarsState 是语言无关的 sidebar、队伍/羊毛/皮革颜色与 threat 分类。
 AimControl、SilentLockCoordinator、TrajectoryMath、SafeWalkPolicy、SmartHotbarPolicy、KnockbackEvidence 各自提供策略或数学/证据结构。
 Live*Transform / LiveInteractionObserver 及 MethodWeaver/Native*BridgeBytes 由 [jvm-hooks](jvm-hooks.md) 描述机制；游戏含义和回调决策仍由 GameBindings 所有。
@@ -66,3 +67,7 @@ RegressionPolicyTests 按职责文件读取源码，以各完整函数为范围�
 纯策略/fixture 测试不覆盖实际 Minecraft 客户端映射；无映射 OpenGL smoke 不能证明全部游戏功能正确。
 2026-09-26：Agent 构建和上述七个相关测试通过；66 个原成员函数逐字核对为唯一归属。
 
+
+## v55.1 外部 mapping pack
+
+MappingRegistry 默认构造在 freeze 前加载完整 pack；显式 path 构造供工具与测试使用。注册与 freeze 的互斥和候选优先级保持不变，registerMappingDictionary 仍是 Agent 的最终字典注册接口。MappingPackTests 使用 main fd480a8 的 C++ 导出摘要验证四份字典全部 247 个原字段；额外十个字段承载原 resolver 的 ordered aliases 与 namespace descriptor。详见 [迁移计划](../MAPPING_PIPELINE_PLAN.md) 和 P/mapping/README.md。

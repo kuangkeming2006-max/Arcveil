@@ -194,7 +194,13 @@ add_custom_target(mc_overlay_runtime_files ALL
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "$<TARGET_FILE:McOverlayNativeLoader>"
             "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/McOverlayNativeLoader.exe"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:MinecraftOverlayManager>/agent/mappings"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/mapping/packs/default-v1.json"
+            "$<TARGET_FILE_DIR:MinecraftOverlayManager>/agent/mappings/default-v1.json"
     DEPENDS
+        mc_mapping_packs
         McOverlayAgent
         McOverlayNativeLoader
         mc_overlay_attach_helper
@@ -205,6 +211,8 @@ install(TARGETS MinecraftOverlayManager
     RUNTIME DESTINATION .
 )
 install(TARGETS McOverlayAgent RUNTIME DESTINATION agent)
+install(FILES mapping/packs/default-v1.json DESTINATION agent/mappings)
+install(FILES mapping/packs/default-v1.json DESTINATION mappings)
 install(TARGETS McOverlayNativeLoader RUNTIME DESTINATION tools)
 install(FILES "${MC_OVERLAY_ATTACH_HELPER_JAR}" DESTINATION tools)
 if(WIN32)
