@@ -37,6 +37,14 @@ target_include_directories(McOverlayLogicalPipelineHookTests PRIVATE
     "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 
 add_executable(McOverlayControllerResponsivenessTests EXCLUDE_FROM_ALL
+    ../src/OverlayManagerProcess.cpp
+    ../src/OverlayManagerSettings.cpp
+    ../src/OverlayManagerConfig.cpp
+    ../src/OverlayManagerTransport.cpp
+    ../src/OverlayManagerProtocol.cpp
+    ../src/OverlayManagerServices.cpp
+    ../src/OverlayManagerGameState.cpp
+    ../src/OverlayManagerCodec.internal.cpp
     ControllerResponsivenessTests.cpp ../src/OverlayManager.cpp ../src/OverlayManager.h
     ../src/ProcessScanner.cpp ../src/ProcessScanner.h)
 target_compile_features(McOverlayControllerResponsivenessTests PRIVATE cxx_std_20)
@@ -77,6 +85,18 @@ target_link_libraries(McOverlayHotkeyCaptureTests PRIVATE Qt6::Core Qt6::Gui)
 # Isolated WGL rendering regression: no JVM, injection, game or network access.
 add_executable(McOverlayRendererTests EXCLUDE_FROM_ALL
     OverlayRendererTests.cpp
+    ../agent/overlay_renderer_state.cpp
+    ../agent/overlay_renderer_backend.cpp
+    ../agent/overlay_renderer_input.cpp
+    ../agent/overlay_renderer_ime.cpp
+    ../agent/overlay_renderer_media.cpp
+    ../agent/overlay_renderer_toasts.cpp
+    ../agent/overlay_renderer_draw.cpp
+    ../agent/overlay_renderer_world.cpp
+    ../agent/overlay_renderer_clickgui.cpp
+    ../agent/overlay_renderer_blacklist.cpp
+    ../agent/overlay_renderer_textgui.cpp
+    ../agent/overlay_renderer_stats.cpp
     ../agent/overlay_renderer.cpp ../agent/wndproc_hook.cpp
     ../agent/gaussian_blur.cpp ../agent/tsf_candidates.cpp
     ../agent/src/AgentLog.cpp

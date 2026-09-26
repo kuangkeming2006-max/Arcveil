@@ -1,0 +1,66 @@
+#pragma once
+
+#include "overlay_renderer.h"
+
+namespace mcoverlay::runtime_detail {
+std::uint32_t packFeatures(const FeatureSettings& settings) noexcept;
+std::uint32_t packExtraFeatures(const FeatureSettings& settings) noexcept;
+std::uint32_t packAimOptions(const FeatureSettings& settings) noexcept;
+std::uint64_t packFeatureHotkeys(const FeatureSettings& settings,
+                                 const std::size_t first) noexcept;
+std::uint32_t packFeatureHotkeysExtra(const FeatureSettings& settings) noexcept;
+FeatureSettings unpackFeatures(const std::uint32_t bits,
+                               const int defenseRadius = 6,
+                               const int threatRadius = 8,
+                               const int bedHotkey = VK_LMENU,
+                                const int panelOpacity = 78,
+                                const int hypixelHotkey = VK_TAB,
+                                const int hypixelOpacity = 76,
+                                const int hypixelScale = 100,
+                                const int hypixelX = -1,
+                                const int hypixelY = -1,
+                                const bool clickGuiLightTheme = false,
+                                const std::uint32_t playerColor = 0xFF3B30U,
+                                const std::uint32_t bedColor = 0xFF5C68U,
+                                const std::uint32_t panelColor = 0x191621U,
+                                const std::uint32_t hypixelColor = 0x000000U,
+                                const int hypixelHeight = 100,
+                                const int nametagOpacity = 82,
+                                const std::uint32_t nametagColor = 0x101218U,
+                                const std::uint32_t accentColor = 0x825DE8U,
+                                const int hypixelFontIndex = 1,
+                                const int nametagRange = 32,
+                                const int nametagSizeIndex = 1,
+                                const std::uint32_t hypixelRailColor = 0x825DE8U,
+                                const int hypixelRailOpacity = 100,
+                                const int safewalkReleaseDelayMs = 120,
+                                const int safewalkEdgeSensitivity = 55,
+                                const int safewalkMinimumPitch = -5,
+                                const int safewalkHotkey = VK_F8,
+                                const int flySpeedPercent = 100,
+                                const int aimSlowdownPercent = 45,
+                                const int aimSpeedPercent = 35,
+                                const std::uint32_t textGuiColor = 0x7EE7FFU,
+                                const int textGuiX = -1,
+                                const int textGuiY = -1,
+                                const int bhopAirSpeedPercent = 100,
+                                const std::uint64_t hotkeysPackedA = 0U,
+                                const std::uint64_t hotkeysPackedB = 0U,
+                                const bool fireballEspEnabled = false,
+                                const bool fireballEspFilled = true,
+                                const bool longJumpEnabled = false,
+                                const int longJumpSpeedPercent = 100,
+                                const std::uint32_t fireballEspColor = 0xFF9D3DU,
+                                const int aimMinimumDistance = 0,
+                                const int aimMaximumDistance = 16,
+                                const int aimFovDegrees = 90,
+                                const int clickGuiWidthPercent = 100,
+                                const int clickGuiHeightPercent = 100,
+                                const int clickGuiOpacity = 96,
+                                const std::uint32_t extraBits = 0x43U,
+                                const int textGuiAlignment = 2,
+                                const int localMobReach = 4,
+                                const int localAttackDelayMs = 500,
+                                const int localVelocityPercent = 100,
+                                const std::uint32_t hotkeysPackedC = 0U) noexcept;
+}

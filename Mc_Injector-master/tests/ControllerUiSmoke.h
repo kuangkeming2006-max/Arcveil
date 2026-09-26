@@ -100,7 +100,19 @@ private:
             }
             if(m_setTheme) m_setTheme(true);
         } else if(phase==21) {
-            finish(capture("about-dark"));
+            if (!capture("about-dark")) { finish(false); return; }
+            m_window->setProperty("activeRoute", "scanner");
+        } else if (phase >= 22 && phase <= 28) {
+            // All seven pages remain eagerly instantiated after component extraction.
+            // Session-only routes are selected directly in this isolated smoke run.
+            const QStringList routes{"scanner", "config", "main", "hypixel",
+                                     "player", "about", "settings"};
+            const int index = phase - 22;
+            if (m_window->property("activeRoute").toString() != routes[index] ||
+                !capture("page-" + routes[index])) { finish(false); return; }
+            if (index + 1 < routes.size())
+                m_window->setProperty("activeRoute", routes[index + 1]);
+            else finish(true);
         }
     }
     bool capture(const QString& name) {

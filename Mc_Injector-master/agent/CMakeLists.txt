@@ -135,11 +135,29 @@ add_library(McOverlayAgent SHARED
     src/AgentLog.h
     src/AgentOptions.cpp
     src/AgentOptions.h
+    src/AgentRuntimeWorkers.cpp
+    src/AgentRuntimeTelemetry.cpp
+    src/AgentRuntimeFeatures.cpp
+    src/AgentRuntimeControl.cpp
+    src/AgentRuntimeFrame.cpp
+    src/AgentRuntimeFeatures.internal.h
     src/AgentRuntime.cpp
     src/AgentRuntime.h
     bindings/BedWarsState.cpp
     bindings/BedWarsState.h
     bindings/GameBindings.cpp
+    bindings/GameBindingsResolve.cpp
+    bindings/GameBindingsSnapshot.cpp
+    bindings/GameBindingsInput.cpp
+    bindings/GameBindingsGameplay.cpp
+    bindings/GameBindingsHotbar.cpp
+    bindings/GameBindingsImpulse.cpp
+    bindings/GameBindingsBeds.cpp
+    bindings/GameBindingsDiagnostics.cpp
+    bindings/GameBindingsLogical.cpp
+    bindings/GameBindingsMovement.cpp
+    bindings/GameBindingsFreeLook.cpp
+    bindings/GameBindingsCache.internal.h
     bindings/GameBindings.h
     bindings/MappingProvider.cpp
     bindings/MappingProvider.h
@@ -149,6 +167,19 @@ add_library(McOverlayAgent SHARED
     jvm.h
     opengl_hook.cpp
     opengl_hook.h
+    overlay_renderer_state.cpp
+    overlay_renderer_backend.cpp
+    overlay_renderer_input.cpp
+    overlay_renderer_ime.cpp
+    overlay_renderer_media.cpp
+    overlay_renderer_toasts.cpp
+    overlay_renderer_draw.cpp
+    overlay_renderer_world.cpp
+    overlay_renderer_clickgui.cpp
+    overlay_renderer_blacklist.cpp
+    overlay_renderer_textgui.cpp
+    overlay_renderer_stats.cpp
+    overlay_renderer_internal.h
     overlay_renderer.cpp
     overlay_renderer.h
     wndproc_hook.cpp

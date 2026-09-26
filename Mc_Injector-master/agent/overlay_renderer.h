@@ -369,6 +369,14 @@ public:
 
 private:
     friend struct OverlayRendererTestAccess;
+    struct RenderFrameContext;
+    void renderWorldOverlay(RenderFrameContext& frame) noexcept;
+    void renderClickGui(RenderFrameContext& frame) noexcept;
+    void renderBlacklistAddDialog(RenderFrameContext& frame) noexcept;
+    void renderTextGui(RenderFrameContext& frame) noexcept;
+    void renderPlayerStatsPanel(RenderFrameContext& frame) noexcept;
+    void renderBlacklistPanel(RenderFrameContext& frame) noexcept;
+
     [[nodiscard]] bool initialize(HWND window, HGLRC context) noexcept;
     void pollFallbackInput() noexcept;
     void captureBackdropTexture() noexcept;

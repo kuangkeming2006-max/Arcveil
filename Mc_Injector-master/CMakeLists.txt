@@ -27,6 +27,15 @@ qt_add_executable(MinecraftOverlayManager
     src/ProcessScanner.h
     src/ProcessScanner.cpp
     src/OverlayManager.h
+    src/OverlayManagerProcess.cpp
+    src/OverlayManagerSettings.cpp
+    src/OverlayManagerConfig.cpp
+    src/OverlayManagerTransport.cpp
+    src/OverlayManagerProtocol.cpp
+    src/OverlayManagerServices.cpp
+    src/OverlayManagerGameState.cpp
+    src/OverlayManagerCodec.internal.cpp
+    src/OverlayManagerCodec.internal.h
     src/OverlayManager.cpp
     src/HypixelApiClient.h
     src/HypixelApiClient.cpp
@@ -90,6 +99,18 @@ qt_add_resources(MinecraftOverlayManager "qml_resources"
     PREFIX "/"
     FILES
         qml/main.qml
+        qml/WindowChrome.qml
+        qml/NavigationRail.qml
+        qml/ProcessScannerPage.qml
+        qml/LegacyFeatureControls.qml
+        qml/ConfigWorkspacePage.qml
+        qml/SessionDashboardPage.qml
+        qml/HypixelPage.qml
+        qml/AboutPage.qml
+        qml/SettingsPage.qml
+        qml/SessionActionBar.qml
+        qml/InjectionSnackbar.qml
+        qml/AttachDialog.qml
         qml/Startup.qml
         qml/ProcessCard.qml
         qml/MaterialButton.qml

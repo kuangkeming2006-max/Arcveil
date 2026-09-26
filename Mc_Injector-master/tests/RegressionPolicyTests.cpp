@@ -29,11 +29,27 @@ int main()
     check(normalizeHypixelApiKey(QString(8193, 'x')).isEmpty(), "bounded credential input");
     check(normalizeHypixelApiKey(QString::fromUtf8("错误key")).isEmpty(), "reject accidental Unicode paste");
 
-    std::ifstream bindings(std::string(MC_TEST_PROJECT_SOURCE_DIR)+
-        "/agent/bindings/GameBindings.cpp",std::ios::binary);
-    const std::string bindingSource((std::istreambuf_iterator<char>(bindings)),{});
+    const auto source = [&](const char* file) {
+        std::ifstream input(std::string(MC_TEST_PROJECT_SOURCE_DIR)+
+            "/agent/bindings/"+file,std::ios::binary);
+        check(input.good(), file);
+        return std::string((std::istreambuf_iterator<char>(input)),{});
+    };
+    const auto function = [&](const std::string& text, const char* name) {
+        const auto begin=text.find(std::string("GameBindings::")+name+"(");
+        const auto end=begin==std::string::npos ? std::string::npos : text.find("\n}",begin);
+        check(begin!=std::string::npos&&end!=std::string::npos,name);
+        return begin==std::string::npos||end==std::string::npos
+            ? std::string{} : text.substr(begin,end+2-begin);
+    };
+    const auto logicalSource=source("GameBindingsLogical.cpp");
+    const auto gameplaySource=source("GameBindingsGameplay.cpp");
+    const auto hotbarSource=source("GameBindingsHotbar.cpp");
+    const auto movementSource=source("GameBindingsMovement.cpp");
+    const auto snapshotSource=source("GameBindingsSnapshot.cpp");
+    auto bindingSource=function(logicalSource,"executeLogicalInteraction");
     const std::size_t interaction=bindingSource.find(
-        "bool GameBindings::executeLogicalInteraction");
+        "GameBindings::executeLogicalInteraction");
     const std::size_t swing=bindingSource.find(
         "CallVoidMethod(player,c->swingItem)",interaction);
     const std::size_t attack=bindingSource.find(
@@ -44,6 +60,7 @@ int main()
     const auto validate=bindingSource.find("physics_ray_stale",interaction);
     check(validate!=std::string::npos&&validate<swing,
           "PRE physics revalidation precedes swing and attack");
+    bindingSource=function(gameplaySource,"updateGameplay");
     const auto preparation=bindingSource.find("std::array<silent::TargetCandidate");
     const auto schedule=bindingSource.find("m_logicalController.updateAttackClock",preparation);
     const auto bind=bindingSource.find("m_logicalController.advance(logicalInput",preparation);
@@ -70,17 +87,11 @@ int main()
     check(bindingSource.find("m_smartHotbarKeyDown")==std::string::npos&&
         bindingSource.find("consumeSmartHotbarPress")!=std::string::npos,
         "smart hotbar uses actual consumed key binding events, never render polling");
-    const auto hotbarHook=bindingSource.find("bool GameBindings::consumeSmartHotbarPress");
-    const auto hotbarProcess=bindingSource.find("bool GameBindings::processSmartHotbarRequests",hotbarHook);
-    const auto itemUse=bindingSource.find("bool GameBindings::onItemUse");
-    check(hotbarHook!=std::string::npos&&hotbarProcess!=std::string::npos&&
-        bindingSource.substr(hotbarHook,hotbarProcess-hotbarHook).find("windowClick")==std::string::npos,
+    check(function(hotbarSource,"consumeSmartHotbarPress").find("windowClick")==std::string::npos,
         "hotbar key hook only enqueues and never mutates inventory");
-    check(itemUse!=std::string::npos&&hotbarHook!=std::string::npos&&
-        bindingSource.substr(itemUse,hotbarHook-itemUse).find("windowClick")==std::string::npos,
+    check(function(hotbarSource,"onItemUse").find("windowClick")==std::string::npos,
         "right-click refill hook only enqueues and cannot create PacketOrderE");
-    const auto hotbarBody=bindingSource.substr(hotbarProcess,
-        bindingSource.find("bool GameBindings::updateGameplay",hotbarProcess)-hotbarProcess);
+    const auto hotbarBody=function(hotbarSource,"processSmartHotbarRequests");
     check(hotbarBody.find("if(actionHeld")!=std::string::npos&&
           hotbarBody.find("m_refillQueuedPacketSerial")!=std::string::npos,
         "hotbar changes await action release and a post-use movement boundary");
@@ -88,28 +99,23 @@ int main()
           hotbarBody.find("setHotbarMovementPaused(env,player)")!=std::string::npos&&
           hotbarBody.find("std::hypot(velocityX,velocityZ)")==std::string::npos,
         "inventory transfer waits for neutral packet, not residual horizontal velocity");
-    const auto packetSerializer=bindingSource.find("jobject GameBindings::serializeLogicalPacket");
-    const auto packetEnd=bindingSource.find("bool GameBindings::setFreeLookPerspective",packetSerializer);
-    const auto packetBody=bindingSource.substr(packetSerializer,packetEnd-packetSerializer);
+    const auto packetBody=function(logicalSource,"serializeLogicalPacket");
     check(packetBody.find("IsInstanceOf(packet,c->positionPacketClass)")!=std::string::npos&&
           packetBody.find("IsInstanceOf(packet,c->positionLookPacketClass)")!=std::string::npos&&
           packetBody.find("if(original==silent::PacketKind::Unknown) return packet;")!=std::string::npos,
         "packet rewrite preserves position for adapted C04/C06 subclasses and passes unknown payloads");
-    const auto headingPre=bindingSource.find("void GameBindings::beginLogicalHeading");
-    const auto headingPost=bindingSource.find("void GameBindings::endLogicalHeading",headingPre);
-    const auto headingBody=bindingSource.substr(headingPre,headingPost-headingPre);
+    const auto headingBody=function(movementSource,"beginLogicalHeading");
     check(headingBody.find("setSprinting,JNI_FALSE")!=std::string::npos&&
           headingBody.find("c->getAIMoveSpeed")!=std::string::npos&&
           headingBody.find("setSprinting,JNI_FALSE")<headingBody.find("c->getAIMoveSpeed"),
         "heading PRE clears sprint before vanilla movement speed is observed");
-    const auto moveBegin=bindingSource.find("jfloat GameBindings::beginLogicalMovement");
-    const auto moveForward=bindingSource.find("jfloat GameBindings::logicalMovementForward",moveBegin);
-    check(bindingSource.substr(moveBegin,moveForward-moveBegin).find(
+    check(function(movementSource,"beginLogicalMovement").find(
               "CallVoidMethod(entity,c->setSprinting")==std::string::npos,
         "moveFlying never applies a late sprint-speed patch");
     check(bindingSource.find("(!snapshot.hypixelServer && entity.player)")!=std::string::npos&&
-        bindingSource.find("IsInstanceOf(entity,cache->playerClass)")!=std::string::npos,
+        function(snapshotSource,"sample").find("IsInstanceOf(entity,cache->playerClass)")!=std::string::npos,
         "offline combat recognizes player class without online TAB membership");
+    bindingSource=function(logicalSource,"consumeLogicalInteraction");
     const auto pre=bindingSource.find("m_logicalController.beginInteractionPre");
     const auto refresh=bindingSource.find("refreshAttackAtPublication(env)",pre);
     const auto dispatch=bindingSource.find("m_logicalController.clickAtInteractionPre",pre);
