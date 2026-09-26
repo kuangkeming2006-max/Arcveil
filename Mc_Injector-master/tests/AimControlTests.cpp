@@ -135,11 +135,15 @@ int main()
                 const double r=yaw*3.14159265358979323846/180.0;
                 const double x=-std::sin(r)*chosen.forward+std::cos(r)*chosen.strafe;
                 const double z=std::cos(r)*chosen.forward+std::sin(r)*chosen.strafe;
-                check(std::abs(std::hypot(chosen.forward,chosen.strafe)-modifier)<1e-9,
-                      "continuous remap preserves the inherited sneak/item-use magnitude");
-                check(std::abs(x-chosen.worldIntent.x)<1e-9&&
-                      std::abs(z-chosen.worldIntent.z)<1e-9,
-                      "continuous inverse rotation exactly preserves world direction");
+                const auto legalAxis=[&](double axis) {
+                    return std::abs(axis)<1e-9||std::abs(std::abs(axis)-modifier)<1e-9;
+                };
+                check(legalAxis(chosen.forward)&&legalAxis(chosen.strafe),
+                      "each remapped axis is a vanilla key value with the inherited slowdown");
+                const double cosine=(x*chosen.worldIntent.x+z*chosen.worldIntent.z)/
+                    (std::hypot(x,z)*std::hypot(chosen.worldIntent.x,chosen.worldIntent.z));
+                check(cosine>=std::cos(22.5*3.14159265358979323846/180.0)-1e-9,
+                      "selected vanilla direction stays within half a WASD sector of intent");
                 check(!chosen.sprinting && !chosen.onGround,"native sprint state is not rewritten");
             }
         }
@@ -148,11 +152,11 @@ int main()
             const auto sprint=movement.coordinateAxes(1.0,0.0,{0,0},{yaw,0},
                 {0,.1,.2},true,false,sector);
             const double r=yaw*3.14159265358979323846/180.0;
-            check(std::abs(sprint.forward-std::cos(r))<1e-9&&
-                  std::abs(sprint.strafe-std::sin(r))<1e-9,
-                  "sprint consumer receives the continuous committed axes");
-            check(sprint.sprinting==(std::cos(r)>=0.8),
-                  "logical sprint follows the final continuous forward component");
+            check(std::abs(sprint.forward-std::round(std::cos(r)*1.01))<1e-9&&
+                  std::abs(sprint.strafe-std::round(std::sin(r)*1.01))<1e-9,
+                  "sector-aligned movement uses discrete vanilla axes");
+            check(sprint.sprinting==(sprint.forward>=0.8),
+                  "logical sprint follows the chosen vanilla forward key");
             const double x=-std::sin(r)*sprint.forward+
                            std::cos(r)*sprint.strafe;
             const double z= std::cos(r)*sprint.forward+
@@ -795,11 +799,30 @@ int main()
     {
         using namespace mcoverlay::silent;
         MovementIntentResolver resolver;
-        const auto continuous=resolver.resolveAxes(1.0,0.0,0.0,22.5,false,1);
-        const double radians=22.5*3.14159265358979323846/180.0;
-        check(std::abs(continuous.logicalForward-std::cos(radians))<1.0e-9&&
-              std::abs(continuous.logicalStrafe-std::sin(radians))<1.0e-9,
-              "movement inverse rotation remains continuous between WASD sectors");
+        const auto sector=resolver.resolveAxes(1.0,0.0,0.0,22.0,false,1);
+        check(sector.logicalForward==1.0&&sector.logicalStrafe==0.0,
+              "between-sector movement selects a real key direction, never analog input");
+        // Independent vanilla moveFlying oracle: each result must equal one
+        // possible WASD acceleration, including slowed diagonal input.
+        for(double modifier:{.98,.294,.196,.0588})
+            for(int pf=-1;pf<=1;++pf) for(int ps=-1;ps<=1;++ps)
+                for(double yaw=-180;yaw<=180;yaw+=7.5) {
+                    const auto result=resolver.resolveAxes(pf*modifier,ps*modifier,13,yaw);
+                    const auto accelerate=[&](double f,double st) {
+                        const double scale=.1/std::max(1.0,std::hypot(f,st));
+                        const double r=yaw*3.14159265358979323846/180.0;
+                        return std::array<double,2>{(-std::sin(r)*f+std::cos(r)*st)*scale,
+                            (std::cos(r)*f+std::sin(r)*st)*scale};
+                    };
+                    const auto actual=accelerate(result.logicalForward,result.logicalStrafe);
+                    bool legal=false;
+                    for(int f=-1;f<=1;++f) for(int st=-1;st<=1;++st) {
+                        const auto expected=accelerate(f*modifier,st*modifier);
+                        legal=legal||(std::abs(actual[0]-expected[0])<1e-12&&
+                                      std::abs(actual[1]-expected[1])<1e-12);
+                    }
+                    check(legal,"movement acceleration belongs to the vanilla WASD set");
+                }
         for(const int cps:{1,7,20}) {
             FixedCpsAttackScheduler clock;
             int dispatched=0;
@@ -947,8 +970,8 @@ int main()
             controller.beginInteractionPre(20);
             check(controller.clickAtInteractionPre(20).kind==InteractionCommandKind::None,
                 "old published angle cannot release revised attack");
-            check(!controller.arbitrateSprint(true),
-                "silent aiming vetoes sprint independently of SCA");
+            check(controller.arbitrateSprint(true)==!adaptation,
+                "silent sprint veto follows the movement adaptation setting");
             if(adaptation) {
                 controller.endMovementPhase(20);
                 controller.beginInteractionPre(20);
@@ -996,6 +1019,42 @@ int main()
             check(pick(true).entityId==1&&pick(true).attackReady,
                 "newly exposed hitbox becomes eligible immediately");
         }
+    }
+    {
+        using namespace mcoverlay::silent;
+        // A reachable front face with the preferred interior aim point >3m.
+        TargetCandidate edge{81,81,{0,1.62,3.25},{-.3,0,2.95,.3,1.9,3.55},true,false,true};
+        TargetSelector selector;
+        const auto pick=selector.select({&edge,1},{0,1.62,0},{0,0},0,3,180,180,true,false,true);
+        check(pick.valid&&pick.attackReady&&std::abs(pick.distance-2.95)<1e-9,
+              "three-block selection admits a reachable hitbox with a deeper aim point");
+        edge.bounds.minZ=3.001;
+        check(!selector.select({&edge,1},{0,1.62,0},{0,0},0,3,180,180,true,false,true).valid,
+              "hitbox beyond configured range remains excluded");
+        edge.bounds.minZ=2.95;
+        check(!selector.select({&edge,1},{0,1.62,0},{0,0},0,3,180,180,true,false,false).valid,
+              "availability off retains legacy point distance semantics");
+        LogicalStateController controller;
+        LogicalFrameInput input{};
+        input.worldGeneration=1;input.localEntityId=1;input.tick=1000;input.physicsTick=1;
+        input.enabled=input.silent=input.leftMouseDown=input.coordinateMovement=true;
+        input.mode=Mode::LockOn;input.maximumDistance=3;input.attackReach=3;
+        input.eye={0,1.62,0};input.fovDegrees=360;
+        auto clear=[](const LogicalFramePlan&){return BlockRayHit{true,-1,{}};};
+        controller.reset({0,0});
+        (void)controller.advance(input,clear);
+        const auto idle=controller.movementCommand(.294,0,1);
+        check(!idle.enabled&&idle.strafe==.294&&idle.snapshotVersion==0&&
+              controller.arbitrateSprint(true,1),
+              "held attack without a target leaves movement and sprint vanilla");
+        input.candidates={&edge,1};input.tick++;
+        const auto lock=controller.advance(input,clear);
+        check(lock.silentActive&&controller.movementCommand(0,.98,2).enabled,
+              "movement activates when an actual silent target is acquired");
+        input.candidates={};input.tick+=1000;
+        (void)controller.advance(input,clear);
+        check(!controller.movementCommand(.98,0,3).enabled&&controller.arbitrateSprint(true,3),
+              "target loss releases movement and sprint while attack stays held");
     }
     std::printf("%d checks, %d failures\n",checks,failed);
     return failed ? 1 : 0;
