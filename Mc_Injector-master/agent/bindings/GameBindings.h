@@ -572,7 +572,8 @@ private:
     [[nodiscard]] bool onItemUse(JNIEnv* env,jobject minecraft,bool entering) noexcept;
     std::uint64_t m_nextSmartHotbarHookAttemptTick=0U;
     [[nodiscard]] bool consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept;
-    [[nodiscard]] bool processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noexcept;
+    [[nodiscard]] bool processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
+                                                  bool hotbarKeyPhase=false) noexcept;
     void refreshAttackAtPublication(JNIEnv* env) noexcept;
     int m_safewalkSneakKeyCode = 0;
     std::uint8_t m_safewalkSupportMask = 0U;

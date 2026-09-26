@@ -356,7 +356,8 @@ public:
         ResolvedMovementIntent result;
         const double magnitude=std::hypot(physicalForward,physicalStrafe);
         result.world.magnitude=magnitude;
-        if(magnitude<=1.0e-6) return result;
+        if(!std::isfinite(magnitude)||!std::isfinite(cameraYaw)||
+           !std::isfinite(logicalYaw)||magnitude<=1.0e-6) return result;
         constexpr double radians=3.14159265358979323846/180.0;
         const double camera=cameraYaw*radians;
         result.world.x=-std::sin(camera)*physicalForward+
@@ -367,12 +368,21 @@ public:
         const double logical=logicalYaw*radians;
         const double forward=-std::sin(logical)*result.world.x+std::cos(logical)*result.world.z;
         const double strafe=std::cos(logical)*result.world.x+std::sin(logical)*result.world.z;
-        // Preserve the exact inverse-rotated vector. Quantising it to one of
-        // eight WASD sectors changes world-space motion and creates prediction
-        // drift at large camera/silent-yaw deltas.
+        // Minecraft keyboard input has eight nonzero directions. Keep the
+        // inherited per-axis sneak/use/travel scale; a continuous inverse
+        // rotation produces analog axes vanilla cannot generate.
         static_cast<void>(sprinting); static_cast<void>(tick);
-        result.logicalForward=forward;
-        result.logicalStrafe=strafe;
+        const double scale=std::max(std::abs(physicalForward),std::abs(physicalStrafe));
+        double best=-std::numeric_limits<double>::infinity();
+        for(int f=-1;f<=1;++f) for(int s=-1;s<=1;++s) {
+            if(f==0&&s==0) continue;
+            const double score=(forward*f+strafe*s)/std::hypot(f,s);
+            if(score>best+1.0e-12) {
+                best=score;
+                result.logicalForward=f*scale;
+                result.logicalStrafe=s*scale;
+            }
+        }
         return result;
     }
     [[nodiscard]] ResolvedMovementIntent resolve(
@@ -451,6 +461,20 @@ private:
     SprintCoordinator m_sprint;
 };
 
+// Attack availability uses vanilla eye-to-hitbox distance for acquisition.
+// The aim point may lie deeper inside a reachable box. Actual attacks still
+// pass the independent ray/occlusion/reach checks.
+[[nodiscard]] inline double targetSelectionDistance(const TargetCandidate& candidate,
+    const Vec3 eye,const bool requireAttackable) noexcept {
+    const auto& b=candidate.bounds;
+    Vec3 point=candidate.aimPoint;
+    if(requireAttackable&&b.minX<b.maxX&&b.minY<b.maxY&&b.minZ<b.maxZ) {
+        point={std::clamp(eye.x,b.minX,b.maxX),std::clamp(eye.y,b.minY,b.maxY),
+               std::clamp(eye.z,b.minZ,b.maxZ)};
+    }
+    return std::hypot(std::hypot(point.x-eye.x,point.z-eye.z),point.y-eye.y);
+}
+
 class TargetSelector final {
 public:
     void reset() noexcept { m_entity=-1; m_identity=0U; }
@@ -470,8 +494,8 @@ public:
             const double dy=candidate.aimPoint.y-eye.y;
             const double dz=candidate.aimPoint.z-eye.z;
             const double horizontal=std::hypot(dx,dz);
-            const double distance=std::hypot(horizontal,dy);
-            if(!std::isfinite(distance)||horizontal<0.05||
+            const double distance=targetSelectionDistance(candidate,eye,requireAttackable);
+            if(!std::isfinite(distance)||!std::isfinite(horizontal)||horizontal<0.05||
                distance<minimumDistance||distance>maximumDistance) continue;
             const aim::Angles desired{std::atan2(dz,dx)*degrees-90.0,
                                       -std::atan2(dy,horizontal)*degrees};
@@ -1058,7 +1082,8 @@ private:
         plan.movement.physicalSprinting=input.sprinting;
         plan.movement.sprinting=input.sprinting;
         plan.movement.onGround=input.onGround;
-        if(m_committedMovementTick==input.physicsTick)
+        if(plan.silentActive&&input.coordinateMovement&&
+           m_committedMovementTick==input.physicsTick)
             plan.movement=m_committedMovement;
         plan.rayDirection=RayTraceCoordinator::direction(plan.logicalRotation);
         m_entityHit=attackTransactionActive
@@ -1220,9 +1245,9 @@ public:
         // derive a movement decision here.  If the current tick's consumer has
         // already committed a decision, every later caller obeys that one.
         m_sprintIntentRequested=requested;
-        const bool silentOwnsSprint=m_rotation.active()&&
+        const bool silentOwnsSprint=m_rotation.active()&&m_coordinateMovement&&
             m_state.leftMouseDown;
-        // Silent aiming owns sprint independently of movement adaptation.
+        // Only an active lock with control adaptation owns sprint.
         // This is a policy veto, not a decision derived from stale entity axes.
         bool allowed=!silentOwnsSprint;
         if(silentOwnsSprint&&m_sprintDecisionOwned&&
@@ -1764,6 +1789,18 @@ private:
         const bool sprintObserved=false) noexcept {
         const bool physicalSprinting=sprintObserved
             ? observedSprinting:m_state.movement.physicalSprinting;
+        if(!m_rotation.active()||!m_coordinateMovement||!m_state.leftMouseDown) {
+            // Passive scans and a held button without a lock do not commit a
+            // movement snapshot or run the input simulation.
+            m_committedMovementTick=~std::uint64_t{0};
+            MovementCommand vanilla;
+            vanilla.physicalStrafe=vanilla.strafe=physicalStrafe;
+            vanilla.physicalForward=vanilla.forward=physicalForward;
+            vanilla.physicalSprinting=vanilla.sprinting=physicalSprinting;
+            vanilla.cameraRotation=vanilla.logicalRotation=m_state.camera;
+            vanilla.logicalTick=tick;
+            return vanilla;
+        }
         if(m_committedMovementTick!=tick) {
             m_committedMovement=m_movement.coordinateAxes(
                 physicalForward,physicalStrafe,m_state.camera,m_state.logical,
@@ -1829,7 +1866,7 @@ private:
     }
     [[nodiscard]] bool commitSprintDecisionLocked(
         const std::uint64_t tick,const bool physicalSprinting) noexcept {
-        const bool owns=m_rotation.active()&&
+        const bool owns=m_rotation.active()&&m_coordinateMovement&&
             m_state.leftMouseDown;
         if(!owns) return false;
         if(m_sprintDecisionOwned&&m_sprintDecisionTick==tick) return true;

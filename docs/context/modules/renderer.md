@@ -62,3 +62,9 @@ OpenGlJvmSmoke 的 unified/split modes 验证实际 hooked 帧与 teardown；Nav
 
 只改 HUD 时读目标块和 helper 声明；只有输入/context 问题才读 hook 实现。renderer 对 game-bindings 默认仅需 snapshot 类型，不能将 BindingCache 或 JNI 操作移入绘图层。
 
+
+## v54 IME 生命周期验证入口
+
+BeginUIElement/UpdateUIElement 的 live callback 结束 layout transition；Update 在 callback 内读取，保留 m_reading guard。WM_IME_COMPOSITION 同步尝试 IMM list 0；candidate notify 在原消息内读取，WM_INPUTLANGCHANGE 仍 reset-only。ABI、ActivateEx flag 和绘制路径不变，系统候选 UI 保持可见。
+
+McOverlayImeLiveTests 是显式运行的真实 Windows TIP 测试，激活已安装中文输入法并向自己的前台窗口输入 nihao；可加 --raw 测试游戏式 HWND。诊断写 stdout，返回 0 仅表示实际候选已进入 overlay 输入快照；fixture 测试不能替代这个验收。v54 本机微软拼音的两种窗口均返回 1：composition 非空，IMM candidate count=0，未收到 candidate Update；此项未通过。完整记录见 P/tests/V54_VALIDATION.md。

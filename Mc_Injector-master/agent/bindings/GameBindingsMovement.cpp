@@ -160,7 +160,8 @@ GameBindings::SprintOwner GameBindings::syncSprintOwner() noexcept
 {
     const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
     const SprintOwner desired=m_sprintFeatureEnabled.load(std::memory_order_acquire)&&
-        leftHeld?SprintOwner::SilentCombat:SprintOwner::Vanilla;
+        leftHeld&&m_logicalController.active()
+            ?SprintOwner::SilentCombat:SprintOwner::Vanilla;
     const SprintOwner previous=m_sprintOwner.exchange(desired,std::memory_order_acq_rel);
     if(previous!=desired) {
         char detail[80]{};

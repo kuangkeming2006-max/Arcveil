@@ -86,3 +86,7 @@ jvm bootstrap 与 runtime 有双向源码依赖，属于启停入口与 VM 适�
 - renderer 后端资源 → overlay_renderer_backend.cpp；输入 → _input.cpp；绘图 → _draw.cpp 与各 private render 块。内部头不供 runtime/controller 消费。
 - QML 组件通过显式 host 读取根状态、信号写回；根仍连接同一套 controller singletons。未建立新的跨进程通道。
 - 两个直接编译产品实现的测试目标均已同步全部对应 source；十二个新增 QML 全部入资源清单。
+
+### v54 callback 行为边界补充
+
+jvm-hooks 的 hotbar consumed-key callback → game-bindings：可在该按键阶段本地选择 hotbar currentItem，包同步由原版 controller 负责；背包 windowClick 仍留在 input PRE。callback 签名、Java bridge 和 IPC 均未改动。

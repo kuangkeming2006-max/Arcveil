@@ -88,22 +88,32 @@ int main()
         bindingSource.find("consumeSmartHotbarPress")!=std::string::npos,
         "smart hotbar uses actual consumed key binding events, never render polling");
     check(function(hotbarSource,"consumeSmartHotbarPress").find("windowClick")==std::string::npos,
-        "hotbar key hook only enqueues and never mutates inventory");
+        "hotbar key hook cannot send inventory clicks");
     check(function(hotbarSource,"onItemUse").find("windowClick")==std::string::npos,
         "right-click refill hook only enqueues and cannot create PacketOrderE");
     const auto hotbarBody=function(hotbarSource,"processSmartHotbarRequests");
     check(hotbarBody.find("if(actionHeld")!=std::string::npos&&
           hotbarBody.find("m_refillQueuedPacketSerial")!=std::string::npos,
-        "hotbar changes await action release and a post-use movement boundary");
+        "inventory transfers retain action release and post-use movement checks");
+    check(hotbarBody.find("if(source>=9)")<hotbarBody.find("if(actionHeld")&&
+          hotbarBody.find("if(hotbarKeyPhase) {requeue();return false;}")<hotbarBody.find("windowClick")&&
+          hotbarBody.find("if(source>=9&&!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem)")!=std::string::npos&&
+          function(hotbarSource,"consumeSmartHotbarPress").find("processSmartHotbarRequests(env,minecraft,true)")!=std::string::npos,
+        "hotbar key phase selects locally with vanilla sync; only inventory transfers wait/send");
     check(hotbarBody.find("HotbarPausePhase::AwaitNeutralPacket")!=std::string::npos&&
           hotbarBody.find("setHotbarMovementPaused(env,player)")!=std::string::npos&&
           hotbarBody.find("std::hypot(velocityX,velocityZ)")==std::string::npos,
         "inventory transfer waits for neutral packet, not residual horizontal velocity");
+    check(hotbarBody.find("if(refill&&current!=destination) return false;")<
+              hotbarBody.find("hotbar::selectRefillSource"),
+        "manual selection supersedes stale auto-refill before choosing a source");
     const auto packetBody=function(logicalSource,"serializeLogicalPacket");
     check(packetBody.find("IsInstanceOf(packet,c->positionPacketClass)")!=std::string::npos&&
           packetBody.find("IsInstanceOf(packet,c->positionLookPacketClass)")!=std::string::npos&&
           packetBody.find("if(original==silent::PacketKind::Unknown) return packet;")!=std::string::npos,
         "packet rewrite preserves position for adapted C04/C06 subclasses and passes unknown payloads");
+    check(function(movementSource,"syncSprintOwner").find("leftHeld&&m_logicalController.active()")!=std::string::npos,
+        "sprint adaptation needs an active lock, not merely held attack");
     const auto headingBody=function(movementSource,"beginLogicalHeading");
     check(headingBody.find("setSprinting,JNI_FALSE")!=std::string::npos&&
           headingBody.find("c->getAIMoveSpeed")!=std::string::npos&&
@@ -137,6 +147,18 @@ int main()
     check(tsf.find("restoreHiddenOnWindowThread();")!=std::string::npos&&
           tsf.find("if(m_transitioning) m_transitioning=false;")!=std::string::npos,
         "layout reset restores native UI and deferred settle cannot wait forever for Begin");
+
+    std::ifstream imeFile(std::string(MC_TEST_PROJECT_SOURCE_DIR)+"/agent/overlay_renderer_input.cpp");
+    const std::string ime((std::istreambuf_iterator<char>(imeFile)),{});
+    check(ime.find("if(action==ImeMessageAction::QueryCandidates||")!=std::string::npos&&
+          ime.find("?static_cast<DWORD>(lParam):0U")!=std::string::npos&&
+          ime.find("imeCandidateRefreshMessage")==std::string::npos,
+        "IMM composition queries list zero and candidate notifications are never posted for later");
+    const auto begin=tsf.find("HRESULT TsfCandidates::BeginUIElement");
+    check(tsf.substr(begin,update-begin).find("m_transitioning=false")!=std::string::npos&&
+          tsf.substr(update,end-update).find("m_transitioning=false")<
+              tsf.substr(update,end-update).find("read(id)"),
+        "both live TSF callbacks supersede deferred layout transition");
 
     // Box collision oracle: one 1x1 cube under a standard 0.6m player body.
     // Sweep all four cardinal directions and both positive/negative corners.

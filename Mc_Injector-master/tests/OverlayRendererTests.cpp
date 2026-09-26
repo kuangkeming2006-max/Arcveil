@@ -67,14 +67,14 @@ struct TsfCandidatesTestAccess {
             "deferred message never reads a UIElement ID");
         sink->resetOnWindowThread();
         sink->BeginUIElement(8,&show);
+        check(!sink->m_transitioning&&manager.reads==1,
+            "live Begin ends transition without reading an incomplete element");
         sink->UpdateUIElement(8);
-        check(manager.reads==1&&sink->m_transitioning,
-            "Begin and Update cannot end an input-language transition early");
+        check(manager.reads==2&&!sink->m_transitioning,
+            "first live Update is never discarded after layout change");
         sink->refreshOnWindowThread();
-        check(manager.reads==1&&!sink->snapshot().active&&!sink->m_transitioning,
-            "layout settle clears transition without retrying a stale ID");
-        sink->UpdateUIElement(8);
-        check(manager.reads==2,"live Update resumes without a new Begin callback");
+        check(manager.reads==2&&!sink->snapshot().active&&!sink->m_transitioning,
+            "deferred settle never rereads a stale element");
         sink->BeginUIElement(9,&show);
         sink->EndUIElement(9);sink->refreshOnWindowThread();
         check(manager.reads==2,"candidate closure does not read an ended element");
@@ -84,17 +84,21 @@ struct TsfCandidatesTestAccess {
         Candidates words;words.sink=sink;words.reenterOnCount=true;
         manager.candidate=&words;
         sink->m_enabled=true;
+        sink->resetOnWindowThread();
         sink->BeginUIElement(11,&show);
         check(!sink->snapshot().active,"Begin cannot publish an incomplete candidate element");
+        sink->resetOnWindowThread(); // Some TIPs send Update without a new Begin.
         const int readsBeforeLiveUpdate=manager.reads;
         sink->UpdateUIElement(11);
         const auto initial=sink->snapshot();
         check(initial.active&&initial.count==2&&initial.selected==1&&
               std::wcscmp(initial.words[0].data(),L"你好")==0,
-              "Update publishes real Chinese candidates from a live element");
+              "first Update after reset publishes Chinese candidates without Begin or settle");
+        check(!sink->m_transitioning,"live Update supersedes the deferred transition");
         check(manager.reads==readsBeforeLiveUpdate+1,
               "synchronous TSF candidate read rejects nested Update re-entry");
         sink->refreshOnWindowThread();
+        check(sink->snapshot().count==2,"late settle preserves the first live candidate snapshot");
         check(words.showCalls==0&&!sink->m_refreshQueued,
               "TSF snapshot never hides the native candidate fallback");
         words.count=0;sink->UpdateUIElement(11);

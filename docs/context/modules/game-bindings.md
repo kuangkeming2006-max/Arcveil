@@ -66,3 +66,10 @@ RegressionPolicyTests 按职责文件读取源码，以各完整函数为范围�
 纯策略/fixture 测试不覆盖实际 Minecraft 客户端映射；无映射 OpenGL smoke 不能证明全部游戏功能正确。
 2026-09-26：Agent 构建和上述七个相关测试通过；66 个原成员函数逐字核对为唯一归属。
 
+
+## v54 行为修复（2026-09-26）
+
+- 开启攻击可用性时，TargetSelector 以 eye-to-hitbox 距离筛选；瞄准点仍用于角度，攻击射线仍独立验证 reach/遮挡。
+- movement 与 sprint 接管需要实际 Silent Lock 和 control adaptation；MovementIntentResolver 输出原版八方向及输入自带的每轴减速，物理 tick 仍由消费者提交。
+- Smart Hotbar 的 consumed-key callback 现在可以直接改选中 hotbar slot，不调用 syncCurrentPlayItem/windowClick；原版 controller 在正常路径同步手持物品。主背包交换仍排队到 input PRE，并保留动作释放、neutral/resume movement packet 边界。
+- 手动切槽会使旧槽位的自动补货请求失效。onItemUse 仍只观察与排队。
