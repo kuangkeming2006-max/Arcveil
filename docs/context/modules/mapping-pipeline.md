@@ -101,3 +101,6 @@ attaches its own daemon JNI thread; it never starts the main Agent or hooks.
 No read protocol can freeze a third-party JVM across separate processes: the
 second snapshot detects observed change; main Agent still performs normal JNI
 resolution and immutable-cache publication afterward.
+
+## Stage 5 — developer console and distribution
+MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.5.

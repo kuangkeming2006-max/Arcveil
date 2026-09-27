@@ -95,7 +95,7 @@ private:
         } else if(phase==20) {
             auto* build=find(m_window->contentItem(),"aboutBuildLabel");
             if(m_window->property("activeRoute").toString()!="about"||!build||
-               !build->property("text").toString().contains("v53")||!capture("about-light")) {
+               !build->property("text").toString().contains("v55.5")||!capture("about-light")) {
                 finish(false);return;
             }
             if(m_setTheme) m_setTheme(true);
@@ -112,7 +112,20 @@ private:
                 !capture("page-" + routes[index])) { finish(false); return; }
             if (index + 1 < routes.size())
                 m_window->setProperty("activeRoute", routes[index + 1]);
-            else finish(true);
+        } else if (phase == 29) {
+            m_popup = m_window->findChild<QObject*>("mappingConsole");
+            auto* button = find(m_window->contentItem(), "openMappingConsoleButton");
+            if (!m_popup || m_popup->property("visible").toBool() || !button || !button->isVisible()) { finish(false); return; }
+            QTest::mouseClick(m_window, Qt::LeftButton, Qt::NoModifier,
+                button->mapToScene(QPointF(button->width()/2,button->height()/2)).toPoint());
+        } else if (phase == 30) {
+            if (!m_popup->property("opened").toBool() || !capture("mapping-console-dark")) { finish(false); return; }
+            if (m_setTheme) m_setTheme(false);
+        } else if (phase == 31) {
+            if (!capture("mapping-console-light")) { finish(false); return; }
+            QMetaObject::invokeMethod(m_popup,"close");
+        } else if (phase == 32) {
+            finish(!m_popup->property("visible").toBool());
         }
     }
     bool capture(const QString& name) {

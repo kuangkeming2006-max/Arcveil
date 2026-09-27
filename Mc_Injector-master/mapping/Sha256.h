@@ -2,8 +2,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <wincrypt.h>
 #include <windows.h>
+// Windows types must precede the CryptoAPI declarations.
+#include <wincrypt.h>
 namespace mcoverlay::mapping {
 inline std::string windowsSha256(std::string_view bytes) {
     HCRYPTPROV provider = 0;

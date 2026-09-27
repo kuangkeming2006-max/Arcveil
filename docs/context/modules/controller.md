@@ -79,3 +79,5 @@ Mapping preflight now lives in MappingService.h/.cpp. OverlayManager remains in
 Validating until the service emits ready(pack,digest); launchVerifiedAgent then
 starts the existing injection path. closeSessionTransport cancels the preflight.
 See mapping-pipeline.md for cache, subprocess and startup-options contracts.
+
+Mapping Console v55.5: main.cpp registers MappingService as a QML singleton. MappingEventModel is a bounded 2,000-row view over JSONL events; clearing the view preserves disk logs. Cancel routes through OverlayManager.detach to reset the owner session; rollback only selects the next injection revision.

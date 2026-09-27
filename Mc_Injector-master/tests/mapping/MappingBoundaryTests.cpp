@@ -89,6 +89,11 @@ int main(int argc, char **argv) {
     corrupt.write("tampered");
     corrupt.close();
     check(!cache.lookup("fingerprint", "contract").valid(), "corrupt verified cache rejected");
+    const auto indexPath=dir.path()+"/cache/index.json";
+    auto index=readObject(indexPath);
+    index["previous"]=QJsonObject{{"fingerprint","../../outside"}};
+    writeObject(indexPath,index);
+    check(!cache.rollback(), "malformed previous revision rejected before path access");
     std::printf("Mapping boundaries/cache: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

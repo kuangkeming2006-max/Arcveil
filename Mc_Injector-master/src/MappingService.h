@@ -2,6 +2,7 @@
 #include "../mapping/cache/MappingCache.h"
 #include <QJsonObject>
 #include <QObject>
+#include "MappingEventModel.h"
 #include <QPointer>
 #include <QProcess>
 #include <QStringList>
@@ -9,6 +10,8 @@
 #include <functional>
 class MappingService final : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QAbstractItemModel *events READ events CONSTANT)
+    Q_PROPERTY(double progress READ progress NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(QString fingerprint READ fingerprint NOTIFY changed)
@@ -16,10 +19,13 @@ class MappingService final : public QObject {
   public:
     explicit MappingService(QObject *parent = nullptr);
     ~MappingService() override;
+    QAbstractItemModel *events() { return &m_events; }
+    double progress() const { return m_progress; }
+    Q_INVOKABLE void clearEvents() { m_events.clear(); }
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
     QString fingerprint() const { return m_fingerprint; }
-    QString logPath() const { return m_run + "/events.jsonl"; }
+    QString logPath() const { return m_run.isEmpty() ? QString{} : m_run + "/events.jsonl"; }
     void prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
                  const QString &toolsJar);
     Q_INVOKABLE void cancel();
@@ -45,6 +51,8 @@ class MappingService final : public QObject {
         m_start, m_contractDigest;
     QString m_analyzer, m_contracts, m_defaultPack;
     QPointer<QProcess> m_process;
+    MappingEventModel m_events;
+    double m_progress = -1;
     QTimer m_timeout;
     quint64 m_generation = 0;
     quint32 m_pid = 0;

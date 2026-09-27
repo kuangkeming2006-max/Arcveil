@@ -79,6 +79,12 @@ struct MappingServiceTests {
         start();
         check(wait() && ready == 4 && heartbeats > priorBeats + 2,
               "JSONL flood remains responsive");
+        service.clearEvents();
+        check(service.events()->rowCount() == 0, "clear console view");
+        service.event({{"event", "progress"}, {"completed", 2}, {"total", 4}});
+        check(service.progress() == 0.5 && service.events()->rowCount() == 1, "structured progress reaches console");
+        for (int i=0;i<2010;++i) service.m_events.append({{"event","symbol"},{"symbol",QString::number(i)}});
+        check(service.events()->rowCount() == 2000 && service.events()->data(service.events()->index(0,0), MappingEventModel::Symbol).toString() == "10", "console bounds retained events");
         std::printf("MappingService: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }

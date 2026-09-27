@@ -438,6 +438,7 @@ ApplicationWindow {
             // Settings -------------------------------------------------------
             SettingsPage {
                 host: app
+                onMappingConsoleRequested: mappingConsole.open()
                 onAutoRefreshRequested: function(enabled) { app.autoRefresh = enabled }
             }
         }
@@ -455,6 +456,9 @@ ApplicationWindow {
     // renderer reports RENDERER_READY (OverlayManager.Active), not merely when
     // the DLL handshake succeeds.
     InjectionSnackbar { id: injectionSnackbar; host: app }
+
+    MappingConsole { id: mappingConsole; host: app }
+    Shortcut { sequence: "Ctrl+Shift+M"; onActivated: mappingConsole.open() }
 
     AttachDialog {
         id: attachDialog

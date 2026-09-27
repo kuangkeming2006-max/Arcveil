@@ -37,7 +37,7 @@ target_include_directories(McOverlayLogicalPipelineHookTests PRIVATE
     "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 
 add_executable(McOverlayControllerResponsivenessTests EXCLUDE_FROM_ALL
-    ../src/MappingService.cpp ../src/MappingService.h ../mapping/cache/MappingCache.cpp
+    ../src/MappingService.cpp ../src/MappingEventModel.cpp ../src/MappingService.h ../mapping/cache/MappingCache.cpp
     ../src/OverlayManagerProcess.cpp
     ../src/OverlayManagerSettings.cpp
     ../src/OverlayManagerConfig.cpp

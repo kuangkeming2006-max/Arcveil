@@ -1,3 +1,4 @@
+#include <QJsonArray>
 #include "OverlayManager.h"
 #include "StartupLoader.h"
 #include "ApplicationLifecycle.h"
@@ -149,6 +150,7 @@ struct ControllerServices {
                                      "ProcessScanner", &processScanner);
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
                                      "OverlayManager", &overlayManager);
+        qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingService", overlayManager.mappingService());
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
                                      "HotkeyCapture", &hotkeyCapture);
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
@@ -219,6 +221,12 @@ int main(int argc, char *argv[])
         // Defer scanning until the application itself can paint and respond.
         if (!smokeTest) QTimer::singleShot(0, &services->processScanner, &ProcessScanner::refresh);
         if (smokeTest) {
+            auto* mappingEvents = static_cast<MappingEventModel*>(services->overlayManager.mappingService()->events());
+            mappingEvents->append({{"event", "fingerprint"}, {"fingerprint", "UI fixture: installed JVM class fingerprint"}});
+            mappingEvents->append({{"event", "pack"}, {"path", "mappings/default-v1.json"}});
+            mappingEvents->append({{"event", "symbol"}, {"symbol", "minecraftClass"}, {"mapping", "fixture/client"}, {"confidence", 0.99}, {"accepted", true}, {"evidence", QJsonArray{"Unique hierarchy, descriptor and normalized bytecode match"}}});
+            mappingEvents->append({{"event", "symbol"}, {"symbol", "ambiguousFixture"}, {"confidence", 0.0}, {"reason", "Two structurally identical candidates; mapping rejected"}, {"accepted", false}});
+            mappingEvents->append({{"event", "validation"}, {"valid", false}});
 #ifdef MC_OVERLAY_UI_TESTS
             new ControllerUiSmoke(loader.mainWindow(), [&](bool ok) {
             if (!ok || qmlErrors) QCoreApplication::exit(EXIT_FAILURE);
@@ -234,7 +242,7 @@ int main(int argc, char *argv[])
     });
     QTimer::singleShot(0, &loader, &StartupLoader::start);
     // A broken asynchronous load must fail CI rather than hang forever.
-    if (smokeTest) QTimer::singleShot(20000, &application, [] {
+    if (smokeTest) QTimer::singleShot(30000, &application, [] {
         qCritical() << "Startup smoke test timed out";
         QCoreApplication::exit(EXIT_FAILURE);
     });

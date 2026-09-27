@@ -7,6 +7,7 @@ import McOverlay 1.0
 Item {
     required property var host
     signal autoRefreshRequested(bool enabled)
+    signal mappingConsoleRequested()
     id: settingsPage
     WheelPage {
         anchors.fill: parent
@@ -32,6 +33,15 @@ Item {
             text: "Native JVM agent runtime and discovery preferences"
             color: host.secondaryTextColor
             font.pixelSize: 14
+        }
+
+        MaterialButton {
+            objectName: "openMappingConsoleButton"
+            text: "Open Mapping Console"
+            Layout.preferredWidth: 230
+            containerColor: host.primaryColor
+            foregroundColor: host.primaryForegroundColor
+            onClicked: settingsPage.mappingConsoleRequested()
         }
 
         GridLayout {
@@ -288,7 +298,7 @@ Item {
                 Text { text: "Minecraft 1.8.9 bindings"; color: host.textColor; font.pixelSize: 17; font.weight: Font.DemiBold }
                 Text {
                     Layout.fillWidth: true
-                    text: "Forge release runtimes use SRG symbols; pure Vanilla uses embedded obfuscated 1.8.9 symbols. JNI reads health, entity IDs, positions, collision boxes and bed blocks without installing a target-side Mod or JAR."
+                    text: "Versioned mapping packs are validated against the running JVM before injection. JNI reads health, entity IDs, positions, collision boxes and bed blocks without installing a target-side Mod or JAR."
                     color: host.secondaryTextColor
                     font.pixelSize: 13
                     wrapMode: Text.WordWrap

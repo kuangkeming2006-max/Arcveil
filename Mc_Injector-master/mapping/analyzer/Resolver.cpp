@@ -188,7 +188,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             // Empty optional values are intentional authored omissions, not guesses.
             auto oldNames=values(oldValue);if(std::all_of(oldNames.begin(),oldNames.end(),[](const auto&n){return n.empty();})){ok=true;value=oldValue;reason="explicit optional omission retained";}
             if(ok)symbols[key]=value;else complete=false;
-            auto e=symbolEvent(key,ok?value:Json(nullptr),ok,reason,0.99);e["threshold"]=0.98;e["margin"]=ok?1.0:0.0;e["nameWeight"]=0.0;results.push_back(e);if(events)events(e);
+            auto e=symbolEvent(key,ok?value:Json(nullptr),ok,reason,0.99);e["threshold"]=0.98;e["margin"]=ok?1.0:0.0;e["nameWeight"]=0.0;results.push_back(e);if(events){events(e);events(Json::Object{{"event","progress"},{"phase","symbols"},{"completed",int(results.size())},{"total",int(original.at("symbols").object().size())}});}
         }
         Json attempt=Json::Object{{"dictionary",dict.at("id")},{"symbols",results},{"complete",complete}};
         if(complete){auto candidatePack=selectedPack(pack,p,dict);candidatePack["packVersion"]=pack.at("packVersion").integer()+1;auto validation=validateRuntime(candidatePack,target,contracts,{});bool allMappedValid=validation.at("valid").boolean();

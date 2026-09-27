@@ -17,7 +17,8 @@ Json readSnapshot(const std::filesystem::path& path){auto j=Json::read(path,64U*
 int main(int argc,char**argv){
     QCoreApplication app(argc,argv);const auto args=app.arguments();
     try {
-        if(args.size()<2)throw std::runtime_error("Usage: MappingAnalyzer inspect|validate|diff [--snapshot file | --pid PID --java executable] --pack file --out file");
+        if(args.size()==2 && (args[1]=="--help" || args[1]=="help")){ event("help",Json::Object{{"usage","MappingAnalyzer inspect|validate|resolve|diff; see docs/mapping/README.md for arguments"}});return 0;}
+        if(args.size()<2)throw std::runtime_error("Usage: MappingAnalyzer inspect|validate|resolve|diff [--snapshot file | --pid PID --java executable] --pack file --out file");
         std::map<QString,QString> options;
         for(int i=2;i<args.size();i+=2){if(i+1>=args.size()||!args[i].startsWith("--")||options.contains(args[i]))throw std::runtime_error("invalid/duplicate option");options[args[i]]=args[i+1];}
         const auto option=[&](const QString& key){auto it=options.find(key);if(it==options.end()||it->second.isEmpty())throw std::runtime_error("missing option "+key.toStdString());return it->second;};

@@ -28,6 +28,8 @@ qt_add_executable(MinecraftOverlayManager
     src/ProcessScanner.cpp
     src/MappingService.h
     src/MappingService.cpp
+    src/MappingEventModel.h
+    src/MappingEventModel.cpp
     mapping/cache/MappingCache.cpp
     src/OverlayManager.h
     src/OverlayManagerProcess.cpp
@@ -102,6 +104,7 @@ qt_add_resources(MinecraftOverlayManager "qml_resources"
     PREFIX "/"
     FILES
         qml/main.qml
+        qml/MappingConsole.qml
         qml/WindowChrome.qml
         qml/NavigationRail.qml
         qml/ProcessScannerPage.qml

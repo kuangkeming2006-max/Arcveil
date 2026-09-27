@@ -57,3 +57,5 @@ SkinAndWheelTests 运行自己的 SkinPreview/WheelPreview，并不覆盖全部 
 2026-09-26：Skin/Wheel 1048 checks、0 failures；UI smoke 保留导航、modal、refresh、主题检查，并新增七页路由加载与截图。运行日志无 QML ReferenceError/TypeError/绑定错误；深浅 About 图与拆前对照检查。
 
 按需读取：页面任务只读目标页面符号边界和其 component；属性不明确时读对应 C++ header。只有信号/绑定行为无法解释时，才读 backend setter/slot 局部实现。
+
+Mapping Console (v55.5): `P/qml/MappingConsole.qml` consumes the controller MappingService singleton and bounded MappingEventModel. SettingsPage adds mappingConsoleRequested; main.qml owns the hidden popup and Ctrl+Shift+M. No direct Agent or JNI access. UI smoke covers hidden/open/themes/close.

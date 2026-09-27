@@ -17,7 +17,7 @@ Item {
             id: aboutContent
             x: 34; y: 28; width: parent.width - 68; spacing: 18
             Text { text: "About"; color: host.textColor; font.pixelSize: 32; font.weight: Font.DemiBold }
-            Text { objectName: "aboutBuildLabel"; text: "Arcveil · Internal build v53"; color: host.secondaryTextColor; font.pixelSize: 14 }
+            Text { objectName: "aboutBuildLabel"; text: "Arcveil · Internal build v55.5"; color: host.secondaryTextColor; font.pixelSize: 14 }
 
             Rectangle {
                 Layout.fillWidth: true; Layout.preferredHeight: 210

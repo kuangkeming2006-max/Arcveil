@@ -44,6 +44,11 @@ void MappingService::event(QJsonObject value) {
         if (log.open(QIODevice::WriteOnly | QIODevice::Append))
             log.write(QJsonDocument(value).toJson(QJsonDocument::Compact) + '\n');
     }
+    m_events.append(value);
+    if (value.value("event").toString() == "progress" && value.value("total").toInt() > 0) {
+        m_progress = value.value("completed").toDouble() / value.value("total").toDouble();
+        emit changed();
+    }
     emit eventReceived(value);
 }
 void MappingService::stopProcess() {
@@ -88,6 +93,8 @@ void MappingService::fail(const QString &reason) {
 void MappingService::prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
                              const QString &toolsJar) {
     cancel();
+    m_events.clear();
+    m_progress = -1;
     m_pid = pid;
     m_java = java;
     m_helper = helper;
@@ -160,6 +167,8 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
             if (object.value("event").toString() == "fingerprint")
                 m_capture = object;
             event(object);
+            if (generation != m_generation)
+                return;
         }
         if (output->bytes.contains('\n')) {
             if (auto next = weakDrain.lock()) {
@@ -212,6 +221,9 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
 
 void MappingService::inspect(bool finalCheck) {
     m_capture = {};
+    m_progress = -1;
+    m_status = finalCheck ? "Confirming runtime fingerprint" : "Inspecting runtime classes";
+    emit changed();
     QStringList args = {"inspect",
                         "--pid",
                         QString::number(m_pid),
@@ -269,6 +281,9 @@ void MappingService::choosePack() {
     validate(m_defaultPack, false);
 }
 void MappingService::validate(const QString &pack, bool automatic) {
+    m_progress = -1;
+    m_status = "Validating mapping pack";
+    emit changed();
     event({{"event", "pack"}, {"path", pack}, {"automatic", automatic}});
     launch({"validate", "--pack", pack, "--snapshot", m_run + "/snapshot.json", "--contracts",
             m_contracts, "--out", m_run + "/validation.json"},
@@ -290,6 +305,9 @@ void MappingService::validate(const QString &pack, bool automatic) {
            });
 }
 void MappingService::resolve() {
+    m_progress = -1;
+    m_status = "Matching runtime symbols";
+    emit changed();
     const auto reference = Cache(m_root).reference(m_contractDigest);
     QStringList args = {"resolve",
                         "--pack",
@@ -331,6 +349,7 @@ void MappingService::finalize() {
            {"digest", m_hit.digest}});
     m_busy = false;
     m_status = "Mapping verified";
+    m_progress = 1;
     emit changed();
     emit ready(m_hit.pack, m_hit.digest);
 }

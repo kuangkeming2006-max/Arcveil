@@ -1,50 +1,28 @@
-# v55.1 validation
+# Internal v55.5 validation — 2026-09-27
 
-Baseline: main fd480a8. External pack migration only; no automatic mapper.
+Baseline origin/main fd480a8; branch codex/mapping-pipeline. v54 work is separate.
+Stage commits: v55.1 0bd49d9, v55.2 1a82ce8, v55.3 40f5903, v55.4 b82a2ee;
+v55.5 is the commit containing this report. Release MinGW 13.1 / Qt 6.10.1 / JDK 21.
 
-- Release Agent DLL build: passed (MinGW 13.1, Qt 6.10.1, JDK 21 headers).
-- MappingProviderTests: passed.
-- MappingPackTests: 38 checks, 0 failures; all four original dictionaries / 247 fields match frozen export digests.
-- RegressionPolicyTests: 194 checks, 0 failures.
-- AimControlTests: 68,551 checks, 0 failures.
-- LogicalPipelineHookTests: private JDK 21 JVM, all three Java fixtures, 156 checks, 0 failures.
-- BedWarsStateTests: passed. KnockbackTests: 17 checks, 0 failures.
-- NavigationTrajectoryTests: 43,271 checks, 0 failures.
+Final results (all passed):
+- MappingProvider legacy behavior; MappingPack parity 38 checks, including all 247 original fields across four dictionaries.
+- Analyzer inventory 8 checks; full 257-symbol synthetic structural rename, ambiguity, absent reference and incorrect optional descriptor rejection.
+- MappingBoundary 19 checks: digest verification, frozen registration, option validation, candidate/verified/previous, rollback, corruption, locking and malformed revision paths.
+- MappingService 13 checks: preflight ordering, cache hits, fingerprint changes, failed resolution, cancellation generations, JSONL flood responsiveness, bounded UI model and progress.
+- Agent policy 194; aim 68,551; knockback 17; navigation/trajectory 43,271; BedWars state passed.
+- Private JVM logical pipeline 156 checks. Installed transformed bytecodes captured with both standard Attach and disabled Attach/native fallback; modified constant pool verified.
+- Controller responsiveness: five-second scan, 252 UI heartbeats.
+- Controller UI smoke passed phase 33: navigation/modal behavior, hidden Mapping Console, Settings open, dark/light themes and close. Screenshots visually checked.
+- Full Release runtime built; installed with Qt/QML and compiler runtime dependencies, including a standalone tools directory.
+- ZIP extracted into a fresh directory. Packaged Analyzer schema validation and full packaged UI smoke passed with Qt/MinGW removed from PATH.
 
-The first hook invocation lacked two fixture classes and failed; after compiling
-all existing fixtures the full suite passed. No real Minecraft/Lunar runtime
-compatibility claim is made from these tests.
+Artifacts: Arcveil-v55.5.zip (50,255,103 bytes), extracted Arcveil-v55.5/Arcveil.exe.
+ZIP SHA256: 051356d09e0c1ba491b83816e14fc73308259b1410374433092028cd7929a687.
+Build logs and screenshots: build-mapping-pipeline/*-final.log, ui-v55/, ui-package-v55/ in the primary local workspace.
 
-## v55.2
-
-- MappingAnalyzer / MappingProbe Release builds passed.
-- Real private JVM Attach test passed after a premain class transformer changed
-  MappingCaptureSubject; captured installed constant pool contains the changed
-  value and offline inspect preserves the fingerprint.
-- Analyzer inventory/tamper/schema/diff tests: 8 checks, 0 failures.
-- All v55.1 mapping and Agent regression suites rerun and passed unchanged.
-- Real Lunar has not been exercised; unsupported Attach/capabilities fail closed.
-
-## v55.3
-
-Original worktree Release Analyzer build passed. Full-schema (257 keys) renamed
-class/member fixture passed; missing reference, ambiguous classes and wrong
-optional object descriptor were rejected, preserving the final-pack output.
-MappingProvider, pack parity (38), policy (194), aim (68,551), BedWars, knockback
-(17), navigation (43,271), private JVM logical hook (156) regressions all passed.
-Confidence is a rule-based exact-evidence tier, not a measured probability.
-Real Lunar remains untested; unrecognized/unsupported structures fail closed.
-
-## v55.4
-
-- Release controller + Agent + Analyzer + Probe builds passed.
-- Mapping boundary/cache tests: 18 checks, 0 failures.
-- MappingService async orchestration: 10 checks, 0 failures (includes event flood,
-  cache hit ordering, final fingerprint change, failed analysis and cancellation).
-- Real transformed private JVM capture passed through standard Attach and with
-  DisableAttachMechanism via NativeLoader fallback.
-- Whole-schema structural resolver regression passed.
-- Existing mapping/Agent suites rerun: provider, 38 parity, 194 policy, 68,551 aim,
-  BedWars, 17 knockback, 43,271 navigation, 156 private JVM hook checks passed.
-- Controller responsiveness passed (253 UI heartbeats during 5-second scan).
-- Test doubles exercise preflight success; they are not real Lunar evidence.
+Limits: no running Minecraft/Lunar client was available, so real Lunar mapping/injection
+is not claimed. Structural confidence is rule-based, not statistical calibration.
+Unknown/ambiguous runtimes require a valid reference and fail closed otherwise.
+The existing WindowsMediaBridge shutdown QProcess warning remains in smoke logs;
+no QML errors occurred in successful runs. Probe capture is per-class stable plus a
+final fingerprint recheck, not an atomic snapshot of the entire JVM.

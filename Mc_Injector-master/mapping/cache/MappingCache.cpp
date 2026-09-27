@@ -136,6 +136,8 @@ bool Cache::rollback() {
     if (key.isEmpty() || !p.contains(key))
         return false;
     auto old = p.value(key);
+    if (QUuid(old.toString()).isNull() || QUuid(old.toString()).toString(QUuid::WithoutBraces) != old.toString())
+        return false;
     const auto proof = readObject(m_root + "/objects/" + old.toString() + "/proof.json");
     if (!entry(old.toString(), proof.value("contractDigest").toString()).valid())
         return false;
