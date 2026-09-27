@@ -10,6 +10,9 @@ struct AgentOptions final {
     std::wstring pipeName;
     std::string token;
     unsigned protocol = 1U;
+    std::wstring mappingPack;
+    std::string mappingHash;
+    bool mappingOptionsValid = true;
 
     [[nodiscard]] bool valid() const noexcept;
 };

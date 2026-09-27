@@ -74,3 +74,8 @@ feature 属性、持久化字段与 Agent feature 位/位置字段是重复表�
 
 
 2026-09-26：控制器构建、响应性、HotkeyCapture 和 UI 点击/弹窗/主题 smoke 通过；116 个原成员函数体唯一且保持不变。
+
+Mapping preflight now lives in MappingService.h/.cpp. OverlayManager remains in
+Validating until the service emits ready(pack,digest); launchVerifiedAgent then
+starts the existing injection path. closeSessionTransport cancels the preflight.
+See mapping-pipeline.md for cache, subprocess and startup-options contracts.

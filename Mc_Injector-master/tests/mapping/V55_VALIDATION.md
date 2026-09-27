@@ -34,3 +34,17 @@ MappingProvider, pack parity (38), policy (194), aim (68,551), BedWars, knockbac
 (17), navigation (43,271), private JVM logical hook (156) regressions all passed.
 Confidence is a rule-based exact-evidence tier, not a measured probability.
 Real Lunar remains untested; unrecognized/unsupported structures fail closed.
+
+## v55.4
+
+- Release controller + Agent + Analyzer + Probe builds passed.
+- Mapping boundary/cache tests: 18 checks, 0 failures.
+- MappingService async orchestration: 10 checks, 0 failures (includes event flood,
+  cache hit ordering, final fingerprint change, failed analysis and cancellation).
+- Real transformed private JVM capture passed through standard Attach and with
+  DisableAttachMechanism via NativeLoader fallback.
+- Whole-schema structural resolver regression passed.
+- Existing mapping/Agent suites rerun: provider, 38 parity, 194 policy, 68,551 aim,
+  BedWars, 17 knockback, 43,271 navigation, 156 private JVM hook checks passed.
+- Controller responsiveness passed (253 UI heartbeats during 5-second scan).
+- Test doubles exercise preflight success; they are not real Lunar evidence.

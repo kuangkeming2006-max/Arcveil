@@ -62,3 +62,42 @@ Tests: Test-Resolver.py exercises the whole schema with renamed classes/members,
 ambiguity, absent reference, and wrong optional object descriptor. Bytecode
 normalization resolves constant-pool indices, excludes member names/debug data,
 normalizes branch destinations, and retains typed reference/call graph edges.
+
+## v55.4 Injector boundary and cache
+
+`P/src/MappingService.h` is the QObject API: prepare / cancel / rollback,
+busy/status/fingerprint/logPath, ready(pack,digest), failed(reason), eventReceived.
+OverlayManager remains Validating until ready; only then does it start IPC and
+the existing Attach / NativeLoader main-Agent path. Cancellation invalidates the
+operation generation. Child process output is JSONL with bounded memory and a
+32-event / 5 ms drain budget; no child-process waits run on the Qt GUI thread.
+
+Preflight: installed snapshot → fingerprint cache → authored pack live validation
+→ on failure Analyzer resolve using last verified snapshot → independent candidate
+validation → second snapshot / PID creation-time check → atomic cache promotion
+→ normal injection. No reference or ambiguous evidence means no injection.
+Known authored dependencies may be loaded without initialization through an
+already-loaded anchor's defining loader, matching the old resolver's loadClass
+behavior. Launch hints are matched in probe memory; only family/confidence is
+returned. Raw JVM properties, command lines and paths are never persisted.
+
+AgentOptions mapping (hex UTF-8 absolute path) + mappingHash (SHA-256) are a startup
+boundary only. MappingPack hashes and parses the same bounded byte buffer. It
+cannot silently fall back when the provided pack/hash is bad. GameBindings
+constructs its registry with these options before resolve/freeze. Existing
+registration methods remain intact; there is no live-registry update IPC.
+
+Cache lives in AppLocalDataLocation/mapping-cache-v1. Immutable objects hold pack,
+snapshot and digests; index.json atomically points at candidate/verified/previous.
+QLockFile serializes publication. Failed/interrupted candidates never replace a
+verified entry. Rollback swaps verified/previous for the last fingerprint and
+only affects the next injection, which rechecks the runtime. Cache entries are
+bound to the contract digest and analyzer revision. Runs retain JSONL/snapshots
+for diagnosis. Mapping Console is a later consumer of these events.
+
+The probe supports standard Attach (including Java 8 tools.jar) and the existing
+NativeLoader fallback. Its fallback worker copies options before returning and
+attaches its own daemon JNI thread; it never starts the main Agent or hooks.
+No read protocol can freeze a third-party JVM across separate processes: the
+second snapshot detects observed change; main Agent still performs normal JNI
+resolution and immutable-cache publication afterward.

@@ -36,6 +36,12 @@ constexpr int kDetachTimeoutMilliseconds = 2500;
 OverlayManager::OverlayManager(QObject *parent)
     : QObject(parent)
 {
+    connect(&m_mappingService,&MappingService::ready,this,[this](const QString& pack,const QString& digest){
+        if(m_state==State::Validating&&m_targetPid!=0)launchVerifiedAgent(pack,digest);
+    });
+    connect(&m_mappingService,&MappingService::failed,this,[this](const QString& reason){
+        if(m_state==State::Validating)fail(QStringLiteral("MAPPING_VALIDATION_FAILED"),reason);
+    });
     loadFeatureSettings();
     {
         QSettings settings;
@@ -237,6 +243,17 @@ bool OverlayManager::attachToProcess(quint32 pid)
         m_targetTitle = QStringLiteral("Minecraft 1.8.9 (PID %1)").arg(pid);
     emit targetChanged();
 
+    m_agentDllPath=agentDll;m_mappingJava=java;m_mappingHelper=attachHelper;
+    setStatusMessage(QStringLiteral("Validating runtime mappings..."));
+    m_targetMonitor.start();
+    m_mappingService.prepare(pid,java.executable,attachHelper,java.modular,java.toolsJar);
+    return true;
+}
+
+void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& digest)
+{
+    if(!targetProcessIsRunning(m_targetPid)){fail(QStringLiteral("PROCESS_EXITED"),QStringLiteral("Target exited during mapping validation."));return;}
+    const auto pid=m_targetPid;const auto agentDll=m_agentDllPath;const auto java=m_mappingJava;const auto attachHelper=m_mappingHelper;
     setState(State::StartingIpc);
     m_pipeToken = QUuid::createUuid().toString(QUuid::WithoutBraces)
                       .remove(QLatin1Char('-'));
@@ -245,11 +262,11 @@ bool OverlayManager::attachToProcess(quint32 pid)
                                    .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     if (!m_server.listen(serverName)) {
         fail(QStringLiteral("IPC_LISTEN_FAILED"), m_server.errorString());
-        return false;
+        return;
     }
 
-    const QString options = QStringLiteral("pipe=%1;token=%2;protocol=1")
-                                .arg(m_server.fullServerName(), m_pipeToken);
+    const QString options = QStringLiteral("pipe=%1;token=%2;protocol=1;mapping=%3;mappingHash=%4")
+                                .arg(m_server.fullServerName(), m_pipeToken, QString::fromLatin1(pack.toUtf8().toHex()), digest);
     m_agentDllPath = agentDll;
     m_agentOptions = options;
     QStringList arguments;
@@ -277,7 +294,7 @@ bool OverlayManager::attachToProcess(quint32 pid)
     setState(State::WaitingForAgent);
     m_attachTimeout.start();
     m_targetMonitor.start();
-    return true;
+    return;
 }
 
 void OverlayManager::detach()
@@ -514,6 +531,7 @@ void OverlayManager::monitorTarget()
 
 bool OverlayManager::closeSessionTransport()
 {
+    m_mappingService.cancel();
     if (m_closingTransport)
         return m_attachProcess.state() == QProcess::NotRunning;
     m_closingTransport = true;

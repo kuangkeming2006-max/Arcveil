@@ -1,4 +1,5 @@
 #pragma once
+#include "MappingService.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -261,6 +262,7 @@ public:
     // Returns true when the asynchronous attach was started or queued behind
     // a graceful detach. The attached property becomes true only after an
     // authenticated handshake arrives from the DLL inside the target JVM.
+    MappingService* mappingService() noexcept { return &m_mappingService; }
     Q_INVOKABLE bool attachToProcess(quint32 pid);
     Q_INVOKABLE void detach();
     Q_INVOKABLE void refreshBedCache();
@@ -409,6 +411,7 @@ private:
         bool modular = true;
     };
 
+    void launchVerifiedAgent(const QString& pack, const QString& digest);
     void acceptAgentConnection();
     void readAgentMessages();
     void handleAgentDisconnected();
@@ -467,6 +470,9 @@ private:
     void setErrorState(const QString &code, const QString &detail);
     void fail(const QString &code, const QString &detail);
 
+    MappingService m_mappingService;
+    JavaRuntime m_mappingJava;
+    QString m_mappingHelper;
     QLocalServer m_server;
     QPointer<QLocalSocket> m_agentSocket;
     QProcess m_attachProcess;

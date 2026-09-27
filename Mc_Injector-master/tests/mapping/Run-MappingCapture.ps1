@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Build,[Parameter(Mandatory=$true)][string]$Jdk)
+param([Parameter(Mandatory=$true)][string]$Build,[Parameter(Mandatory=$true)][string]$Jdk,[switch]$DisableAttach)
 $ErrorActionPreference='Stop'
 $fixture=Join-Path $Build 'mapping-fixture'
 New-Item -ItemType Directory -Force -Path $fixture | Out-Null
@@ -7,10 +7,12 @@ if($LASTEXITCODE){throw 'fixture compile failed'}
 [IO.File]::WriteAllText((Join-Path $fixture 'MANIFEST.MF'),"Premain-Class: MappingCaptureFixture`n`n")
 & "$Jdk/bin/jar.exe" cfm "$fixture/transformer.jar" "$fixture/MANIFEST.MF" -C $fixture MappingCaptureFixture.class -C $fixture 'MappingCaptureFixture$1.class'
 if($LASTEXITCODE){throw 'fixture jar failed'}
-$target=Start-Process -FilePath "$Jdk/bin/java.exe" -ArgumentList @('-javaagent:'+"$fixture/transformer.jar",'-cp',$fixture,'MappingCaptureFixture') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$fixture/target.log" -RedirectStandardError "$fixture/target-error.log"
+$javaArgs=@('-javaagent:'+"$fixture/transformer.jar",'-cp',$fixture,'MappingCaptureFixture')
+if($DisableAttach){$javaArgs=@('-XX:+DisableAttachMechanism')+$javaArgs}
+$target=Start-Process -FilePath "$Jdk/bin/java.exe" -ArgumentList $javaArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput "$fixture/target.log" -RedirectStandardError "$fixture/target-error.log"
 try {
     Start-Sleep -Milliseconds 900
-    & "$Build/MappingAnalyzer.exe" inspect --pid $target.Id --java "$Jdk/bin/java.exe" --helper "$Build/attach-helper/McOverlayAttachHelper.jar" --probe "$Build/MappingProbe.dll" --out "$fixture/snapshot.json"
+    & "$Build/MappingAnalyzer.exe" inspect --pid $target.Id --java "$Jdk/bin/java.exe" --helper "$Build/attach-helper/McOverlayAttachHelper.jar" --probe "$Build/MappingProbe.dll" --native-loader "$Build/McOverlayNativeLoader.exe" --out "$fixture/snapshot.json"
     if($LASTEXITCODE){throw 'live inspect failed'}
     $snapshot=Get-Content -Raw "$fixture/snapshot.json" | ConvertFrom-Json
     $subject=@($snapshot.classes | Where-Object name -eq 'LMappingCaptureSubject;')

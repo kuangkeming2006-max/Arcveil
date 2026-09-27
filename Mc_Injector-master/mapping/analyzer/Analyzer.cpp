@@ -17,7 +17,7 @@ Json inspectSnapshot(Json snapshot){
     if(snapshot.at("snapshotVersion").integer()!=1||!snapshot.at("complete").boolean()||snapshot.at("captureKind").string()!="jvmti-installed-double-read")throw std::runtime_error("incomplete/unsupported live snapshot");
     if(snapshot.contains("normalizedVersion")) {
         if(snapshot.at("normalizedVersion").integer()!=1)throw std::runtime_error("unsupported normalized snapshot");
-        const auto digest=sha256(Json(Json::Object{{"snapshotVersion",1},{"classes",snapshot.at("classes")}}).dump());
+        const auto digest=sha256(Json(Json::Object{{"snapshotVersion",1},{"classes",snapshot.at("classes")},{"launchEvidence",snapshot.contains("launchEvidence")?snapshot.at("launchEvidence"):Json(Json::Array{})}}).dump());
         if(snapshot.at("fingerprint").string()!=digest)throw std::runtime_error("snapshot fingerprint mismatch");
         if(snapshot.at("classes").array().empty())throw std::runtime_error("empty snapshot");
         return snapshot;
@@ -44,7 +44,7 @@ Json inspectSnapshot(Json snapshot){
     std::sort(classes.begin(),classes.end(),[](const Json&a,const Json&b){return a.at("loaderKey").string()+a.at("name").string()<b.at("loaderKey").string()+b.at("name").string();});
     // Runtime identity is tracked separately: the content fingerprint can be reused
     // across sessions, but no snapshot from another process authorizes injection.
-    const auto fingerprint=sha256(Json(Json::Object{{"snapshotVersion",1},{"classes",classes}}).dump());
+    const auto fingerprint=sha256(Json(Json::Object{{"snapshotVersion",1},{"classes",classes},{"launchEvidence",snapshot.contains("launchEvidence")?snapshot.at("launchEvidence"):Json(Json::Array{})}}).dump());
     snapshot["fingerprint"]=fingerprint;snapshot["methodCount"]=double(methods);snapshot["fieldCount"]=double(fields);
     snapshot["normalizedVersion"]=1;snapshot.object().erase("loaders");return snapshot;
 }

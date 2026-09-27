@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <mutex>
 #include <memory>
+#include <thread>
+#include <cctype>
 
 using mcoverlay::mapping::Json;
 namespace {
@@ -79,6 +81,26 @@ struct Capture {
             {"super",superRef},{"interfaces",interfaces},{"modifiers",mods},{"major",major},{"minor",minor},
             {"fields",fields},{"methods",methods},{"constantPoolCount",cpCount},{"constantPool",hex(pool.data,cpBytes)}};
     }
+    void warmup(const Json& requests){
+        jint count=0;Buffer<jclass> classes{ti};require(ti->GetLoadedClasses(&count,&classes.data),"warmup GetLoadedClasses");
+        struct Locals {JNIEnv* env;jclass* values;int count;~Locals(){for(int i=0;i<count;++i)env->DeleteLocalRef(values[i]);}} locals{env,classes.data,count};
+        for(int i=0;i<count;++i){
+            const auto name=signature(ti,classes.data[i]);
+            for(const auto& request:requests.array())if(name==request.at("anchor").string()){
+                jobject loader=nullptr;
+                if(ti->GetClassLoader(classes.data[i],&loader)==JVMTI_ERROR_NONE&&loader){
+                    jclass type=env->GetObjectClass(loader);auto load=type?env->GetMethodID(type,"loadClass","(Ljava/lang/String;)Ljava/lang/Class;"):nullptr;
+                    if(env->ExceptionCheck())env->ExceptionClear();
+                    if(load)for(const auto& binary:request.at("classes").array()){
+                        jstring text=env->NewStringUTF(binary.string().c_str());
+                        if(text){auto loaded=env->CallObjectMethod(loader,load,text);if(env->ExceptionCheck())env->ExceptionClear();if(loaded)env->DeleteLocalRef(loaded);env->DeleteLocalRef(text);}
+                        if(env->ExceptionCheck())env->ExceptionClear();
+                    }
+                    if(type)env->DeleteLocalRef(type);env->DeleteLocalRef(loader);
+                }
+            }
+        }
+    }
     Json run() {
         jint count=0;Buffer<jclass> classes{ti};require(ti->GetLoadedClasses(&count,&classes.data),"GetLoadedClasses");
         struct Locals {JNIEnv* env;jclass* values;int count;~Locals(){for(int i=0;i<count;++i)env->DeleteLocalRef(values[i]);}} locals{env,classes.data,count};
@@ -108,17 +130,28 @@ std::string decode(const char* options){
 }
 extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM* vm,char* options,void*) {
     std::unique_lock lock(captureMutex,std::try_to_lock);if(!lock.owns_lock())return 20;
-    jvmtiEnv* ti=nullptr;JNIEnv* env=nullptr;
+    jvmtiEnv* ti=nullptr;JNIEnv* env=nullptr;std::filesystem::path errorPath;
     try {
         const auto request=Json::parse(decode(options));
         const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(request.at("output").string().c_str())));
         if(!path.is_absolute())throw std::runtime_error("absolute output required");
+        errorPath=path.wstring()+L".error";
         if(vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_8)!=JNI_OK)throw std::runtime_error("JNI unavailable");
         if(vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK)throw std::runtime_error("JVMTI unavailable");
         jvmtiCapabilities wanted{};wanted.can_get_bytecodes=1;wanted.can_get_constant_pool=1;
         require(ti->AddCapabilities(&wanted),"AddCapabilities");
         Json snapshot;
-        {Capture capture{env,ti,{}};snapshot=capture.run();}
+        {Capture capture{env,ti,{}};if(request.contains("warmup"))capture.warmup(request.at("warmup"));snapshot=capture.run();}
+        Json::Array evidence;
+        if(request.contains("detection"))for(const auto* property:{"java.home","java.class.path","sun.java.command"}){
+            Buffer<char> hint{ti};if(ti->GetSystemProperty(property,&hint.data)!=JVMTI_ERROR_NONE||!hint.data)continue;
+            std::string value(hint.data);std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return char(std::tolower(c));});
+            for(const auto& pattern:request.at("detection").array()){
+                auto needle=pattern.at("value").string();std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return char(std::tolower(c));});
+                if(!needle.empty()&&value.find(needle)!=std::string::npos)evidence.push_back(Json::Object{{"family",pattern.at("family")},{"confidence",pattern.at("confidence")}});
+            }
+        }
+        snapshot["launchEvidence"]=evidence; // Never persist raw command lines, paths or property values.
         snapshot["snapshotVersion"]=1;snapshot["captureKind"]="jvmti-installed-double-read";
         snapshot["requestId"]=request.at("requestId");snapshot["pid"]=double(GetCurrentProcessId());
         FILETIME created{},exit{},kernel{},user{};
@@ -131,5 +164,29 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM* vm,char* op
         {std::ofstream file(std::filesystem::path(temporary),std::ios::binary|std::ios::trunc);auto text=snapshot.dump();file.write(text.data(),std::streamsize(text.size()));file.flush();if(!file)throw std::runtime_error("snapshot write failed");}
         if(!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("snapshot publish failed");
         return JNI_OK;
+    } catch(const std::exception& e) {
+        if(env&&env->ExceptionCheck())env->ExceptionClear();if(ti)ti->DisposeEnvironment();
+        if(!errorPath.empty())try{std::ofstream file(errorPath,std::ios::binary);file<<Json(Json::Object{{"reason",e.what()}}).dump();}catch(...){}
+        return JNI_ERR;
     } catch(...) {if(env&&env->ExceptionCheck())env->ExceptionClear();if(ti)ti->DisposeEnvironment();return JNI_ERR;}
+}
+
+// Existing native loader fallback, with a copied request and no main Agent runtime.
+// The loaded probe remains resident like any LoadLibrary-loaded JVMTI helper.
+extern "C" __declspec(dllexport) DWORD WINAPI McOverlay_Start(LPVOID rawOptions){
+    try{
+        const auto* options=static_cast<const char*>(rawOptions);if(!options)return 1;
+        std::string copy(options);if(copy.size()>65536)return 1;
+        using GetVms=jint(JNICALL*)(JavaVM**,jsize,jsize*);
+        auto module=GetModuleHandleW(L"jvm.dll");auto get=module?reinterpret_cast<GetVms>(GetProcAddress(module,"JNI_GetCreatedJavaVMs")):nullptr;
+        JavaVM* vm=nullptr;jsize count=0;if(!get||get(&vm,1,&count)!=JNI_OK||count!=1||!vm)return 1;
+        std::thread([vm,copy=std::move(copy)]()mutable{
+            JNIEnv* env=nullptr;bool attached=false;
+            if(vm->GetEnv(reinterpret_cast<void**>(&env),JNI_VERSION_1_8)!=JNI_OK){
+                if(vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void**>(&env),nullptr)!=JNI_OK)return;attached=true;
+            }
+            (void)Agent_OnAttach(vm,copy.data(),nullptr);
+            if(attached)vm->DetachCurrentThread();
+        }).detach();return 0;
+    }catch(...){return 1;}
 }

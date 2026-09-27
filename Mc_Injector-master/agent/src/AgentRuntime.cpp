@@ -44,7 +44,7 @@ AgentRuntime::AgentRuntime(JavaVM* const vm,
     m_ipc = std::make_unique<IpcClient>(m_options.pipeName);
     m_hook = std::make_unique<OpenGlHook>();
     m_renderer = std::make_unique<OverlayRenderer>();
-    m_bindings = std::make_unique<GameBindings>(m_vm, m_jvmti);
+    m_bindings = std::make_unique<GameBindings>(m_vm, m_jvmti, m_options.mappingPack, m_options.mappingHash);
 }
 
 AgentRuntime::~AgentRuntime()

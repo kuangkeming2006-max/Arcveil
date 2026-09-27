@@ -71,3 +71,8 @@ RegressionPolicyTests 按职责文件读取源码，以各完整函数为范围�
 ## v55.1 外部 mapping pack
 
 MappingRegistry 默认构造在 freeze 前加载完整 pack；显式 path 构造供工具与测试使用。注册与 freeze 的互斥和候选优先级保持不变，registerMappingDictionary 仍是 Agent 的最终字典注册接口。MappingPackTests 使用 main fd480a8 的 C++ 导出摘要验证四份字典全部 247 个原字段；额外十个字段承载原 resolver 的 ordered aliases 与 namespace descriptor。详见 [迁移计划](../MAPPING_PIPELINE_PLAN.md) 和 P/mapping/README.md。
+
+v55.4: GameBindings constructor additionally accepts an optional mapping pack path
+and digest; registry is constructed from the verified bytes before runResolver.
+Default callers still load the adjacent pack. Digest mismatch leaves the registry
+unhealthy. No setter or post-freeze registration capability was introduced.

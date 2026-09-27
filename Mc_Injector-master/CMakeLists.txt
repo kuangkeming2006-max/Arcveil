@@ -26,6 +26,9 @@ qt_add_executable(MinecraftOverlayManager
     src/ApplicationLifecycle.cpp
     src/ProcessScanner.h
     src/ProcessScanner.cpp
+    src/MappingService.h
+    src/MappingService.cpp
+    mapping/cache/MappingCache.cpp
     src/OverlayManager.h
     src/OverlayManagerProcess.cpp
     src/OverlayManagerSettings.cpp
@@ -175,6 +178,7 @@ endif()
 add_subdirectory(agent)
 add_subdirectory(attach-helper)
 add_subdirectory(native-loader)
+add_subdirectory(mapping)
 add_subdirectory(tests EXCLUDE_FROM_ALL)
 
 # Keep the deployment layout deterministic. OverlayManager locates these files
@@ -199,7 +203,10 @@ add_custom_target(mc_overlay_runtime_files ALL
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/mapping/packs/default-v1.json"
             "$<TARGET_FILE_DIR:MinecraftOverlayManager>/agent/mappings/default-v1.json"
-    DEPENDS
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:MappingAnalyzer>" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/MappingAnalyzer.exe"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:MappingProbe>" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/MappingProbe.dll"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/mapping/contracts-v1.json" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/contracts-v1.json"
+    DEPENDS MappingAnalyzer MappingProbe
         mc_mapping_packs
         McOverlayAgent
         McOverlayNativeLoader
@@ -238,4 +245,3 @@ if(EXISTS "${CMAKE_ROOT}/Licenses/LGPLv3.txt")
     install(FILES "${CMAKE_ROOT}/Licenses/LGPLv3.txt"
         DESTINATION licenses RENAME Qt-LGPL-3.0.txt)
 endif()
-add_subdirectory(mapping)

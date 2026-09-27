@@ -432,22 +432,12 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
     return true;
 }
 
-MappingRegistry::MappingRegistry() noexcept
-{
-    try {
-        auto pack=loadMappingPack(defaultMappingPackPath());
-        for(auto& p:pack.providers) {
-            if(registerProvider(makeProvider(std::move(p.id),p.family,p.priority,
-                std::move(p.detection),std::move(p.dictionaries)))!=MappingRegistrationResult::Accepted)
-                throw std::runtime_error("mapping pack registration failed");
-        }
-    } catch (...) {m_healthy=false;m_providers.clear();}
-}
+MappingRegistry::MappingRegistry() noexcept : MappingRegistry(std::filesystem::path{}) {}
 
-MappingRegistry::MappingRegistry(const std::filesystem::path& packFile) noexcept
+MappingRegistry::MappingRegistry(const std::filesystem::path& packFile, std::string_view expectedDigest) noexcept
 {
     try {
-        auto pack=loadMappingPack(packFile);
+        auto pack=loadMappingPack(packFile.empty()?defaultMappingPackPath():packFile,expectedDigest);
         for(auto& p:pack.providers) {
             if(registerProvider(makeProvider(std::move(p.id),p.family,p.priority,
                 std::move(p.detection),std::move(p.dictionaries)))!=MappingRegistrationResult::Accepted)

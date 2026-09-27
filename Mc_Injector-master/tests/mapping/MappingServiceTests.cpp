@@ -1,0 +1,93 @@
+#include "../../src/MappingService.h"
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QFile>
+#include <QTemporaryDir>
+#include <cstdio>
+struct MappingServiceTests {
+    static int run(const QString &fake, const QString &pack, const QString &contracts) {
+        int failures = 0, checks = 0;
+        auto check = [&](bool ok, const char *message) {
+            ++checks;
+            if (!ok) {
+                ++failures;
+                std::printf("FAIL %s\n", message);
+            }
+        };
+        QTemporaryDir dir;
+        MappingService service;
+        service.m_root = dir.path() + "/cache";
+        service.m_analyzer = fake;
+        service.m_contracts = contracts;
+        service.m_defaultPack = pack;
+        const auto log = dir.path() + "/calls.log";
+        qputenv("ARCVEIL_MAPPING_TEST_LOG", log.toUtf8());
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "success");
+        int ready = 0, failed = 0, heartbeats = 0;
+        QObject::connect(&service, &MappingService::ready,
+                         [&](const auto &, const auto &) { ++ready; });
+        QObject::connect(&service, &MappingService::failed, [&](const auto &) { ++failed; });
+        QTimer heartbeat;
+        heartbeat.setInterval(1);
+        QObject::connect(&heartbeat, &QTimer::timeout, [&] { ++heartbeats; });
+        heartbeat.start();
+        auto wait = [&] {
+            QElapsedTimer time;
+            time.start();
+            while (service.busy() && time.elapsed() < 15000)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            return !service.busy();
+        };
+        auto start = [&] {
+            service.prepare(quint32(QCoreApplication::applicationPid()), "unused", "unused", true,
+                            {});
+        };
+        start();
+        check(wait() && ready == 1 && !failed, "known pack validated before ready");
+        check(heartbeats > 0, "event loop responsive during subprocess work");
+        QFile before(log);
+        before.open(QIODevice::ReadOnly);
+        auto first = before.readAll();
+        before.close();
+        check(first == "inspect\nvalidate\ninspect\n", "preflight ordering");
+        start();
+        check(wait() && ready == 2, "verified cache hit");
+        QFile after(log);
+        after.open(QIODevice::ReadOnly);
+        check(after.readAll() == first + "inspect\ninspect\n",
+              "cache hit still performs final runtime recheck");
+        after.close();
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "changed");
+        start();
+        check(wait() && ready == 2 && failed == 1, "changed fingerprint blocks injection");
+        service.m_root = dir.path() + "/unresolved";
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "unresolved");
+        start();
+        check(wait() && ready == 2 && failed == 2,
+              "validation failure invokes resolver and fails closed");
+        service.m_root = dir.path() + "/cancelled";
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "slow");
+        start();
+        QTimer::singleShot(30, &service, &MappingService::cancel);
+        check(wait() && ready == 2 && failed == 2, "cancel has no stale ready/failure callback");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "success");
+        start();
+        check(wait() && ready == 3, "new generation succeeds after cancellation");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "flood");
+        const auto priorBeats = heartbeats;
+        start();
+        check(wait() && ready == 4 && heartbeats > priorBeats + 2,
+              "JSONL flood remains responsive");
+        std::printf("MappingService: %d checks, %d failures\n", checks, failures);
+        return failures ? 1 : 0;
+    }
+};
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    if (argc != 4)
+        return 2;
+    return MappingServiceTests::run(QString::fromLocal8Bit(argv[1]),
+                                    QString::fromLocal8Bit(argv[2]),
+                                    QString::fromLocal8Bit(argv[3]));
+}

@@ -1,4 +1,5 @@
 #include "MappingPack.h"
+#include "../../mapping/Sha256.h"
 #include <algorithm>
 #include <set>
 #ifdef _WIN32
@@ -58,7 +59,13 @@ MappingPack parseMappingPack(const mapping::Json& document) {
         pack.providers.push_back(std::move(p));
     }return pack;
 }
-MappingPack loadMappingPack(const std::filesystem::path& path){return parseMappingPack(mapping::Json::read(path));}
+MappingPack loadMappingPack(const std::filesystem::path& path,std::string_view expectedDigest){
+    std::ifstream file(path,std::ios::binary);if(!file)throw std::runtime_error("mapping pack unavailable");
+    file.seekg(0,std::ios::end);const auto length=file.tellg();if(length<0||length>2*1024*1024)throw std::runtime_error("mapping pack size limit");
+    std::string bytes(static_cast<std::size_t>(length),'\0');file.seekg(0);if(!file.read(bytes.data(),static_cast<std::streamsize>(bytes.size())))throw std::runtime_error("mapping pack short read");
+    if(!expectedDigest.empty()&&mapping::windowsSha256(bytes)!=expectedDigest)throw std::runtime_error("mapping pack digest mismatch");
+    return parseMappingPack(mapping::Json::parse(bytes));
+}
 mapping::Json mappingDictionaryJson(const MappingDictionary& d) {
     Json symbols=Json::Object{};
 #define MC_MAPPING_STRING(name) symbols[#name]=d.name;

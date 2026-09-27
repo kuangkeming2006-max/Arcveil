@@ -100,6 +100,7 @@ Json selectedPack(const Json& pack,const Json& provider,const Json& dictionary){
 std::string detectedFamily(const Json& pack,const Model& model){
     bindings::ClientEnvironment environment;
     const auto parsed=bindings::parseMappingPack(pack);
+    if(model.snapshot.contains("launchEvidence"))for(const auto& evidence:model.snapshot.at("launchEvidence").array())for(const auto&p:parsed.providers)if(evidence.at("family").string()==bindings::clientFamilyName(p.family))environment.addEvidence(p.family,static_cast<std::uint16_t>(evidence.at("confidence").integer()));
     for(const auto&p:parsed.providers)for(const auto&d:p.dictionaries)for(const auto&pattern:d.detection)for(const auto&c:model.classes){const auto&name=c.json->at("name").string();if((pattern.match==bindings::DetectionMatch::ExactClassSignature&&name==pattern.value)||(pattern.match==bindings::DetectionMatch::ClassSignaturePrefix&&name.starts_with(pattern.value)))environment.addEvidence(d.family,pattern.confidence);}
     return bindings::clientFamilyName(environment.family());
 }

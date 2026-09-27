@@ -17,7 +17,7 @@ struct MappingPack {
 };
 // Parsing completes and validates the entire pack before registration begins.
 [[nodiscard]] MappingPack parseMappingPack(const mapping::Json& document);
-[[nodiscard]] MappingPack loadMappingPack(const std::filesystem::path& path);
+[[nodiscard]] MappingPack loadMappingPack(const std::filesystem::path& path, std::string_view expectedDigest = {});
 [[nodiscard]] mapping::Json mappingDictionaryJson(const MappingDictionary& dictionary);
 [[nodiscard]] mapping::Json mappingPackJson(const MappingPack& pack);
 [[nodiscard]] std::filesystem::path defaultMappingPackPath();

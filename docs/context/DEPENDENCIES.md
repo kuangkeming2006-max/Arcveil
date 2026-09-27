@@ -101,3 +101,16 @@ jvm bootstrap 与 runtime 有双向源码依赖，属于启停入口与 VM 适�
   snapshot with installed class data, process identity and matching UUID.
 - Analyzer → shared MappingPack schema and Qt Core process/hash/atomic files.
   No Agent runtime/renderer dependency. See modules/mapping-pipeline.md.
+
+## Mapping pipeline v55.4
+
+- controller OverlayManager → MappingService (QObject prepare/ready/failed/cancel)
+  → independent MappingAnalyzer QProcess, before main Agent attach.
+- MappingService → MappingCache immutable artifacts and atomic index; a failed
+  candidate cannot replace verified. Mapping Console will consume JSONL events.
+- controller → AgentOptions startup mapping path/hash → GameBindings constructor
+  → MappingRegistry loader. This extends startup options, not control IPC; freeze
+  and registerMappingDictionary are unchanged. MappingPack verifies SHA-256 and
+  parses the same buffer to avoid a hash/read race.
+- Analyzer → MappingProbe::Agent_OnAttach / McOverlay_Start via existing tools;
+  private JVM tests cover both standard Attach and DisabledAttach native fallback.

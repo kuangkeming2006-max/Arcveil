@@ -22,8 +22,8 @@
 
 namespace mcoverlay {
 
-GameBindings::GameBindings(JavaVM* const vm, jvmtiEnv* const jvmti) noexcept
-    : m_vm(vm), m_jvmti(jvmti)
+GameBindings::GameBindings(JavaVM* const vm, jvmtiEnv* const jvmti, const std::filesystem::path& mappingPack, std::string_view mappingHash) noexcept
+    : m_vm(vm), m_jvmti(jvmti), m_mappingRegistry(mappingPack, mappingHash)
 {
     // Auto-reset wakeup: normal chunk diffing remains asleep for 500 ms, but a
     // user refresh interrupts that wait immediately without introducing a

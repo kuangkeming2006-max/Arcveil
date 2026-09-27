@@ -1,10 +1,13 @@
 #include "Analyzer.h"
 #include "Resolver.h"
+#include "../../agent/bindings/MappingPack.h"
 #include <QCoreApplication>
 #include <QProcess>
 #include <QDir>
 #include <QFile>
 #include <QUuid>
+#include <QThread>
+#include <QElapsedTimer>
 #include <cstdio>
 using namespace mcoverlay::mapping;
 namespace {
@@ -27,21 +30,46 @@ int main(int argc,char**argv){
                 bool valid=false;const auto pid=option("--pid").toUInt(&valid);if(!valid||!pid)throw std::runtime_error("invalid PID");
                 const auto output=filePath(option("--out"));const auto requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);
                 const auto rawPath=output.wstring()+L"."+requestId.toStdWString()+L".capture";
-                const auto request=Json(Json::Object{{"output",qtPath(rawPath).toUtf8().toStdString()},{"requestId",requestId.toStdString()}}).dump();
+                Json requestDocument=Json::Object{{"output",qtPath(rawPath).toUtf8().toStdString()},{"requestId",requestId.toStdString()}};
+                if(options.contains("--pack")){
+                    const auto authored=Json::read(filePath(option("--pack")));(void)mcoverlay::bindings::parseMappingPack(authored);const auto schema=contracts();Json::Array warmup,detection;
+                    for(const auto&p:authored.at("providers").array())for(const auto&d:p.at("dictionaries").array()){
+                        Json::Array names;for(const auto&[key,spec]:schema.at("symbols").object())if(spec.at("kind").string()=="class"&&!d.at("symbols").at(key).string().empty())names.push_back(d.at("symbols").at(key));
+                        warmup.push_back(Json::Object{{"anchor",d.at("symbols").at("minecraftSignature")},{"classes",names}});
+                        for(const auto&pattern:d.at("detection").array())if(pattern.at("match").integer()==2)detection.push_back(Json::Object{{"family",d.at("family")},{"value",pattern.at("value")},{"confidence",pattern.at("confidence")}});
+                    }
+                    requestDocument["warmup"]=warmup;requestDocument["detection"]=detection;
+                }
+                const auto request=requestDocument.dump();
                 const auto directory=QCoreApplication::applicationDirPath();
                 const auto helper=options.contains("--helper")?option("--helper"):directory+"/McOverlayAttachHelper.jar";
                 const auto probe=options.contains("--probe")?option("--probe"):directory+"/MappingProbe.dll";
                 event("capture",Json::Object{{"pid",double(pid)},{"phase","started"}});
-                QProcess process;process.setProgram(option("--java"));process.setArguments({"--add-modules","jdk.attach","-jar",helper,QString::number(pid),probe,QString::fromLatin1(QByteArray::fromStdString(request).toHex())});
-                process.start();if(!process.waitForStarted(5000))throw std::runtime_error("cannot start JVM attach helper");
-                if(!process.waitForFinished(60000)){process.kill();process.waitForFinished(3000);throw std::runtime_error("probe capture timed out");}
-                if(process.exitStatus()!=QProcess::NormalExit||process.exitCode()!=0){QFile::remove(qtPath(rawPath));throw std::runtime_error("probe attach failed: "+process.readAllStandardError().toStdString());}
+                const auto requestHex=QString::fromLatin1(QByteArray::fromStdString(request).toHex());
+                QStringList arguments;
+                if(options.contains("--tools-jar"))arguments={"-cp",helper+";"+option("--tools-jar"),"com.mcoverlay.attach.AttachHelper"};
+                else arguments={"--add-modules","jdk.attach","-jar",helper};
+                arguments<<QString::number(pid)<<probe<<requestHex;
+                QProcess process;process.setProgram(option("--java"));process.setArguments(arguments);
+                process.start();bool success=process.waitForStarted(5000)&&process.waitForFinished(60000)&&process.exitStatus()==QProcess::NormalExit&&process.exitCode()==0;
+                if(process.state()!=QProcess::NotRunning){process.kill();process.waitForFinished(3000);}
+                if(!success&&options.contains("--native-loader")){
+                    event("capture",Json::Object{{"phase","native-fallback"},{"reason","standard JVM Attach unavailable"}});
+                    QProcess native;native.start(option("--native-loader"),{QString::number(pid),probe,requestHex});
+                    success=native.waitForStarted(5000)&&native.waitForFinished(25000)&&native.exitStatus()==QProcess::NormalExit&&native.exitCode()==0;
+                    if(native.state()!=QProcess::NotRunning){native.kill();native.waitForFinished(3000);}
+                    if(!success)throw std::runtime_error("native probe failed: "+native.readAllStandardError().toStdString());
+                    QElapsedTimer deadline;deadline.start();
+                    while(!QFile::exists(qtPath(rawPath))&&!QFile::exists(qtPath(rawPath)+".error")&&deadline.elapsed()<60000)QThread::msleep(50);
+                }
+                if(!success){QFile::remove(qtPath(rawPath));throw std::runtime_error("probe attach failed: "+process.readAllStandardError().toStdString());}
+                if(QFile::exists(qtPath(rawPath)+".error")){auto failure=Json::read(std::filesystem::path(rawPath+L".error"));QFile::remove(qtPath(rawPath)+".error");throw std::runtime_error(failure.at("reason").string());}
                 try {snapshot=Json::read(rawPath,64U*1024U*1024U);QFile::remove(qtPath(rawPath));}catch(...){QFile::remove(qtPath(rawPath));throw;}
                 if(snapshot.at("requestId").string()!=requestId.toStdString()||snapshot.at("pid").number()!=pid)throw std::runtime_error("stale/mismatched probe response");
                 result=inspectSnapshot(std::move(snapshot));
             }else result=readSnapshot(filePath(option("--snapshot")));
             if(options.contains("--out"))writeJson(filePath(option("--out")),result);
-            event("fingerprint",Json::Object{{"fingerprint",result.at("fingerprint")},{"classes",double(result.at("classes").array().size())},{"methods",result.at("methodCount")},{"captureKind",result.at("captureKind")}});
+            event("fingerprint",Json::Object{{"fingerprint",result.at("fingerprint")},{"classes",double(result.at("classes").array().size())},{"methods",result.at("methodCount")},{"captureKind",result.at("captureKind")},{"pid",result.at("pid")},{"processStart",result.at("processStart")}});
         }else if(command=="validate"){
             const auto pack=Json::read(filePath(option("--pack")));
             result=options.contains("--snapshot")?validateRuntime(pack,readSnapshot(filePath(option("--snapshot"))),contracts(),events):validatePack(pack);if(options.contains("--out"))writeJson(filePath(option("--out")),result);event("validation",result);if(!result.at("valid").boolean())return 3;

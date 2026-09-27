@@ -278,7 +278,7 @@ struct GameplaySettings final {
 // are always local to sample() and are discarded before SwapBuffers returns.
 class GameBindings final {
 public:
-    GameBindings(JavaVM* vm, jvmtiEnv* jvmti) noexcept;
+    GameBindings(JavaVM* vm, jvmtiEnv* jvmti, const std::filesystem::path& mappingPack = {}, std::string_view mappingHash = {}) noexcept;
     ~GameBindings();
 
     GameBindings(const GameBindings&) = delete;

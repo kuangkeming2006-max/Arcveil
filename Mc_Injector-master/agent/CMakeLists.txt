@@ -316,3 +316,6 @@ add_dependencies(McOverlayMappingPackTests mc_mapping_packs)
 if(MINGW)
     target_link_options(McOverlayMappingPackTests PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
+
+target_link_libraries(McOverlayMappingProviderTests PRIVATE advapi32)
+target_link_libraries(McOverlayMappingPackTests PRIVATE advapi32)

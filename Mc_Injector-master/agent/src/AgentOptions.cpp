@@ -62,6 +62,7 @@ AgentOptions parseAgentOptions(const char* const options)
 
     const std::string_view all(options);
     std::size_t begin = 0U;
+    bool seenMapping=false,seenHash=false;
     while (begin < all.size()) {
         const std::size_t end = all.find(';', begin);
         const auto token = trim(all.substr(begin, end == std::string_view::npos
@@ -71,7 +72,15 @@ AgentOptions parseAgentOptions(const char* const options)
         if (separator != std::string_view::npos) {
             const auto key = trim(token.substr(0U, separator));
             const auto value = trim(token.substr(separator + 1U));
-            if (key == "pipe") {
+            if (key == "mapping") {
+                if(seenMapping||value.empty()||value.size()>32768||value.size()%2)result.mappingOptionsValid=false;
+                seenMapping=true;std::string decoded;
+                for(std::size_t i=0;i+1<value.size();i+=2){unsigned byte=0;auto parsed=std::from_chars(value.data()+i,value.data()+i+2,byte,16);if(parsed.ec!=std::errc{}||parsed.ptr!=value.data()+i+2||byte==0){result.mappingOptionsValid=false;break;}decoded+=static_cast<char>(byte);}
+                result.mappingPack=utf8ToWide(decoded);if(result.mappingPack.empty())result.mappingOptionsValid=false;
+            } else if(key == "mappingHash") {
+                if(seenHash||value.size()!=64||!std::all_of(value.begin(),value.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))result.mappingOptionsValid=false;
+                seenHash=true;result.mappingHash=value;
+            } else if (key == "pipe") {
                 result.pipeName = utf8ToWide(value);
             } else if (key == "token" && validToken(value)) {
                 result.token.assign(value);
@@ -100,7 +109,9 @@ AgentOptions parseAgentOptions(const char* const options)
 bool AgentOptions::valid() const noexcept
 {
     constexpr std::wstring_view prefix = L"\\\\.\\pipe\\";
-    return protocol == 1U && token.size() == 32U && pipeName.size() > prefix.size() &&
+    const bool mappingAbsent=mappingPack.empty()&&mappingHash.empty();
+    const bool mappingPresent=mappingPack.size()>2&&mappingPack[1]==L':'&&(mappingPack[2]==L'\\'||mappingPack[2]==L'/')&&mappingHash.size()==64;
+    return mappingOptionsValid && (mappingAbsent||mappingPresent) && protocol == 1U && token.size() == 32U && pipeName.size() > prefix.size() &&
            pipeName.starts_with(prefix);
 }
 

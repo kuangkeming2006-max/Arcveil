@@ -409,7 +409,7 @@ struct MappingCandidates final {
 class MappingRegistry final {
 public:
     MappingRegistry() noexcept;
-    explicit MappingRegistry(const std::filesystem::path& packFile) noexcept;
+    explicit MappingRegistry(const std::filesystem::path& packFile, std::string_view expectedDigest = {}) noexcept;
     ~MappingRegistry();
 
     MappingRegistry(const MappingRegistry&) = delete;
