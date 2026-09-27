@@ -1,4 +1,4 @@
-add_library(mc_mapping_analyzer_core STATIC analyzer/Analyzer.cpp
+add_library(mc_mapping_analyzer_core STATIC analyzer/Analyzer.cpp analyzer/Bytecode.cpp analyzer/Resolver.cpp
     ../agent/bindings/MappingPack.cpp ../agent/bindings/MappingProvider.cpp)
 target_compile_features(mc_mapping_analyzer_core PUBLIC cxx_std_20)
 target_link_libraries(mc_mapping_analyzer_core PUBLIC Qt6::Core)
@@ -16,3 +16,7 @@ endif()
 install(TARGETS MappingAnalyzer MappingProbe RUNTIME DESTINATION tools LIBRARY DESTINATION tools)
 add_executable(MappingAnalyzerTests EXCLUDE_FROM_ALL ../tests/mapping/AnalyzerTests.cpp)
 target_link_libraries(MappingAnalyzerTests PRIVATE mc_mapping_analyzer_core)
+
+add_custom_command(TARGET MappingAnalyzer POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/contracts-v1.json" "$<TARGET_FILE_DIR:MappingAnalyzer>/contracts-v1.json")
+install(FILES contracts-v1.json DESTINATION tools)

@@ -24,3 +24,13 @@ compatibility claim is made from these tests.
 - Analyzer inventory/tamper/schema/diff tests: 8 checks, 0 failures.
 - All v55.1 mapping and Agent regression suites rerun and passed unchanged.
 - Real Lunar has not been exercised; unsupported Attach/capabilities fail closed.
+
+## v55.3
+
+Original worktree Release Analyzer build passed. Full-schema (257 keys) renamed
+class/member fixture passed; missing reference, ambiguous classes and wrong
+optional object descriptor were rejected, preserving the final-pack output.
+MappingProvider, pack parity (38), policy (194), aim (68,551), BedWars, knockback
+(17), navigation (43,271), private JVM logical hook (156) regressions all passed.
+Confidence is a rule-based exact-evidence tier, not a measured probability.
+Real Lunar remains untested; unrecognized/unsupported structures fail closed.

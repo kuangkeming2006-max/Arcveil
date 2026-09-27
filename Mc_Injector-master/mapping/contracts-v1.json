@@ -1,0 +1,1495 @@
+{
+  "contractVersion": 1,
+  "symbols": {
+    "minecraftName": {
+      "kind": "class",
+      "required": true
+    },
+    "minecraftSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "playerName": {
+      "kind": "class",
+      "required": true
+    },
+    "playerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "livingName": {
+      "kind": "class",
+      "required": true
+    },
+    "livingSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "hostileName": {
+      "kind": "class",
+      "required": false
+    },
+    "hostileSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "entityName": {
+      "kind": "class",
+      "required": true
+    },
+    "entitySignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "entityPlayerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "fireballName": {
+      "kind": "class",
+      "required": false
+    },
+    "fireballSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "aabbName": {
+      "kind": "class",
+      "required": true
+    },
+    "aabbSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "worldName": {
+      "kind": "class",
+      "required": true
+    },
+    "worldSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "worldClientName": {
+      "kind": "class",
+      "required": true
+    },
+    "worldClientSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "stateName": {
+      "kind": "class",
+      "required": true
+    },
+    "stateSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "blockName": {
+      "kind": "class",
+      "required": true
+    },
+    "blockSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "blockPosName": {
+      "kind": "class",
+      "required": true
+    },
+    "blockPosSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "bedName": {
+      "kind": "class",
+      "required": true
+    },
+    "bedSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chunkProviderName": {
+      "kind": "class",
+      "required": true
+    },
+    "chunkProviderSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chunkProviderInterfaceSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chunkName": {
+      "kind": "class",
+      "required": true
+    },
+    "chunkSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "storageName": {
+      "kind": "class",
+      "required": true
+    },
+    "storageSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "activeRenderInfoName": {
+      "kind": "class",
+      "required": true
+    },
+    "activeRenderInfoSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "renderManagerName": {
+      "kind": "class",
+      "required": true
+    },
+    "renderManagerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "timerName": {
+      "kind": "class",
+      "required": true
+    },
+    "timerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "gameSettingsName": {
+      "kind": "class",
+      "required": false
+    },
+    "gameSettingsSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "entityRendererName": {
+      "kind": "class",
+      "required": false
+    },
+    "entityRendererSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "renderGlobalName": {
+      "kind": "class",
+      "required": false
+    },
+    "renderGlobalSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "keyBindingName": {
+      "kind": "class",
+      "required": false
+    },
+    "keyBindingSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "playerControllerName": {
+      "kind": "class",
+      "required": false
+    },
+    "playerControllerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "serverDataName": {
+      "kind": "class",
+      "required": false
+    },
+    "serverDataSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "itemBlockName": {
+      "kind": "class",
+      "required": false
+    },
+    "itemBlockSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "itemSwordName": {
+      "kind": "class",
+      "required": false
+    },
+    "itemSwordSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "enumFacingName": {
+      "kind": "class",
+      "required": false
+    },
+    "enumFacingSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "vec3Name": {
+      "kind": "class",
+      "required": false
+    },
+    "vec3Signature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "rayHitName": {
+      "kind": "class",
+      "required": false
+    },
+    "rayHitSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "movementPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "movementPacketSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "packetBufferSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "networkPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "networkPacketSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "positionPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "lookPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "positionLookPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "rayTraceBlocks": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "({vec3Signature}{vec3Signature}ZZZ){rayHitSignature}",
+      "static": false,
+      "required": false
+    },
+    "getEntityById": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "(I){entitySignature}",
+      "static": false,
+      "required": false
+    },
+    "getItemUseDuration": {
+      "kind": "method",
+      "owner": "playerName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "isUsingItem": {
+      "kind": "method",
+      "owner": "playerName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": false
+    },
+    "getEyeHeight": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()F",
+      "static": false,
+      "required": false
+    },
+    "hitVectorField": {
+      "kind": "field",
+      "owner": "rayHitName",
+      "descriptor": "{vec3Signature}",
+      "static": false,
+      "required": false
+    },
+    "clickMouse": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "rightClickMouse": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "knockBack": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "({entitySignature}FDD)V",
+      "static": false,
+      "required": false
+    },
+    "velocityPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "velocityPacketSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "handleEntityVelocity": {
+      "kind": "method",
+      "owner": "netHandlerName",
+      "descriptor": "({velocityPacketSignature})V",
+      "static": false,
+      "required": false
+    },
+    "velocityEntityId": {
+      "kind": "method",
+      "owner": "velocityPacketName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "sendClickBlock": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(Z)V",
+      "static": false,
+      "required": false
+    },
+    "moveFlying": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(FFF)V",
+      "static": false,
+      "required": false
+    },
+    "moveEntityWithHeading": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "(FF)V",
+      "static": false,
+      "required": false
+    },
+    "getAIMoveSpeed": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()F",
+      "static": false,
+      "required": false
+    },
+    "isSprinting": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": false
+    },
+    "setSprinting": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(Z)V",
+      "static": false,
+      "required": false
+    },
+    "swingItem": {
+      "kind": "method",
+      "owner": "playerName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "rayBlockPosField": {
+      "kind": "field",
+      "owner": "rayHitName",
+      "descriptor": "{blockPosSignature}",
+      "static": false,
+      "required": false
+    },
+    "raySideHitField": {
+      "kind": "field",
+      "owner": "rayHitName",
+      "descriptor": "{enumFacingSignature}",
+      "static": false,
+      "required": false
+    },
+    "blockPosCoordinateMethods": {
+      "kind": "method",
+      "owner": "blockPosName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false,
+      "extent": 3
+    },
+    "facingIndexMethod": {
+      "kind": "method",
+      "owner": "enumFacingName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "writeMovementPacket": {
+      "kind": "reserved",
+      "required": false
+    },
+    "addToSendQueue": {
+      "kind": "method",
+      "owner": "netHandlerName",
+      "descriptor": "({networkPacketSignature})V",
+      "static": false,
+      "required": false
+    },
+    "packetYawField": {
+      "kind": "field",
+      "owner": "movementPacketName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "packetPitchField": {
+      "kind": "field",
+      "owner": "movementPacketName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "packetRotatingField": {
+      "kind": "reserved",
+      "required": false
+    },
+    "packetPositionFields": {
+      "kind": "field",
+      "owner": "movementPacketName",
+      "descriptor": "D",
+      "static": false,
+      "required": false,
+      "extent": 3
+    },
+    "packetOnGroundField": {
+      "kind": "field",
+      "owner": "movementPacketName",
+      "descriptor": "Z",
+      "static": false,
+      "required": false
+    },
+    "vectorFields": {
+      "kind": "field",
+      "owner": "vec3Name",
+      "descriptor": "D",
+      "static": false,
+      "required": false,
+      "extent": 3
+    },
+    "chatComponentName": {
+      "kind": "class",
+      "required": true
+    },
+    "chatComponentSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chatTextName": {
+      "kind": "class",
+      "required": false
+    },
+    "chatTextSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chatSerializerName": {
+      "kind": "class",
+      "required": false
+    },
+    "chatSerializerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "scoreboardName": {
+      "kind": "class",
+      "required": false
+    },
+    "scoreboardSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "scoreObjectiveName": {
+      "kind": "class",
+      "required": false
+    },
+    "scoreObjectiveSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "scoreName": {
+      "kind": "class",
+      "required": false
+    },
+    "scoreSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "scorePlayerTeamName": {
+      "kind": "class",
+      "required": false
+    },
+    "scorePlayerTeamSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "teamSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "netHandlerName": {
+      "kind": "class",
+      "required": false
+    },
+    "netHandlerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "networkPlayerInfoName": {
+      "kind": "class",
+      "required": false
+    },
+    "networkPlayerInfoSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "itemStackName": {
+      "kind": "class",
+      "required": false
+    },
+    "itemStackSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "itemName": {
+      "kind": "class",
+      "required": false
+    },
+    "itemSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "itemArmorName": {
+      "kind": "class",
+      "required": false
+    },
+    "itemArmorSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "inventoryPlayerName": {
+      "kind": "class",
+      "required": false
+    },
+    "inventoryPlayerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "enchantmentHelperName": {
+      "kind": "class",
+      "required": false
+    },
+    "enchantmentHelperSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "abstractClientPlayerName": {
+      "kind": "class",
+      "required": false
+    },
+    "abstractClientPlayerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "resourceLocationName": {
+      "kind": "class",
+      "required": false
+    },
+    "resourceLocationSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "textureManagerName": {
+      "kind": "class",
+      "required": false
+    },
+    "textureManagerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "textureObjectName": {
+      "kind": "class",
+      "required": false
+    },
+    "textureObjectSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "getMinecraft": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){minecraftSignature}",
+      "static": true,
+      "required": false
+    },
+    "minecraftInstanceField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{minecraftSignature}",
+      "static": true,
+      "required": false
+    },
+    "playerField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{playerSignature}",
+      "static": false,
+      "required": true
+    },
+    "getHealth": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "hurtTimeField": {
+      "kind": "field",
+      "owner": "livingName",
+      "descriptor": "I",
+      "static": false,
+      "required": false
+    },
+    "getMaxHealth": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "getEntityId": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()I",
+      "static": false,
+      "required": true
+    },
+    "getBounds": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(){aabbSignature}",
+      "static": false,
+      "required": true
+    },
+    "isMainThread": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "isSingleplayer": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "worldField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{worldClientSignature}",
+      "static": false,
+      "required": true
+    },
+    "positionFields": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "D",
+      "static": false,
+      "required": true,
+      "extent": 3
+    },
+    "previousPositionFields": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "D",
+      "static": false,
+      "required": true,
+      "extent": 3
+    },
+    "getLoadedEntities": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "()Ljava/util/List;",
+      "static": false,
+      "required": false
+    },
+    "loadedEntitiesField": {
+      "kind": "field",
+      "owner": "worldName",
+      "descriptor": "Ljava/util/List;",
+      "static": false,
+      "required": false
+    },
+    "playerEntitiesField": {
+      "kind": "field",
+      "owner": "worldName",
+      "descriptor": "Ljava/util/List;",
+      "static": false,
+      "required": true
+    },
+    "getName": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false,
+      "required": true
+    },
+    "isInvisible": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": false
+    },
+    "getDisplayName": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(){chatComponentSignature}",
+      "static": false,
+      "required": true
+    },
+    "getFormattedText": {
+      "kind": "method",
+      "owner": "chatComponentName",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false,
+      "required": true
+    },
+    "addChatMessage": {
+      "kind": "method",
+      "owner": "playerName",
+      "descriptor": "({chatComponentSignature})V",
+      "static": false,
+      "required": false
+    },
+    "parseChatJson": {
+      "kind": "method",
+      "owner": "chatSerializerName",
+      "descriptor": "(Ljava/lang/String;){chatComponentSignature}",
+      "static": true,
+      "required": false
+    },
+    "getBlockState": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "({blockPosSignature}){stateSignature}",
+      "static": false,
+      "required": true
+    },
+    "getBlock": {
+      "kind": "method",
+      "owner": "stateName",
+      "descriptor": "(){blockSignature}",
+      "static": false,
+      "required": true
+    },
+    "getBlockMetadata": {
+      "kind": "method",
+      "owner": "blockName",
+      "descriptor": "({stateSignature})I",
+      "static": false,
+      "required": true
+    },
+    "setIngameFocus": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()V",
+      "static": false,
+      "required": true
+    },
+    "setIngameNotInFocus": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()V",
+      "static": false,
+      "required": true
+    },
+    "getChunkProvider": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "(){chunkProviderInterfaceSignature}",
+      "static": false,
+      "required": true
+    },
+    "chunkListingField": {
+      "kind": "field",
+      "owner": "chunkProviderName",
+      "descriptor": "Ljava/util/List;",
+      "static": false,
+      "required": true
+    },
+    "chunkCoordinateFields": {
+      "kind": "field",
+      "owner": "chunkName",
+      "descriptor": "I",
+      "static": false,
+      "required": true,
+      "extent": 2
+    },
+    "getStorageArrays": {
+      "kind": "method",
+      "owner": "chunkName",
+      "descriptor": "()[{storageSignature}",
+      "static": false,
+      "required": true
+    },
+    "getStorageData": {
+      "kind": "method",
+      "owner": "storageName",
+      "descriptor": "()[C",
+      "static": false,
+      "required": true
+    },
+    "getRenderManager": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){renderManagerSignature}",
+      "static": false,
+      "required": true
+    },
+    "renderPositionFields": {
+      "kind": "field",
+      "owner": "renderManagerName",
+      "descriptor": "D",
+      "static": false,
+      "required": true,
+      "extent": 3
+    },
+    "activeModelViewField": {
+      "kind": "field",
+      "owner": "activeRenderInfoName",
+      "descriptor": "Ljava/nio/FloatBuffer;",
+      "static": true,
+      "required": true
+    },
+    "activeProjectionField": {
+      "kind": "field",
+      "owner": "activeRenderInfoName",
+      "descriptor": "Ljava/nio/FloatBuffer;",
+      "static": true,
+      "required": true
+    },
+    "activeViewportField": {
+      "kind": "field",
+      "owner": "activeRenderInfoName",
+      "descriptor": "Ljava/nio/IntBuffer;",
+      "static": true,
+      "required": true
+    },
+    "timerField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{timerSignature}",
+      "static": false,
+      "required": true
+    },
+    "renderPartialTicksField": {
+      "kind": "field",
+      "owner": "timerName",
+      "descriptor": "F",
+      "static": false,
+      "required": true
+    },
+    "gameSettingsField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{gameSettingsSignature}",
+      "static": false,
+      "required": false
+    },
+    "thirdPersonViewField": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "I",
+      "static": false,
+      "required": false
+    },
+    "updateCameraAndRender": {
+      "kind": "method",
+      "owner": "entityRendererName",
+      "descriptor": "(FJ)V",
+      "static": false,
+      "required": false
+    },
+    "orientCamera": {
+      "kind": "method",
+      "owner": "entityRendererName",
+      "descriptor": "(F)V",
+      "static": false,
+      "required": false
+    },
+    "setAngles": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(FF)V",
+      "static": false,
+      "required": false
+    },
+    "setupTerrain": {
+      "kind": "method",
+      "owner": "renderGlobalName",
+      "descriptor": "{setupTerrainDescriptor}",
+      "static": false,
+      "required": false
+    },
+    "setupTerrainDescriptor": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "currentScreenField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{guiScreenSignature}",
+      "static": false,
+      "required": false
+    },
+    "guiScreenSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "getCollidingBoundingBoxes": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "({entitySignature}{aabbSignature})Ljava/util/List;",
+      "static": false,
+      "required": false
+    },
+    "keyBindSneakField": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "{keyBindingSignature}",
+      "static": false,
+      "required": false
+    },
+    "keyBindSprintField": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "{keyBindingSignature}",
+      "static": false,
+      "required": false
+    },
+    "keyBindsHotbarField": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "[{keyBindingSignature}",
+      "static": false,
+      "required": false
+    },
+    "keyBindingIsPressed": {
+      "kind": "method",
+      "owner": "keyBindingName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": false
+    },
+    "syncCurrentPlayItem": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "movementKeyFields": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "{keyBindingSignature}",
+      "static": false,
+      "required": false,
+      "extent": 5
+    },
+    "getKeyCode": {
+      "kind": "method",
+      "owner": "keyBindingName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "setKeyBindState": {
+      "kind": "method",
+      "owner": "keyBindingName",
+      "descriptor": "(IZ)V",
+      "static": true,
+      "required": false
+    },
+    "mouseSensitivityField": {
+      "kind": "field",
+      "owner": "gameSettingsName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "rotationYawField": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "rotationPitchField": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "previousRotationYawField": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "previousRotationPitchField": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "F",
+      "static": false,
+      "required": false
+    },
+    "movementInputFields": {
+      "kind": "field",
+      "owner": "livingName",
+      "descriptor": "F",
+      "static": false,
+      "required": false,
+      "extent": 2
+    },
+    "motionFields": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "D",
+      "static": false,
+      "required": false,
+      "extent": 3
+    },
+    "onGroundField": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "Z",
+      "static": false,
+      "required": false
+    },
+    "jump": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "isAirBlock": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "({blockPosSignature})Z",
+      "static": false,
+      "required": false
+    },
+    "getCurrentServerData": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){serverDataSignature}",
+      "static": false,
+      "required": false
+    },
+    "serverIpField": {
+      "kind": "field",
+      "owner": "serverDataName",
+      "descriptor": "Ljava/lang/String;",
+      "static": false,
+      "required": false
+    },
+    "playerControllerField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{playerControllerSignature}",
+      "static": false,
+      "required": false
+    },
+    "attackEntity": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "({entityPlayerSignature}{entitySignature})V",
+      "static": false,
+      "required": false
+    },
+    "windowClick": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "(IIII{entityPlayerSignature}){itemStackSignature}",
+      "static": false,
+      "required": false
+    },
+    "currentItemField": {
+      "kind": "field",
+      "owner": "inventoryPlayerName",
+      "descriptor": "I",
+      "static": false,
+      "required": false
+    },
+    "mainInventoryField": {
+      "kind": "field",
+      "owner": "inventoryPlayerName",
+      "descriptor": "[{itemStackSignature}",
+      "static": false,
+      "required": false
+    },
+    "getBlockFromItem": {
+      "kind": "method",
+      "owner": "itemBlockName",
+      "descriptor": "(){blockSignature}",
+      "static": false,
+      "required": false
+    },
+    "getIdFromBlock": {
+      "kind": "method",
+      "owner": "blockName",
+      "descriptor": "({blockSignature})I",
+      "static": true,
+      "required": false
+    },
+    "getFacingByIndex": {
+      "kind": "method",
+      "owner": "enumFacingName",
+      "descriptor": "(I){enumFacingSignature}",
+      "static": true,
+      "required": false
+    },
+    "onPlayerRightClick": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "({playerSignature}{worldClientSignature}{itemStackSignature}{blockPosSignature}{enumFacingSignature}{vec3Signature})Z",
+      "static": false,
+      "required": false
+    },
+    "clickBlock": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "({blockPosSignature}{enumFacingSignature})Z",
+      "static": false,
+      "required": false
+    },
+    "onPlayerDamageBlock": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "({blockPosSignature}{enumFacingSignature})Z",
+      "static": false,
+      "required": false
+    },
+    "resetBlockRemoving": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "()V",
+      "static": false,
+      "required": false
+    },
+    "getBlockReachDistance": {
+      "kind": "method",
+      "owner": "playerControllerName",
+      "descriptor": "()F",
+      "static": false,
+      "required": false
+    },
+    "getStrVsBlock": {
+      "kind": "method",
+      "owner": "itemStackName",
+      "descriptor": "({blockSignature})F",
+      "static": false,
+      "required": false
+    },
+    "aabbFields": {
+      "kind": "field",
+      "owner": "aabbName",
+      "descriptor": "D",
+      "static": false,
+      "required": true,
+      "extent": 6
+    },
+    "getScoreboard": {
+      "kind": "method",
+      "owner": "worldName",
+      "descriptor": "(){scoreboardSignature}",
+      "static": false,
+      "required": false
+    },
+    "getObjectiveInDisplaySlot": {
+      "kind": "method",
+      "owner": "scoreboardName",
+      "descriptor": "(I){scoreObjectiveSignature}",
+      "static": false,
+      "required": false
+    },
+    "getPlayersTeam": {
+      "kind": "method",
+      "owner": "scoreboardName",
+      "descriptor": "(Ljava/lang/String;){scorePlayerTeamSignature}",
+      "static": false,
+      "required": false
+    },
+    "getSortedScores": {
+      "kind": "method",
+      "owner": "scoreboardName",
+      "descriptor": "({scoreObjectiveSignature})Ljava/util/Collection;",
+      "static": false,
+      "required": false
+    },
+    "getPlayerName": {
+      "kind": "method",
+      "owner": "scoreName",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false,
+      "required": false
+    },
+    "formatPlayerName": {
+      "kind": "method",
+      "owner": "scorePlayerTeamName",
+      "descriptor": "({teamSignature}Ljava/lang/String;)Ljava/lang/String;",
+      "static": true,
+      "required": false
+    },
+    "getNetHandler": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){netHandlerSignature}",
+      "static": false,
+      "required": false
+    },
+    "getPlayerInfoMap": {
+      "kind": "method",
+      "owner": "netHandlerName",
+      "descriptor": "()Ljava/util/Collection;",
+      "static": false,
+      "required": false
+    },
+    "getGameProfile": {
+      "kind": "method",
+      "owner": "networkPlayerInfoName",
+      "descriptor": "()Lcom/mojang/authlib/GameProfile;",
+      "static": false,
+      "required": false
+    },
+    "inventoryField": {
+      "kind": "field",
+      "owner": "playerName",
+      "descriptor": "{inventoryPlayerSignature}",
+      "static": false,
+      "required": false
+    },
+    "armorInventoryField": {
+      "kind": "reserved",
+      "required": false
+    },
+    "getItem": {
+      "kind": "method",
+      "owner": "itemStackName",
+      "descriptor": "(){itemSignature}",
+      "static": false,
+      "required": false
+    },
+    "hasColor": {
+      "kind": "method",
+      "owner": "itemArmorName",
+      "descriptor": "({itemStackSignature})Z",
+      "static": false,
+      "required": false
+    },
+    "getColor": {
+      "kind": "method",
+      "owner": "itemArmorName",
+      "descriptor": "({itemStackSignature})I",
+      "static": false,
+      "required": false
+    },
+    "getEnchantmentLevel": {
+      "kind": "method",
+      "owner": "enchantmentHelperName",
+      "descriptor": "(I{itemStackSignature})I",
+      "static": true,
+      "required": false
+    },
+    "getEquipmentInSlot": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "(I){itemStackSignature}",
+      "static": false,
+      "required": false
+    },
+    "getIdFromItem": {
+      "kind": "method",
+      "owner": "itemName",
+      "descriptor": "({itemSignature})I",
+      "static": true,
+      "required": false
+    },
+    "stackSizeField": {
+      "kind": "field",
+      "owner": "itemStackName",
+      "descriptor": "I",
+      "static": false,
+      "required": false
+    },
+    "getItemDamage": {
+      "kind": "method",
+      "owner": "itemStackName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "getUniqueId": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Ljava/util/UUID;",
+      "static": false,
+      "required": false
+    },
+    "getLocationSkin": {
+      "kind": "method",
+      "owner": "abstractClientPlayerName",
+      "descriptor": "(){resourceLocationSignature}",
+      "static": false,
+      "required": false
+    },
+    "getTextureManager": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){textureManagerSignature}",
+      "static": false,
+      "required": false
+    },
+    "getTexture": {
+      "kind": "method",
+      "owner": "textureManagerName",
+      "descriptor": "({resourceLocationSignature}){textureObjectSignature}",
+      "static": false,
+      "required": false
+    },
+    "getGlTextureId": {
+      "kind": "method",
+      "owner": "textureObjectName",
+      "descriptor": "()I",
+      "static": false,
+      "required": false
+    },
+    "cameraMouseOverCandidates": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{rayHitSignature}",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "cameraHitEntityCandidates": {
+      "kind": "field",
+      "owner": "rayHitName",
+      "descriptor": "{entitySignature}",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "cameraHitTypeCandidates": {
+      "kind": "field",
+      "owner": "rayHitName",
+      "descriptor": "{hitTypeSignature}",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "entityTicksCandidates": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "I",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "isSneakingCandidates": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "diggingPositionCandidates": {
+      "kind": "method",
+      "owner": "diggingPacketName",
+      "descriptor": "(){blockPosSignature}",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "diggingActionCandidates": {
+      "kind": "method",
+      "owner": "diggingPacketName",
+      "descriptor": "{diggingActionSignature}",
+      "static": false,
+      "alternatives": true,
+      "required": false,
+      "extent": 3
+    },
+    "hitTypeSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "diggingPacketName": {
+      "kind": "class",
+      "required": false
+    },
+    "diggingActionSignature": {
+      "kind": "descriptor",
+      "required": false
+    }
+  },
+  "requiredAlternatives": [
+    [
+      "minecraftInstanceField",
+      "getMinecraft"
+    ],
+    [
+      "loadedEntitiesField",
+      "getLoadedEntities"
+    ]
+  ],
+  "constructors": [
+    {
+      "owner": "blockPosName",
+      "descriptor": "(III)V",
+      "required": true
+    }
+  ]
+}
