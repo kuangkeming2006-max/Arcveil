@@ -53,6 +53,8 @@ void MappingEventModel::append(const QJsonObject &event) {
                      .arg(event.value("phase").toString())
                      .arg(event.value("completed").toInt())
                      .arg(event.value("total").toInt());
+    if(event.value("event")=="CAPTURE_PATH" || event.value("event")=="SNAPSHOT_STATS")
+        detail=QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
     row["detail"] = detail.left(8192);
     if (m_rows.size() >= 2000) {
         beginRemoveRows({}, 0, 0);

@@ -106,6 +106,7 @@ std::string detectedFamily(const Json& pack,const Model& model){
 }
 }
 Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
+    if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");
     (void)bindings::parseMappingPack(pack);Model model(snapshot);Json::Array attempts;
     const auto family=detectedFamily(pack,model);auto providers=pack.at("providers").array();std::stable_sort(providers.begin(),providers.end(),[](const Json&a,const Json&b){return a.at("priority").integer()>b.at("priority").integer();});
     for(const auto&p:providers)for(const auto&d:p.at("dictionaries").array()){
@@ -119,6 +120,7 @@ Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts
     return Json::Object{{"valid",false},{"injectionReady",false},{"level","live-members"},{"reason","no family-compatible dictionary passed required live bindings"},{"attempts",attempts},{"fingerprint",model.snapshot.at("fingerprint")}};
 }
 Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contracts,const Events& events){
+    if((target.contains("detailLevel")&&target.at("detailLevel").string()=="lite")||(reference&&reference->contains("detailLevel")&&reference->at("detailLevel").string()=="lite"))throw std::runtime_error("lite metadata cannot enter normalized bytecode/call-graph matching; inspect-detail required");
     (void)bindings::parseMappingPack(pack);Model live(target,true);Json::Array attempts;
     std::unique_ptr<Model> baseline;if(reference)baseline=std::make_unique<Model>(*reference,true);
     for(const auto&p:pack.at("providers").array())for(const auto&original:p.at("dictionaries").array()){

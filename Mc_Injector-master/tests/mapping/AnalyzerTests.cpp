@@ -1,10 +1,11 @@
 #include "../../mapping/analyzer/Analyzer.h"
+#include "../../mapping/analyzer/CaptureClient.h"
 #include <cstdio>
 using namespace mcoverlay::mapping;
 int main(int argc,char**argv){
     if(argc!=3)return 2;int checks=0,failures=0;
     auto check=[&](bool v){++checks;if(!v)++failures;};
-    const auto raw=Json::read(filePath(QString::fromLocal8Bit(argv[1])),64U*1024U*1024U);
+    const auto raw=readSnapshotFile(filePath(QString::fromLocal8Bit(argv[1])));
     check(inspectSnapshot(raw)==raw);
     auto tampered=raw;tampered["classes"].array()[0]["modifiers"]=999;
     try{inspectSnapshot(tampered);check(false);}catch(...){check(true);}

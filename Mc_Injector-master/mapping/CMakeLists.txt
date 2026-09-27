@@ -1,4 +1,4 @@
-add_library(mc_mapping_analyzer_core STATIC analyzer/Analyzer.cpp analyzer/Bytecode.cpp analyzer/Resolver.cpp
+add_library(mc_mapping_analyzer_core STATIC analyzer/Analyzer.cpp analyzer/CaptureClient.cpp analyzer/Bytecode.cpp analyzer/Resolver.cpp
     ../agent/bindings/MappingPack.cpp ../agent/bindings/MappingProvider.cpp)
 target_compile_features(mc_mapping_analyzer_core PUBLIC cxx_std_20)
 target_link_libraries(mc_mapping_analyzer_core PUBLIC Qt6::Core advapi32)
@@ -33,3 +33,7 @@ target_link_libraries(MappingServiceTests PRIVATE Qt6::Core)
 add_dependencies(MappingServiceTests FakeMappingAnalyzer)
 
 install(FILES README.md DESTINATION docs/mapping)
+
+add_executable(SnapshotStreamTests EXCLUDE_FROM_ALL ../tests/mapping/SnapshotStreamTests.cpp)
+target_compile_features(SnapshotStreamTests PRIVATE cxx_std_20)
+target_link_libraries(SnapshotStreamTests PRIVATE Qt6::Core)

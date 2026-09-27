@@ -21,8 +21,10 @@ only its existing BindingCache.
   validation and automatic resolution belong to v55.3.
 - diff: exact symbol changes and pack digest/metadata changes.
 
-Snapshots are bounded at 48 MiB capture / 64 MiB input; packs at 2 MiB. Probe
-output is published by rename; tool output uses QSaveFile. Tool stdout is JSONL
+Capture transport now uses chunked JSONL (v55.6) without an aggregate file-size
+ceiling: 64 KiB chunks, 512 KiB frames, 48 MiB per object, 16 MiB per JVMTI
+binary buffer. Legacy whole-JSON offline input remains bounded at 64 MiB; packs
+at 2 MiB. Probe output is published by rename; JSON tool output uses QSaveFile. Tool stdout is JSONL
 with eventVersion=1, event and event-specific fields; nonzero exit indicates
 failure. Agent uses no Qt; Analyzer links Qt Core.
 
@@ -104,3 +106,15 @@ resolution and immutable-cache publication afterward.
 
 ## Stage 5 — developer console and distribution
 MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.5.
+
+## v55.6 capture diagnostics gate
+Start at `P/mapping/analyzer/CaptureClient.h` and `P/mapping/SnapshotStream.h`.
+`inspect --pid PID --lite` (alias inspect-lite) captures metadata only, automatically
+selects the target runtime unless --java is supplied, and writes a streamed class
+index with a separate metadata fingerprint domain. It does not call resolve.
+CAPTURE_PATH exposes both helper outcomes; SNAPSHOT_STATS exposes actual sizes and
+precisely scoped limits. No registry/Agent startup boundary changes in this stage.
+Candidate selection and inspect-detail remain gated on real Lunar lite validation;
+private JVM success alone is not recorded as a real Lunar pass.
+Tests: SnapshotStreamTests (>64 MiB aggregate, chunk Unicode/order/truncation/limits),
+Test-CaptureDiagnostics.py, Run-MappingCapture.ps1 -Lite [-DisableAttach].

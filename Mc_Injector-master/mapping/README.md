@@ -53,3 +53,44 @@ ambiguity, private JVM transformed bytecode capture (standard and disabled Attac
 cache/Agent option boundaries, cancellation, event-loop responsiveness and UI smoke.
 A real Lunar client was unavailable during development; private JVM results do not
 establish compatibility with every Lunar version. Unsupported runtimes fail closed.
+
+## v55.6 capture diagnostics (lite verification gate)
+
+Before trying an unfamiliar Lunar runtime, keep the client on its main menu and run:
+
+```powershell
+.\tools\MappingAnalyzer.exe inspect --pid 1234 --lite
+```
+
+`inspect-lite --pid 1234` is an alias. `--java` is optional: the analyzer queries the
+target process executable and selects java.exe in the same directory. Override it
+with a matching JDK when needed. `--out` defaults to snapshot-1234-lite.jsonl in the
+current directory. This command only captures metadata and emits a domain-separated
+metadata fingerprint and class index. It never invokes mapping resolution or loads
+the main Agent. Lite requests no bytecode/constant-pool JVMTI capabilities and reads
+no constant pools or bytecodes. Without --pack it performs no dependency warmup.
+
+`CAPTURE_PATH` events contain separate standardAttach/fallback objects: selected
+javaRuntime/program, started/timedOut, exitCode, exitStatus, stdout, stderr, status,
+and captureFailure/reason when applicable. Fallback has a separate UUID-scoped
+output path, so an earlier Attach error cannot masquerade as a fallback result.
+`SNAPSHOT_STATS` contains loadedClassCount, capturedClassCount, classMetadataBytes,
+constantPoolBytes, bytecodeBytes, totalBytes, configuredLimit, largestClass and
+largestClassBytes. Metadata/largest class sizes are serialized JSON bytes; constant
+pool/bytecode sizes are decoded JVM bytes; totalBytes is the exact capture wire file
+size, including framing. Unavailable statistics are null, never fake zero counts.
+
+Transport is JSONL with 64 KiB payload chunks, sequence/identity checks and a required
+completion footer. It streams one class at a time; no 48/64 MiB aggregate capture
+file ceiling remains. Independent protections are 512 KiB per frame, 48 MiB per
+serialized object and 16 MiB per JVMTI binary buffer. Limit errors report limitLayer,
+limitName, observedBytes and configuredLimit, including class/method identity for
+JVM buffers. Truncated/partial files are never published as successful snapshots.
+Legacy whole-JSON offline inputs retain their explicitly named 64 MiB reader limit;
+lite output uses the streaming format. Neither lite fingerprints nor lite snapshots
+are verified bytecode mappings and must not authorize an injection cache hit.
+
+The candidate-class selection and inspect-detail integration are a separate next
+stage, gated on successful repeatable real Lunar lite capture. Existing full inspect
+is retained for compatibility while that gate is pending; this diagnostic change
+must not be presented as completion of the two-stage pre-injection pipeline.

@@ -114,3 +114,10 @@ jvm bootstrap 与 runtime 有双向源码依赖，属于启停入口与 VM 适�
   parses the same buffer to avoid a hash/read race.
 - Analyzer → MappingProbe::Agent_OnAttach / McOverlay_Start via existing tools;
   private JVM tests cover both standard Attach and DisabledAttach native fallback.
+
+## Capture transport v55.6
+Analyzer CaptureClient → AttachHelper/NativeLoader → independent MappingProbe uses
+UUID-scoped chunked JSONL files, with per-frame/object limits and required completion.
+Lite requests metadata only and emits no mapping candidate. CAPTURE_PATH and
+SNAPSHOT_STATS are new structured diagnostic events; controller JSONL envelope is
+unchanged. The main Agent pack/freeze interface is unchanged.
