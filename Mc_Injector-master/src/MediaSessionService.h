@@ -28,6 +28,7 @@ public slots:
     void republish();
 
 private:
+    friend struct MediaSessionServiceShutdownTest;
     void start();
     void scheduleRestart();
     void readOutput();

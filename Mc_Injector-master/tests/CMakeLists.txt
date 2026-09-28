@@ -120,3 +120,8 @@ else()
             -municode -static -static-libgcc -static-libstdc++)
     endif()
 endif()
+
+add_executable(McOverlayMediaShutdownTests EXCLUDE_FROM_ALL MediaShutdownTests.cpp ../src/MediaSessionService.cpp ../src/MediaSessionService.h)
+target_compile_features(McOverlayMediaShutdownTests PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayMediaShutdownTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(McOverlayMediaShutdownTests PRIVATE Qt6::Core)

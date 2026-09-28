@@ -35,9 +35,15 @@ MediaSessionService::MediaSessionService(QObject *parent) : QObject(parent)
 MediaSessionService::~MediaSessionService()
 {
     m_shuttingDown = true;
+    // QProcess is destroyed after the cached fields. Its final signals must not
+    // call readOutput/clearState after those fields have been destroyed.
+    disconnect(&m_bridge, nullptr, this, nullptr);
     send(QByteArrayLiteral("QUIT"));
     m_bridge.closeWriteChannel();
-    if (!m_bridge.waitForFinished(800)) m_bridge.kill();
+    if (!m_bridge.waitForFinished(800)) {
+        m_bridge.kill();
+        m_bridge.waitForFinished(800);
+    }
 }
 
 void MediaSessionService::start()
