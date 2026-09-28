@@ -86,7 +86,7 @@ std::filesystem::path defaultMappingPackPath() {
     std::wstring path(32768,L'\0');DWORD size=GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
     if(!size||size>=path.size())throw std::runtime_error("mapping module path unavailable");
     path.resize(size);
-    return std::filesystem::path(path).parent_path()/"mappings"/"default-v1.json";
+    return std::filesystem::path(path).parent_path()/"mappings"/"default-v2.json";
 #else
     throw std::runtime_error("explicit mapping pack path required on this platform");
 #endif

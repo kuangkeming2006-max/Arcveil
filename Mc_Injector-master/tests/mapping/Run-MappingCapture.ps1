@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Build,[Parameter(Mandatory=$true)][string]$Jdk,[switch]$DisableAttach,[switch]$Lite)
+param([Parameter(Mandatory=$true)][string]$Build,[Parameter(Mandatory=$true)][string]$Jdk,[switch]$DisableAttach,[switch]$Lite,[switch]$Detail)
 $ErrorActionPreference='Stop'
 $fixture=Join-Path $Build 'mapping-fixture'
 New-Item -ItemType Directory -Force -Path $fixture | Out-Null
@@ -12,8 +12,16 @@ if($DisableAttach){$javaArgs=@('-XX:+DisableAttachMechanism')+$javaArgs}
 $target=Start-Process -FilePath "$Jdk/bin/java.exe" -ArgumentList $javaArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput "$fixture/target.log" -RedirectStandardError "$fixture/target-error.log"
 try {
     Start-Sleep -Milliseconds 900
-    $captureArgs=@('inspect','--pid',$target.Id,'--java',"$Jdk/bin/java.exe",'--helper',"$Build/attach-helper/McOverlayAttachHelper.jar",'--probe',"$Build/MappingProbe.dll",'--native-loader',"$Build/McOverlayNativeLoader.exe",'--out',"$fixture/snapshot.json")
+    $captureArgs=@('inspect','--pid',$target.Id,'--java',"$Jdk/bin/java.exe",'--helper',"$Build/attach-helper/McOverlayAttachHelper.jar",'--probe',"$Build/MappingProbe-v2.dll",'--native-loader',"$Build/McOverlayNativeLoader.exe",'--out',"$fixture/snapshot.json")
     if($Lite){$captureArgs=$captureArgs[0..3]+$captureArgs[6..($captureArgs.Count-1)];$captureArgs+='--lite'}
+    if($Detail){
+        $pack=Get-Content -Raw "$Build/mappings/default-v1.json" | ConvertFrom-Json
+        $pack.providers=@($pack.providers[1])
+        $pack.providers[0].dictionaries[0].symbols.minecraftName='MappingCaptureSubject'
+        $pack.providers[0].dictionaries[0].symbols.minecraftSignature='LMappingCaptureSubject;'
+        $pack | ConvertTo-Json -Depth 30 -Compress | Set-Content -Encoding utf8 "$fixture/detail-pack.json"
+        $captureArgs+=@('--pack',"$fixture/detail-pack.json")
+    }
     $events=& "$Build/MappingAnalyzer.exe" @captureArgs
     $events | Write-Output
     if($LASTEXITCODE){throw 'live inspect failed'}
@@ -29,6 +37,14 @@ try {
         & "$Build/MappingAnalyzer.exe" inspect --snapshot "$fixture/snapshot.json" --lite --out "$fixture/lite-roundtrip.jsonl"
         if($LASTEXITCODE){throw 'lite streamed roundtrip failed'}
         Write-Output 'Live lite capture: two stable fingerprints; zero constant pool/bytecode bytes; streamed roundtrip passed'
+        return
+    }
+    if($Detail){
+        $paths=@($events | ForEach-Object {$_ | ConvertFrom-Json} | Where-Object event -eq 'CAPTURE_PATH')
+        $successful=@($paths | Where-Object { if($DisableAttach){$_.fallback.status -eq 'captured'}else{$_.standardAttach.status -eq 'captured'} })
+        if($successful.Count -ne 2){throw 'both capture stages must use the expected Attach path'}
+        & python "$PSScriptRoot/Test-DetailCapture.py" $Build $target.Id $Jdk
+        if($LASTEXITCODE){throw 'selected capture regression failed'}
         return
     }
     $snapshot=Get-Content -Raw "$fixture/snapshot.json" | ConvertFrom-Json

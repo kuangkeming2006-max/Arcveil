@@ -32,7 +32,7 @@ Popup {
             Layout.fillWidth: true
             Label { text: "Mapping Console"; color: host.textColor; font.pixelSize: 24; font.bold: true }
             Item { Layout.fillWidth: true }
-            Label { text: "Developer tools · v55.6"; color: host.secondaryTextColor }
+            Label { text: "Developer tools · v55.7"; color: host.secondaryTextColor }
             Button { objectName: "mappingConsoleClose"; text: "Close"; onClicked: mappingPopup.close() }
         }
         Label {

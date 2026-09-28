@@ -1,4 +1,4 @@
-# Mapping pipeline — internal v55.5
+# Mapping pipeline — internal v55.7
 
 The controller validates mappings before loading the main Agent. Gameplay uses logical
 symbols; MappingRegistry remains the final registration boundary and freezes once.
@@ -17,11 +17,11 @@ Run from the extracted package root (PowerShell). Supply absolute paths for outp
 For Java 9+, use a JDK java.exe matching the target architecture:
 
 ```powershell
-.\tools\MappingAnalyzer.exe inspect --pid 1234 --java "C:/JDK/bin/java.exe" --native-loader "$PWD/tools/McOverlayNativeLoader.exe" --pack "$PWD/agent/mappings/default-v1.json" --out "$PWD/reference.json"
-.\tools\MappingAnalyzer.exe validate --pack "$PWD/agent/mappings/default-v1.json" --snapshot "$PWD/reference.json" --out "$PWD/validation.json"
+.\tools\MappingAnalyzer.exe inspect --pid 1234 --java "C:/JDK/bin/java.exe" --native-loader "$PWD/tools/McOverlayNativeLoader.exe" --pack "$PWD/agent/mappings/default-v2.json" --out "$PWD/reference.json"
+.\tools\MappingAnalyzer.exe validate --pack "$PWD/agent/mappings/default-v2.json" --snapshot "$PWD/reference.json" --out "$PWD/validation.json"
 .\tools\MappingAnalyzer.exe inspect --snapshot "$PWD/reference.json" --out "$PWD/normalized.json"
-.\tools\MappingAnalyzer.exe resolve --pack "$PWD/agent/mappings/default-v1.json" --reference "$PWD/reference.json" --snapshot "$PWD/new-runtime.json" --out "$PWD/candidate.json" --write-pack "$PWD/new-pack.json"
-.\tools\MappingAnalyzer.exe diff --before "$PWD/agent/mappings/default-v1.json" --after "$PWD/new-pack.json" --out "$PWD/diff.json"
+.\tools\MappingAnalyzer.exe resolve --pack "$PWD/agent/mappings/default-v2.json" --reference "$PWD/reference.json" --snapshot "$PWD/new-runtime.json" --out "$PWD/candidate.json" --write-pack "$PWD/new-pack.json"
+.\tools\MappingAnalyzer.exe diff --before "$PWD/agent/mappings/default-v2.json" --after "$PWD/new-pack.json" --out "$PWD/diff.json"
 ```
 
 Capture new-runtime.json from the target JVM using inspect. A reference must come
@@ -51,8 +51,9 @@ process reuse, changed fingerprints and incomplete candidates are rejected.
 Regression coverage includes legacy pack parity, synthetic full-schema renaming and
 ambiguity, private JVM transformed bytecode capture (standard and disabled Attach),
 cache/Agent option boundaries, cancellation, event-loop responsiveness and UI smoke.
-A real Lunar client was unavailable during development; private JVM results do not
-establish compatibility with every Lunar version. Unsupported runtimes fail closed.
+Real Lunar 1.8.9 (v2.22.42-2639, Zulu 17.0.18) passed lite capture, selected detail,
+live SRG validation and a complete Agent/renderer handshake on 2026-09-28. This
+is evidence for that runtime, not every Lunar version. Unsupported runtimes fail closed.
 
 ## v55.6 capture diagnostics (lite verification gate)
 
@@ -90,7 +91,52 @@ Legacy whole-JSON offline inputs retain their explicitly named 64 MiB reader lim
 lite output uses the streaming format. Neither lite fingerprints nor lite snapshots
 are verified bytecode mappings and must not authorize an injection cache hit.
 
-The candidate-class selection and inspect-detail integration are a separate next
-stage, gated on successful repeatable real Lunar lite capture. Existing full inspect
-is retained for compatibility while that gate is pending; this diagnostic change
-must not be presented as completion of the two-stage pre-injection pipeline.
+## v55.7 two-stage preflight
+
+`inspect --pid PID --pack PACK --out SNAPSHOT` now performs lite capture, selects
+candidate classes, and captures only those classes' constant pools and installed
+method bytecodes. It exports cross references with a completeness flag; unsupported
+bytecode remains ineligible for automatic acceptance. It retains `SNAPSHOT.lite.jsonl`
+and `SNAPSHOT.candidates.json` for diagnosis. Supply `--reference VERIFIED_SNAPSHOT`
+when selecting unfamiliar renamed classes structurally. Authored names request a
+capture scope only; the separate live validator still decides acceptance.
+
+Stages can also run independently:
+
+```powershell
+.\tools\MappingAnalyzer.exe inspect --pid 1234 --lite --pack "$PWD/agent/mappings/default-v2.json" --out "$PWD/index.jsonl"
+.\tools\MappingAnalyzer.exe select --pack "$PWD/agent/mappings/default-v2.json" --snapshot "$PWD/index.jsonl" --out "$PWD/selection.json"
+.\tools\MappingAnalyzer.exe inspect-detail --pid 1234 --candidates "$PWD/selection.json" --out "$PWD/detail.jsonl"
+```
+
+Selections bind the PID, process creation time, lite fingerprint, defining-loader
+instance and metadata digest. Changed/missing classes, loader collisions, mismatched
+metadata or incomplete results fail closed. Content-identical loaders retain separate
+process-scoped identities; they are never merged. Lite avoids class-version queries,
+which some transformed Lunar classes reject despite supporting metadata enumeration.
+
+`default-v2.json` retains all four v1 dictionaries unchanged and adds an authored Lunar
+SRG dictionary from the existing Forge SRG symbol data. v1 remains shipped; Agent and
+Injector defaults select v2. No Gameplay symbols or registry freeze behavior changed.
+
+Preflight and its final recheck both use this pipeline. Snapshot cache hashes stream
+without an aggregate size ceiling; pack/metadata JSON bounds remain. Analyzer cache
+revision 4 invalidates older proofs. Legacy full inspect without a pack remains an
+explicit diagnostic compatibility path, outside normal injection.
+
+Long capture requests are stored in a bounded temporary JSON file; Attach carries a
+short file reference, and the native worker takes its own copy. Native startup verifies
+that the target can create diagnostics. CAPTURE_PATH adds `lastProbeStatus` and tagged
+`captureFailure.stage/win32Error/reason` for request reads and output writes, rather
+than waiting a minute when a path is unavailable. Failed normalization retains the
+raw capture for inspection; partial files never authorize injection.
+
+The opt-in `McOverlayLiveMappingSmoke PID [UNIQUE_PROBE_PATH]` test uses production
+OverlayManager, isolated preferences/cache under the build directory, checks ready
+mapping plus renderer activation, and then detaches. The optional unique probe path
+supports testing while an older DLL is resident. Its cache directory is printed and
+retained. It is not part of normal application startup.
+
+Probe protocol v2 ships as `MappingProbe-v2.dll`, so a resident v1 probe cannot be
+accidentally reused after an application upgrade. The NativeLoader's module-identity
+checks remain enabled.

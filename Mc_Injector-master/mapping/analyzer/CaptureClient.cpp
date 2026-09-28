@@ -1,4 +1,8 @@
 #include "CaptureClient.h"
+#include "Bytecode.h"
+#include "../ProbeProtocol.h"
+#include <QRegularExpression>
+#include <QTemporaryFile>
 #include "../SnapshotStream.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <QCoreApplication>
@@ -101,12 +105,15 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v2.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     Json request = Json::Object{{"requestId", requestId},
                                 {"mode", options.contains("--lite") ? "lite" : "full"}};
+    if (options.contains("--candidates"))
+        request["selectionPath"] =
+            QFileInfo(option("--candidates")).absoluteFilePath().toUtf8().toStdString();
     if (options.contains("--pack")) {
         const auto authored = Json::read(filePath(option("--pack")));
         (void)bindings::parseMappingPack(authored);
@@ -140,7 +147,18 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                              (attempt ? L".fallback.capture" : L".standard.capture");
         const auto errorPath = std::filesystem::path(rawPath + L".error");
         request["output"] = qtPath(rawPath).toUtf8().toStdString();
-        const auto encoded = QString::fromLatin1(QByteArray::fromStdString(request.dump()).toHex());
+        const auto requestBytes = QByteArray::fromStdString(request.dump());
+        if (std::size_t(requestBytes.size()) > probeRequestBytes)
+            throw SnapshotLimit("file", "probe-request-json", requestBytes.size(),
+                                probeRequestBytes);
+        QTemporaryFile requestFile(QDir::tempPath() + "/Arcveil-mapping-XXXXXX.json");
+        if (!requestFile.open() || requestFile.write(requestBytes) != requestBytes.size() ||
+            !requestFile.flush())
+            throw std::runtime_error("cannot publish probe request file");
+        const auto envelope =
+            Json(Json::Object{{"requestFile", requestFile.fileName().toUtf8().toStdString()}})
+                .dump();
+        const auto encoded = QString::fromLatin1(QByteArray::fromStdString(envelope).toHex());
         if (encoded.size() > 65536)
             throw SnapshotLimit("protocol", "probe-request-hex", encoded.size(), 65536);
         QStringList args;
@@ -155,6 +173,28 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                        attempt ? QStringList{QString::number(pid), probe, encoded} : args,
                        attempt ? 25000 : 60000);
         diagnostic["javaRuntime"] = java.toUtf8().toStdString();
+        if (attempt) {
+            const auto match = QRegularExpression("McOverlay_Start returned ([0-9]+)")
+                                   .match(QString::fromStdString(diagnostic.at("stderr").string()));
+            if (match.hasMatch()) {
+                const auto code = match.captured(1).toUInt();
+                const auto stage = code & 0xffff0000U;
+                if (stage == probeOutputOpenError || stage == probeOutputWriteError ||
+                    stage == probeRequestReadError) {
+                    const auto error = code & 0xffffU;
+                    wchar_t message[1024]{};
+                    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                   nullptr, error, 0, message, 1024, nullptr);
+                    diagnostic["captureFailure"] = Json::Object{
+                        {"stage", stage == probeOutputOpenError    ? "output-file-open"
+                                  : stage == probeOutputWriteError ? "output-file-write"
+                                                                   : "request-file-read"},
+                        {"win32Error", double(error)},
+                        {"reason",
+                         QString::fromWCharArray(message).trimmed().toUtf8().toStdString()}};
+                }
+            }
+        }
         if (attempt && diagnostic.at("success").boolean()) {
             QElapsedTimer deadline;
             deadline.start();
@@ -163,6 +203,12 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                 QThread::msleep(50);
         }
         const auto key = attempt ? "fallback" : "standardAttach";
+        const auto statusPath = std::filesystem::path(rawPath + L".status");
+        if (QFile::exists(qtPath(statusPath)))
+            try {
+                diagnostic["lastProbeStatus"] = Json::read(statusPath);
+            } catch (...) {
+            }
         try {
             if (QFile::exists(qtPath(errorPath))) {
                 auto failure = Json::read(errorPath);
@@ -178,12 +224,14 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             if (!diagnostic.at("success").boolean())
                 throw std::runtime_error("helper failed: exit=" + diagnostic.at("exitCode").dump() +
                                          "; " + diagnostic.at("reason").string() +
-                                         "; stderr=" + diagnostic.at("stderr").string());
+                                         "; stderr=" + diagnostic.at("stderr").string() +
+                                         "; stdout=" + diagnostic.at("stdout").string());
             if (!QFile::exists(qtPath(rawPath)))
                 throw std::runtime_error(
                     attempt ? "fallback capture timeout: no result/error file"
                             : "Attach helper exited successfully without capture output");
             auto snapshot = readSnapshotStream(rawPath);
+            diagnostic["statisticsAvailable"] = true;
             if (snapshot.at("requestId").string() != requestId ||
                 snapshot.at("pid").number() != pid)
                 throw std::runtime_error("stale/mismatched probe response");
@@ -194,8 +242,56 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             stats["event"] = "SNAPSHOT_STATS";
             stats["capturePath"] = key;
             events(stats);
+            if (options.contains("--candidates"))
+                for (auto &klass : snapshot["classes"].array()) {
+                    Json::Array graph;
+                    for (const auto &method : klass.at("methods").array()) {
+                        Json entry = Json::Object{{"method", method.at("name")},
+                                                  {"descriptor", method.at("descriptor")}};
+                        try {
+                            const auto shape = normalizeBytecode(klass, method);
+                            Json::Array refs;
+                            for (const auto &ref : shape.references)
+                                refs.push_back(Json::Object{{"owner", ref.owner},
+                                                            {"name", ref.name},
+                                                            {"descriptor", ref.descriptor},
+                                                            {"opcode", ref.opcode},
+                                                            {"position", ref.position}});
+                            entry["complete"] = shape.supported;
+                            entry["references"] = refs;
+                        } catch (const std::exception &e) {
+                            entry["complete"] = false;
+                            entry["reason"] = e.what();
+                        }
+                        graph.push_back(std::move(entry));
+                    }
+                    klass["crossReferences"] = graph;
+                }
+            auto normalized = inspectSnapshot(std::move(snapshot));
+            if (options.contains("--candidates")) {
+                const auto selection = Json::read(filePath(option("--candidates")));
+                std::map<std::string, std::string> expected;
+                for (const auto &item : selection.at("classes").array()) {
+                    if (!expected
+                             .emplace(item.at("loaderKey").string() + item.at("name").string(),
+                                      item.at("metadataDigest").string())
+                             .second)
+                        throw std::runtime_error("duplicate detail candidate");
+                }
+                if (expected.size() != normalized.at("classes").array().size())
+                    throw std::runtime_error("detail selection count changed");
+                for (const auto &klass : normalized.at("classes").array()) {
+                    const auto id = klass.at("loaderKey").string() + klass.at("name").string();
+                    if (!expected.contains(id) ||
+                        sha256(classMetadata(klass).dump()) != expected.at(id))
+                        throw std::runtime_error(
+                            "class metadata changed between lite and detail: " +
+                            klass.at("name").string());
+                }
+            }
             QFile::remove(qtPath(rawPath));
-            return inspectSnapshot(std::move(snapshot));
+            QFile::remove(qtPath(statusPath));
+            return normalized;
         } catch (const SnapshotLimit &e) {
             diagnostic["captureFailure"] = e.json();
             diagnostic["reason"] = e.what();
@@ -205,7 +301,9 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
         diagnostic["status"] = "failed";
         paths[key] = diagnostic;
         events(paths);
-        if (!diagnostic.contains("captureFailure"))
+        if (!diagnostic.contains("statisticsAvailable") &&
+            (!diagnostic.contains("captureFailure") ||
+             !diagnostic.at("captureFailure").contains("stats")))
             events(Json::Object{{"event", "SNAPSHOT_STATS"},
                                 {"capturePath", key},
                                 {"available", false},
@@ -220,8 +318,9 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                                 {"largestClass", Json()},
                                 {"largestClassBytes", Json()},
                                 {"reason", "probe did not return capture statistics"}});
-        QFile::remove(qtPath(rawPath));
+        // Keep failed raw snapshots for normalization/transport diagnosis.
         QFile::remove(qtPath(errorPath));
+        QFile::remove(qtPath(statusPath));
     }
     throw std::runtime_error(
         "standard Attach failed: " + paths.at("standardAttach").at("reason").string() +

@@ -1,5 +1,6 @@
 #include "../Json.h"
 #include "../SnapshotStream.h"
+#include "../ProbeProtocol.h"
 #include <jni.h>
 #include <jvmti.h>
 #include <windows.h>
@@ -12,6 +13,10 @@
 using namespace mcoverlay::mapping;
 namespace {
 std::mutex captureMutex;
+void progress(const std::filesystem::path &output, const char *stage) {
+    std::ofstream file(std::filesystem::path(output.wstring() + L".status"), std::ios::binary);
+    file << Json(Json::Object{{"stage", stage}}).dump();
+}
 void require(jvmtiError result, const char *operation) {
     if (result != JVMTI_ERROR_NONE)
         throw std::runtime_error(std::string(operation) + ": JVMTI " + std::to_string(result));
@@ -51,6 +56,7 @@ struct Capture {
     bool lite = false;
     Json *stats = nullptr;
     SnapshotWriter *stream = nullptr;
+    const Json *selection = nullptr;
     ~Capture() {
         for (auto loader : loaders)
             env->DeleteLocalRef(loader);
@@ -131,7 +137,8 @@ struct Capture {
         Buffer<unsigned char> pool{ti};
         if (!lite)
             require(ti->GetConstantPool(klass, &cpCount, &cpBytes, &pool.data), "GetConstantPool");
-        require(ti->GetClassVersionNumbers(klass, &minor, &major), "GetClassVersionNumbers");
+        if (!lite && !selection)
+            require(ti->GetClassVersionNumbers(klass, &minor, &major), "GetClassVersionNumbers");
         require(ti->GetClassModifiers(klass, &mods), "GetClassModifiers");
         Json result = Json::Object{{"name", signature(ti, klass)},
                                    {"loader", loaderId(klass)},
@@ -142,6 +149,10 @@ struct Capture {
                                    {"minor", minor},
                                    {"fields", fields},
                                    {"methods", methods}};
+        if (lite) {
+            result.object().erase("major");
+            result.object().erase("minor");
+        }
         if (!lite) {
             result["constantPoolCount"] = cpCount;
             result["constantPool"] =
@@ -213,10 +224,33 @@ struct Capture {
         if (count > 100000)
             throw SnapshotLimit("JVMTI inventory", "loaded-class-count", count, 100000);
         std::size_t captured = 0;
+        std::map<std::string, std::vector<const Json *>> wanted;
+        if (selection)
+            for (const auto &item : selection->at("classes").array())
+                wanted[item.at("name").string()].push_back(&item);
         for (int i = 0; i < count; ++i) {
             const auto name = signature(ti, classes.data[i]);
             if (name.empty() || name.front() != 'L' || !loaderId(classes.data[i]))
                 continue;
+            if (selection) {
+                auto matches = wanted.find(name);
+                if (matches == wanted.end())
+                    continue;
+                const auto loader = loaders.at(std::size_t(loaderId(classes.data[i]) - 1));
+                jint identity = 0;
+                require(ti->GetObjectHashCode(loader, &identity),
+                        "GetObjectHashCode:selected-loader");
+                jclass type = env->GetObjectClass(loader);
+                auto typeName = signature(ti, type);
+                env->DeleteLocalRef(type);
+                bool requested = false;
+                for (const auto *candidate : matches->second)
+                    requested |= candidate->at("instance").number() ==
+                                     double(static_cast<unsigned int>(identity)) &&
+                                 candidate->at("type").string() == typeName;
+                if (!requested)
+                    continue;
+            }
             jint status = 0;
             require(ti->GetClassStatus(classes.data[i], &status), "GetClassStatus");
             if (!(status & JVMTI_CLASS_STATUS_PREPARED))
@@ -250,10 +284,18 @@ struct Capture {
             (*stats)["capturedClassCount"] = double(captured);
             (*stats)["totalBytes"] = double(stream->bytes);
         }
+        if (selection && captured != selection->at("classes").array().size())
+            throw std::runtime_error(
+                "selected classes disappeared, became unprepared, or changed defining loader");
         Json::Array loaderInfo;
         for (std::size_t i = 0; i < loaders.size(); ++i) {
             jclass type = env->GetObjectClass(loaders[i]);
-            loaderInfo.push_back(Json::Object{{"id", int(i + 1)}, {"type", signature(ti, type)}});
+            jint identity = 0;
+            require(ti->GetObjectHashCode(loaders[i], &identity), "GetObjectHashCode:classloader");
+            loaderInfo.push_back(
+                Json::Object{{"id", int(i + 1)},
+                             {"type", signature(ti, type)},
+                             {"instance", double(static_cast<unsigned int>(identity))}});
             env->DeleteLocalRef(type);
         }
         return Json::Object{{"loaders", loaderInfo}};
@@ -279,6 +321,40 @@ std::string decode(const char *options) {
         out += char(digit(text[i]) * 16 + digit(text[i + 1]));
     return out;
 }
+struct RequestReadError : std::runtime_error {
+    DWORD code;
+    explicit RequestReadError(DWORD value)
+        : std::runtime_error("probe request file unavailable or invalid"), code(value) {}
+};
+Json readRequest(const char *options) {
+    const auto envelope = Json::parse(decode(options));
+    if (!envelope.contains("requestFile"))
+        return envelope; // legacy inline requests
+    const auto path = std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t *>(envelope.at("requestFile").string().c_str())));
+    if (!path.is_absolute())
+        throw RequestReadError(ERROR_INVALID_NAME);
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        throw RequestReadError(GetLastError());
+    try {
+        return Json::read(path, probeRequestBytes);
+    } catch (...) {
+        throw RequestReadError(ERROR_INVALID_DATA);
+    }
+}
+std::string inlineRequest(const Json &request) {
+    const auto text = request.dump();
+    if (text.size() > probeRequestBytes)
+        throw RequestReadError(ERROR_INVALID_DATA);
+    constexpr char digits[] = "0123456789abcdef";
+    std::string encoded;
+    encoded.reserve(text.size() * 2);
+    for (unsigned char ch : text) {
+        encoded += digits[ch >> 4];
+        encoded += digits[ch & 15];
+    }
+    return encoded;
+}
 } // namespace
 extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *options, void *) {
     std::unique_lock lock(captureMutex, std::try_to_lock);
@@ -301,8 +377,12 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         {"largestClass", ""},
         {"largestClassBytes", 0}};
     auto failure = [&](Json detail) {
-        if(!temporary.empty()){std::error_code error;auto size=std::filesystem::file_size(temporary,error);
-            if(!error)stats["totalBytes"]=double(size);}
+        if (!temporary.empty()) {
+            std::error_code error;
+            auto size = std::filesystem::file_size(temporary, error);
+            if (!error)
+                stats["totalBytes"] = double(size);
+        }
         detail["stats"] = stats;
         if (!errorPath.empty()) {
             std::ofstream file(errorPath, std::ios::binary);
@@ -314,12 +394,13 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         }
     };
     try {
-        const auto request = Json::parse(decode(options));
+        const auto request = readRequest(options);
         const auto path = std::filesystem::path(std::u8string(
             reinterpret_cast<const char8_t *>(request.at("output").string().c_str())));
         if (!path.is_absolute())
             throw std::runtime_error("absolute output required");
         errorPath = path.wstring() + L".error";
+        progress(path, "capture-initializing");
         if (!lock.owns_lock())
             throw std::runtime_error("capture busy: another probe request owns the capture mutex");
         if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_8) != JNI_OK)
@@ -327,6 +408,24 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         if (vm->GetEnv(reinterpret_cast<void **>(&ti), JVMTI_VERSION_1_2) != JNI_OK)
             throw std::runtime_error("JVMTI unavailable");
         const bool lite = request.contains("mode") && request.at("mode").string() == "lite";
+        Json selected;
+        if (request.contains("selectionPath")) {
+            selected = Json::read(std::filesystem::path(std::u8string(
+                reinterpret_cast<const char8_t *>(request.at("selectionPath").string().c_str()))));
+            FILETIME created{}, ended{}, kernel{}, user{};
+            if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+                throw std::runtime_error("selection process identity unavailable");
+            const auto start =
+                std::to_string((static_cast<unsigned long long>(created.dwHighDateTime) << 32) |
+                               created.dwLowDateTime);
+            if (selected.at("candidateVersion").integer() != 1 ||
+                selected.at("pid").number() != GetCurrentProcessId() ||
+                selected.at("processStart").string() != start)
+                throw std::runtime_error("selection belongs to a different JVM instance");
+            if (selected.at("classes").array().empty())
+                throw std::runtime_error("empty detail selection");
+        }
+        const bool detail = request.contains("selectionPath");
         if (!lite) {
             jvmtiCapabilities wanted{};
             wanted.can_get_bytecodes = 1;
@@ -339,12 +438,17 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                       Json::Object{{"snapshotVersion", 1},
                                    {"captureKind", lite ? "jvmti-metadata-double-read"
                                                         : "jvmti-installed-double-read"},
-                                   {"detailLevel", lite ? "lite" : "full"}});
+                                   {"detailLevel", lite     ? "lite"
+                                                   : detail ? "selected"
+                                                            : "full"}});
         Json snapshot;
         {
-            Capture capture{env, ti, {}, lite, &stats, &stream};
-            if (request.contains("warmup"))
+            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr};
+            if (request.contains("warmup")) {
+                progress(path, "authored-class-warmup");
                 capture.warmup(request.at("warmup"));
+            }
+            progress(path, detail ? "selected-class-detail" : "class-index");
             snapshot = capture.run();
         }
         Json::Array evidence;
@@ -365,11 +469,23 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                                                         {"confidence", pattern.at("confidence")}});
                 }
             }
+        if (detail) {
+            snapshot["loaderBindings"] = selected.at("loaderBindings");
+            Json::Array scope;
+            for (const auto &item : selected.at("classes").array())
+                scope.push_back(Json::Object{{"name", item.at("name")},
+                                             {"loaderKey", item.at("loaderKey")},
+                                             {"metadataDigest", item.at("metadataDigest")}});
+            snapshot["captureScope"] = Json::Object{
+                {"liteFingerprint", selected.at("liteFingerprint")}, {"classes", scope}};
+            evidence = selected.at("launchEvidence").array();
+        }
         snapshot["launchEvidence"] =
             evidence; // Never persist raw command lines, paths or property values.
         snapshot["snapshotVersion"] = 1;
-        snapshot["captureKind"] =
-            lite ? "jvmti-metadata-double-read" : "jvmti-installed-double-read";
+        snapshot["captureKind"] = lite     ? "jvmti-metadata-double-read"
+                                  : detail ? "jvmti-selected-detail-double-read"
+                                           : "jvmti-installed-double-read";
         snapshot["requestId"] = request.at("requestId");
         snapshot["pid"] = double(GetCurrentProcessId());
         FILETIME created{}, exit{}, kernel{}, user{};
@@ -439,6 +555,25 @@ extern "C" __declspec(dllexport) DWORD WINAPI McOverlay_Start(LPVOID rawOptions)
         std::string copy(options);
         if (copy.size() > 65536)
             return 1;
+        // Verify the remote process can publish diagnostics before acknowledging startup.
+        // Otherwise an unwritable output directory masquerades as a capture timeout.
+        const auto request = readRequest(copy.c_str());
+        copy = inlineRequest(request); // worker owns the request even after Analyzer cancellation
+        const auto output = std::filesystem::path(std::u8string(
+            reinterpret_cast<const char8_t *>(request.at("output").string().c_str())));
+        const auto statusPath = std::filesystem::path(output.wstring() + L".status");
+        HANDLE status = CreateFileW(statusPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (status == INVALID_HANDLE_VALUE)
+            return probeOutputOpenError | (GetLastError() & 0xffffU);
+        const std::string started = Json(Json::Object{{"stage", "native-worker-starting"}}).dump();
+        DWORD written = 0;
+        const bool published =
+            WriteFile(status, started.data(), DWORD(started.size()), &written, nullptr);
+        const DWORD publishError = published ? ERROR_WRITE_FAULT : GetLastError();
+        CloseHandle(status);
+        if (!published || written != started.size())
+            return probeOutputWriteError | (publishError & 0xffffU);
         using GetVms = jint(JNICALL *)(JavaVM **, jsize, jsize *);
         auto module = GetModuleHandleW(L"jvm.dll");
         auto get = module
@@ -448,13 +583,20 @@ extern "C" __declspec(dllexport) DWORD WINAPI McOverlay_Start(LPVOID rawOptions)
         jsize count = 0;
         if (!get || get(&vm, 1, &count) != JNI_OK || count != 1 || !vm)
             return 1;
-        std::thread([vm, copy = std::move(copy)]() mutable {
+        std::thread([vm, copy = std::move(copy), output]() mutable {
+            progress(output, "JNI-daemon-attach");
             JNIEnv *env = nullptr;
             bool attached = false;
             if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_8) != JNI_OK) {
                 if (vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void **>(&env), nullptr) !=
-                    JNI_OK)
+                    JNI_OK) {
+                    std::ofstream status(std::filesystem::path(output.wstring() + L".error"),
+                                         std::ios::binary);
+                    status << Json(Json::Object{{"stage", "AttachCurrentThreadAsDaemon"},
+                                                {"reason", "JNI daemon thread attach failed"}})
+                                  .dump();
                     return;
+                }
                 attached = true;
             }
             (void)Agent_OnAttach(vm, copy.data(), nullptr);
@@ -462,6 +604,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI McOverlay_Start(LPVOID rawOptions)
                 vm->DetachCurrentThread();
         }).detach();
         return 0;
+    } catch (const RequestReadError &error) {
+        return probeRequestReadError | (error.code & 0xffffU);
     } catch (...) {
         return 1;
     }

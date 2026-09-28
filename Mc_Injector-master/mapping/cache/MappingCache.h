@@ -4,7 +4,7 @@
 namespace mapping_cache {
 QJsonObject readObject(const QString &path, qint64 limit = 2 * 1024 * 1024);
 void writeObject(const QString &path, const QJsonObject &value);
-QString fileDigest(const QString &path, qint64 limit = 64 * 1024 * 1024);
+QString fileDigest(const QString &path, qint64 limit = -1);
 struct Entry {
     QString revision, fingerprint, pack, snapshot, digest, contractDigest;
     bool valid() const { return !revision.isEmpty(); }

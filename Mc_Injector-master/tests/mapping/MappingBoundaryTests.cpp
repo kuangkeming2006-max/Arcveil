@@ -2,6 +2,7 @@
 #include "../../agent/src/AgentOptions.h"
 #include "../../mapping/cache/MappingCache.h"
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QLockFile>
 #include <QTemporaryDir>
@@ -89,11 +90,28 @@ int main(int argc, char **argv) {
     corrupt.write("tampered");
     corrupt.close();
     check(!cache.lookup("fingerprint", "contract").valid(), "corrupt verified cache rejected");
-    const auto indexPath=dir.path()+"/cache/index.json";
-    auto index=readObject(indexPath);
-    index["previous"]=QJsonObject{{"fingerprint","../../outside"}};
-    writeObject(indexPath,index);
+    const auto indexPath = dir.path() + "/cache/index.json";
+    auto index = readObject(indexPath);
+    index["previous"] = QJsonObject{{"fingerprint", "../../outside"}};
+    writeObject(indexPath, index);
     check(!cache.rollback(), "malformed previous revision rejected before path access");
+    QFile large(dir.path() + "/large-stream.jsonl");
+    check(large.open(QIODevice::WriteOnly), "large snapshot fixture opens");
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray chunk(1024 * 1024, 'x');
+    for (int i = 0; i < 65; ++i) {
+        large.write(chunk);
+        hash.addData(chunk);
+    }
+    large.close();
+    check(fileDigest(large.fileName()) == QString::fromLatin1(hash.result().toHex()),
+          "stream digest has no aggregate 64 MiB limit");
+    try {
+        fileDigest(large.fileName(), 2 * 1024 * 1024);
+        check(false, "explicit pack-sized digest bound");
+    } catch (...) {
+        check(true, "explicit pack-sized digest bound");
+    }
     std::printf("Mapping boundaries/cache: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

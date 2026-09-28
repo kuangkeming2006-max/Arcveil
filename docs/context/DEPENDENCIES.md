@@ -121,3 +121,12 @@ UUID-scoped chunked JSONL files, with per-frame/object limits and required compl
 Lite requests metadata only and emits no mapping candidate. CAPTURE_PATH and
 SNAPSHOT_STATS are new structured diagnostic events; controller JSONL envelope is
 unchanged. The main Agent pack/freeze interface is unchanged.
+
+## Two-stage capture v55.7
+MappingService → Analyzer inspect --pack now performs metadata capture → structural
+candidate scope → selected bytecode/CP capture, including the final recheck. The
+select/inspect-detail boundary is a candidate JSON file bound to the live process,
+loader instances and metadata digests. Attach passes a short temporary request-file
+reference; Probe copies it before starting its native worker. ProbeProtocol.h tags
+file failures for JSONL diagnostics. Default pack deploys v2 plus retained v1; Agent
+registration/freeze, Gameplay and control IPC remain unchanged.

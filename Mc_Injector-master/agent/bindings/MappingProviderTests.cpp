@@ -260,7 +260,7 @@ int main()
             "Lnet/minecraft/client/Minecraft;", lunarNamed);
     passed &= expect(lunarNamed.family() == ClientFamily::Lunar,
                      "Lunar named environment detection");
-    passed &= expect(lunarNamedCandidates.count == 1U,
+    passed &= expect(lunarNamedCandidates.count == 2U,
                       "Lunar MCP-named provider selection");
     passed &= expect(lunarNamedCandidates.items[0] &&
         lunarNamedCandidates.items[0]->previousRotationYawField == "prevRotationYaw" &&

@@ -302,6 +302,9 @@ add_custom_target(mc_mapping_packs ALL
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/../mapping/packs/default-v1.json"
         "${CMAKE_BINARY_DIR}/mappings/default-v1.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/../mapping/packs/default-v2.json"
+        "${CMAKE_BINARY_DIR}/mappings/default-v2.json"
     VERBATIM)
 add_dependencies(McOverlayAgent mc_mapping_packs)
 add_dependencies(McOverlayMappingProviderTests mc_mapping_packs)

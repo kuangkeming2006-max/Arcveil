@@ -30,8 +30,9 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
+    m_probe = m_tools + "/MappingProbe-v2.dll";
     m_contracts = m_tools + "/contracts-v1.json";
-    m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v1.json";
+    m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
     m_timeout.setSingleShot(true);
     connect(&m_timeout, &QTimer::timeout, this, [this] { fail("Mapping analysis timed out"); });
 }
@@ -232,7 +233,7 @@ void MappingService::inspect(bool finalCheck) {
                         "--helper",
                         m_helper,
                         "--probe",
-                        m_tools + "/MappingProbe.dll",
+                        m_probe,
                         "--native-loader",
                         m_tools + "/McOverlayNativeLoader.exe",
                         "--pack",
@@ -241,6 +242,9 @@ void MappingService::inspect(bool finalCheck) {
                         m_contracts,
                         "--out",
                         m_run + (finalCheck ? "/final-snapshot.json" : "/snapshot.json")};
+    const auto reference = Cache(m_root).reference(m_contractDigest);
+    if (reference.valid())
+        args << "--reference" << reference.snapshot;
     if (!m_modular)
         args << "--tools-jar" << m_toolsJar;
     launch(args, [this, finalCheck](int code) {

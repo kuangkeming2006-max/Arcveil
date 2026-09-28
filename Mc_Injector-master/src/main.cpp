@@ -223,7 +223,7 @@ int main(int argc, char *argv[])
         if (smokeTest) {
             auto* mappingEvents = static_cast<MappingEventModel*>(services->overlayManager.mappingService()->events());
             mappingEvents->append({{"event", "fingerprint"}, {"fingerprint", "UI fixture: installed JVM class fingerprint"}});
-            mappingEvents->append({{"event", "pack"}, {"path", "mappings/default-v1.json"}});
+            mappingEvents->append({{"event", "pack"}, {"path", "mappings/default-v2.json"}});
             mappingEvents->append({{"event", "symbol"}, {"symbol", "minecraftClass"}, {"mapping", "fixture/client"}, {"confidence", 0.99}, {"accepted", true}, {"evidence", QJsonArray{"Unique hierarchy, descriptor and normalized bytecode match"}}});
             mappingEvents->append({{"event", "symbol"}, {"symbol", "ambiguousFixture"}, {"confidence", 0.0}, {"reason", "Two structurally identical candidates; mapping rejected"}, {"accepted", false}});
             mappingEvents->append({{"event", "validation"}, {"valid", false}});

@@ -105,6 +105,95 @@ std::string detectedFamily(const Json& pack,const Model& model){
     return bindings::clientFamilyName(environment.family());
 }
 }
+Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *reference,
+                            const Json &contracts, const Events &events) {
+    (void)bindings::parseMappingPack(pack);
+    Model live(lite);
+    if (!lite.contains("detailLevel") || lite.at("detailLevel").string() != "lite")
+        throw std::runtime_error("candidate selection requires lite index");
+    std::set<const Class *> selected;
+    std::map<const Class *, std::string> reasons;
+    // Authored exact symbols are scope requests, never automatically accepted mappings.
+    for (const auto &provider : pack.at("providers").array())
+        for (const auto &dict : provider.at("dictionaries").array()) {
+            const auto &symbols = dict.at("symbols");
+            contractCheck(contracts, symbols);
+            const auto *anchor = live.find(sig(symbols.at("minecraftName").string()));
+            if (!anchor)
+                continue;
+            for (const auto &[key, spec] : contracts.at("symbols").object())
+                if (spec.at("kind").string() == "class") {
+                    if (const auto *c = live.find(sig(symbols.at(key).string()),
+                                                  anchor->json->at("loaderKey").string())) {
+                        selected.insert(c);
+                        reasons[c] = "authored pack scope; requires independent live validation";
+                    }
+                }
+        }
+    if (reference) {
+        Model old(*reference);
+        std::map<std::string, std::vector<const Class *>> shapes;
+        for (const auto &c : live.classes)
+            shapes[c.structure].push_back(&c);
+        for (const auto &c : old.classes)
+            for (const auto *match : shapes[c.structure]) {
+                selected.insert(match);
+                reasons[match] = "hierarchy/descriptor/access/member structure candidate; "
+                                 "nameWeight=0; not yet accepted";
+            }
+    }
+    // Include inherited declarations/interfaces, but never blindly capture the whole JVM.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        auto current = selected;
+        for (const auto *c : current) {
+            auto add = [&](const Json &ref) {
+                if (const auto *base = live.related(ref))
+                    if (selected.insert(base).second) {
+                        reasons[base] = "candidate hierarchy dependency";
+                        changed = true;
+                    }
+            };
+            add(c->json->at("super"));
+            for (const auto &i : c->json->at("interfaces").array())
+                add(i);
+        }
+    }
+    if (selected.empty())
+        throw std::runtime_error("no detail candidates: authored anchors unavailable and no "
+                                 "compatible verified structural reference");
+    std::map<std::string, Json> loaders;
+    for (const auto &item : lite.at("loaderInstances").array())
+        loaders[item.at("loaderKey").string()] = item;
+    Json::Array classes;
+    for (const auto *c : selected) {
+        const auto &value = *c->json;
+        const auto &loader = loaders.at(value.at("loaderKey").string());
+        classes.push_back(Json::Object{{"name", value.at("name")},
+                                       {"loaderKey", value.at("loaderKey")},
+                                       {"instance", loader.at("instance")},
+                                       {"type", loader.at("type")},
+                                       {"metadataDigest", sha256(classMetadata(value).dump())},
+                                       {"evidence", reasons.at(c)}});
+    }
+    std::sort(classes.begin(), classes.end(),
+              [](const Json &a, const Json &b) { return a.dump() < b.dump(); });
+    if (events)
+        events(Json::Object{{"event", "selection"},
+                            {"totalClasses", double(lite.at("classes").array().size())},
+                            {"candidateClasses", double(classes.size())},
+                            {"referenceAvailable", reference != nullptr}});
+    return Json::Object{{"candidateVersion", 1},
+                        {"pid", lite.at("pid")},
+                        {"processStart", lite.at("processStart")},
+                        {"liteFingerprint", lite.at("fingerprint")},
+                        {"classes", classes},
+                        {"loaderBindings", lite.at("loaderInstances")},
+                        {"launchEvidence", lite.contains("launchEvidence")
+                                               ? lite.at("launchEvidence")
+                                               : Json(Json::Array{})}};
+}
 Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
     if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");
     (void)bindings::parseMappingPack(pack);Model model(snapshot);Json::Array attempts;

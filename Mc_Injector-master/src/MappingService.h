@@ -38,6 +38,7 @@ class MappingService final : public QObject {
 
   private:
     friend struct MappingServiceTests;
+    friend struct LiveMappingSmoke;
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void choosePack();
@@ -49,7 +50,7 @@ class MappingService final : public QObject {
     void stopProcess();
     QString m_root, m_tools, m_run, m_pack, m_java, m_helper, m_toolsJar, m_status, m_fingerprint,
         m_start, m_contractDigest;
-    QString m_analyzer, m_contracts, m_defaultPack;
+    QString m_analyzer, m_contracts, m_defaultPack, m_probe;
     QPointer<QProcess> m_process;
     MappingEventModel m_events;
     double m_progress = -1;

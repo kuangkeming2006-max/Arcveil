@@ -30,8 +30,8 @@ void writeObject(const QString &path, const QJsonObject &value) {
 }
 QString fileDigest(const QString &path, qint64 limit) {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly) || f.size() > limit)
-        throw std::runtime_error("mapping digest input unavailable");
+    if (!f.open(QIODevice::ReadOnly) || (limit >= 0 && f.size() > limit))
+        throw std::runtime_error("mapping digest input unavailable or exceeds explicit limit");
     QCryptographicHash hash(QCryptographicHash::Sha256);
     if (!hash.addData(&f))
         throw std::runtime_error("mapping digest read failed");
@@ -53,7 +53,7 @@ Entry Cache::entry(const QString &revision, const QString &contractDigest) const
         const auto proof = readObject(dir + "/proof.json");
         if (!proof.value("validated").toBool() ||
             proof.value("contractDigest").toString() != contractDigest ||
-            proof.value("analyzerVersion").toInt() != 3)
+            proof.value("analyzerVersion").toInt() != 4)
             return {};
         if (fileDigest(dir + "/pack.json", 2 * 1024 * 1024) !=
                 proof.value("packDigest").toString() ||
@@ -106,7 +106,7 @@ Entry Cache::promote(const QString &pack, const QString &snapshot, const QString
         throw std::runtime_error("candidate staging failed; previous cache retained");
     const auto digest = fileDigest(dir + "/pack.json", 2 * 1024 * 1024);
     writeObject(dir + "/proof.json", {{"validated", true},
-                                      {"analyzerVersion", 3},
+                                      {"analyzerVersion", 4},
                                       {"fingerprint", fingerprint},
                                       {"contractDigest", contractDigest},
                                       {"packDigest", digest},
@@ -136,7 +136,8 @@ bool Cache::rollback() {
     if (key.isEmpty() || !p.contains(key))
         return false;
     auto old = p.value(key);
-    if (QUuid(old.toString()).isNull() || QUuid(old.toString()).toString(QUuid::WithoutBraces) != old.toString())
+    if (QUuid(old.toString()).isNull() ||
+        QUuid(old.toString()).toString(QUuid::WithoutBraces) != old.toString())
         return false;
     const auto proof = readObject(m_root + "/objects/" + old.toString() + "/proof.json");
     if (!entry(old.toString(), proof.value("contractDigest").toString()).valid())

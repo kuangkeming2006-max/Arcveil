@@ -17,8 +17,8 @@ only its existing BindingCache.
 - inspectSnapshot: loader-group canonicalization, SHA-256 content fingerprint;
   PID/process creation identity/request UUID tracked separately. Ambiguous loader
   groups fail closed. No selection solely by a class name across loaders.
-- validate currently reports schema-only, injectionReady=false. Runtime member
-  validation and automatic resolution belong to v55.3.
+- validate without --snapshot reports schema-only, injectionReady=false. Runtime
+  member validation and automatic resolution are described under v55.3 below.
 - diff: exact symbol changes and pack digest/metadata changes.
 
 Capture transport now uses chunked JSONL (v55.6) without an aggregate file-size
@@ -105,7 +105,7 @@ second snapshot detects observed change; main Agent still performs normal JNI
 resolution and immutable-cache publication afterward.
 
 ## Stage 5 — developer console and distribution
-MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.5.
+MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.7.
 
 ## v55.6 capture diagnostics gate
 Start at `P/mapping/analyzer/CaptureClient.h` and `P/mapping/SnapshotStream.h`.
@@ -114,7 +114,31 @@ selects the target runtime unless --java is supplied, and writes a streamed clas
 index with a separate metadata fingerprint domain. It does not call resolve.
 CAPTURE_PATH exposes both helper outcomes; SNAPSHOT_STATS exposes actual sizes and
 precisely scoped limits. No registry/Agent startup boundary changes in this stage.
-Candidate selection and inspect-detail remain gated on real Lunar lite validation;
-private JVM success alone is not recorded as a real Lunar pass.
+The real Lunar lite gate passed on 2026-09-28; see the v55.7 stage below.
 Tests: SnapshotStreamTests (>64 MiB aggregate, chunk Unicode/order/truncation/limits),
 Test-CaptureDiagnostics.py, Run-MappingCapture.ps1 -Lite [-DisableAttach].
+
+## v55.7 two-stage capture and Lunar SRG
+`inspect --pid --pack` and both MappingService capture passes use lite →
+selectDetailCandidates → inspect-detail. `select` and `inspect-detail` are also
+standalone commands; select consumes a lite snapshot plus an optional verified
+reference. The existing normalized-bytecode/call-graph acceptance algorithm is
+unchanged. Metadata matches only expand the detail scope; they never grant mapping
+confidence. Selected detail binds PID/creation time, loader instance and per-class
+metadata digests. Scope metadata is part of its fingerprint.
+
+ProbeProtocol.h defines tagged native startup I/O failures; CAPTURE_PATH includes
+Win32 errors and the last probe phase. Requests travel through a bounded temporary
+JSON file, keeping Attach arguments short. The worker owns a copy. Live fallback
+works when jdk.attach is missing or Attach is disabled. Snapshot cache digests now
+stream with no aggregate 64 MiB cap; analyzer proof revision is 4.
+
+Default pack v2 preserves v1 and adds Lunar SRG using existing authored SRG symbols.
+Default paths in Agent and controller move together; v1 remains installed. Real
+Lunar 1.8.9 v2.22.42-2639 passed two-stage capture, required-member validation and
+Agent ready/renderer active with clean detach. Test evidence and exact limits are
+in P/tests/mapping/V55_7_VALIDATION.md. Tests add Test-TwoStage.py,
+Run-MappingCapture.ps1 -Detail [-DisableAttach] and opt-in McOverlayLiveMappingSmoke.
+
+The request-file protocol uses MappingProbe-v2.dll. Its versioned filename prevents
+an older resident Probe DLL from being mistaken for the current protocol.

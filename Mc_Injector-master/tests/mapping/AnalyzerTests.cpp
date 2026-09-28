@@ -15,6 +15,6 @@ int main(int argc,char**argv){
     check(!diffPacks(pack,pack).at("changed").boolean());
     auto changed=pack;changed["providers"].array()[0]["dictionaries"].array()[0]["symbols"]["getHealth"]="renamed";
     check(diffPacks(pack,changed).at("changes").array().size()==1);
-    changed=pack;changed["packVersion"]=2;check(diffPacks(pack,changed).at("changed").boolean());
+    changed=pack;changed["packVersion"]=pack.at("packVersion").integer()+1;check(diffPacks(pack,changed).at("changed").boolean());
     std::printf("Analyzer inventory: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

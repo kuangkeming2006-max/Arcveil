@@ -23,7 +23,7 @@
 ## 内部边界
 
 MappingProvider 是纯字典/环境/registry：客户端 family 检测、候选映射、schema 校验、注册冻结。
-MappingPack.h/.cpp 读取 versioned JSON pack；MappingSymbols.inc 仅维护稳定 logical keys。默认数据来自 DLL 旁 mappings/default-v1.json（源文件 P/mapping/packs/default-v1.json），缺失或损坏会 fail closed，没有编译进 DLL 的 symbol fallback。Gameplay 仍仅消费 BindingCache。
+MappingPack.h/.cpp 读取 versioned JSON pack；MappingSymbols.inc 仅维护稳定 logical keys。默认数据来自 DLL 旁 mappings/default-v2.json（源文件 P/mapping/packs/default-v2.json；v1 保留用于兼容/parity），缺失或损坏会 fail closed，没有编译进 DLL 的 symbol fallback。Gameplay 仍仅消费 BindingCache。
 BedWarsState 是语言无关的 sidebar、队伍/羊毛/皮革颜色与 threat 分类。
 AimControl、SilentLockCoordinator、TrajectoryMath、SafeWalkPolicy、SmartHotbarPolicy、KnockbackEvidence 各自提供策略或数学/证据结构。
 Live*Transform / LiveInteractionObserver 及 MethodWeaver/Native*BridgeBytes 由 [jvm-hooks](jvm-hooks.md) 描述机制；游戏含义和回调决策仍由 GameBindings 所有。

@@ -121,6 +121,16 @@ else()
     endif()
 endif()
 
+# Explicit opt-in live integration harness: routes through production OverlayManager,
+# uses isolated preferences, and detaches the test session on exit.
+get_target_property(live_mapping_sources McOverlayControllerResponsivenessTests SOURCES)
+list(REMOVE_ITEM live_mapping_sources ControllerResponsivenessTests.cpp)
+add_executable(McOverlayLiveMappingSmoke EXCLUDE_FROM_ALL LiveMappingSmoke.cpp ${live_mapping_sources})
+target_compile_features(McOverlayLiveMappingSmoke PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayLiveMappingSmoke PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(McOverlayLiveMappingSmoke PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent user32 dwmapi psapi crypt32)
+add_dependencies(McOverlayLiveMappingSmoke mc_overlay_runtime_files)
+
 add_executable(McOverlayMediaShutdownTests EXCLUDE_FROM_ALL MediaShutdownTests.cpp ../src/MediaSessionService.cpp ../src/MediaSessionService.h)
 target_compile_features(McOverlayMediaShutdownTests PRIVATE cxx_std_20)
 target_compile_definitions(McOverlayMediaShutdownTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
