@@ -59,3 +59,15 @@ SkinAndWheelTests 运行自己的 SkinPreview/WheelPreview，并不覆盖全部 
 按需读取：页面任务只读目标页面符号边界和其 component；属性不明确时读对应 C++ header。只有信号/绑定行为无法解释时，才读 backend setter/slot 局部实现。
 
 Mapping Console (v55.5): `P/qml/MappingConsole.qml` consumes the controller MappingService singleton and bounded MappingEventModel. SettingsPage adds mappingConsoleRequested; main.qml owns the hidden popup and Ctrl+Shift+M. No direct Agent or JNI access. UI smoke covers hidden/open/themes/close.
+
+
+Mapping progress v55.8 stage 1: `MappingProgressWindow.qml` is a separate nonmodal
+ApplicationWindow, automatically opened by OverlayManager.mappingAttachRequested.
+`MappingProgressController` owns typed event consumption and `MappingProgressModel`
+owns symbol rows; three filter models expose active/completed/pending. Successful
+rows dwell for 750 ms before migration, independent of window visibility. QML only
+renders roles/transitions. Closing hides the window; Ctrl+Shift+P reopens it.
+Stop disables presentation retry scheduling, never calls MappingService.cancel or
+OverlayManager.detach. The existing mandatory preflight is not a cancellable
+optional matcher. Structured service integration is the next stage.
+Tests: MappingProgressTests and ControllerUiSmoke phases 32–39.

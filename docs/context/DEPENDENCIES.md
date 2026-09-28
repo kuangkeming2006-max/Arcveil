@@ -130,3 +130,10 @@ loader instances and metadata digests. Attach passes a short temporary request-f
 reference; Probe copies it before starting its native worker. ProbeProtocol.h tags
 file failures for JSONL diagnostics. Default pack deploys v2 plus retained v1; Agent
 registration/freeze, Gameplay and control IPC remain unchanged.
+
+
+## Mapping progress v55.8
+qml-ui → MappingProgressController → MappingProgressModel/filter models is a
+presentation-only boundary. OverlayManager.mappingAttachRequested opens a new
+session; no progress-window action reaches Agent registry, detach, rollback or
+preflight cancel. Closing the separate window does not destroy the controller.

@@ -37,3 +37,9 @@ install(FILES README.md DESTINATION docs/mapping)
 add_executable(SnapshotStreamTests EXCLUDE_FROM_ALL ../tests/mapping/SnapshotStreamTests.cpp)
 target_compile_features(SnapshotStreamTests PRIVATE cxx_std_20)
 target_link_libraries(SnapshotStreamTests PRIVATE Qt6::Core)
+
+add_executable(MappingProgressTests EXCLUDE_FROM_ALL ../tests/mapping/MappingProgressTests.cpp
+    ../src/MappingProgressModel.cpp ../src/MappingProgressModel.h
+    ../src/MappingProgressController.cpp ../src/MappingProgressController.h)
+target_compile_features(MappingProgressTests PRIVATE cxx_std_20)
+target_link_libraries(MappingProgressTests PRIVATE Qt6::Core)

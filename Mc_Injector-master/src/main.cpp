@@ -1,3 +1,4 @@
+#include "MappingProgressController.h"
 #include <QJsonArray>
 #include "OverlayManager.h"
 #include "StartupLoader.h"
@@ -38,6 +39,7 @@ namespace {
 struct ControllerServices {
     ProcessScanner processScanner;
     OverlayManager overlayManager;
+    MappingProgressController mappingProgress;
     ApiKeyStore apiKeys;
     AppSettings appSettings;
     HypixelApiClient hypixelApi{&apiKeys};
@@ -151,6 +153,14 @@ struct ControllerServices {
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
                                      "OverlayManager", &overlayManager);
         qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingService", overlayManager.mappingService());
+        qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingProgress", &services.mappingProgress);
+        QObject::connect(&overlayManager, &OverlayManager::mappingAttachRequested,
+                         &services.mappingProgress, &MappingProgressController::begin);
+        QObject::connect(&overlayManager, &OverlayManager::errorChanged,
+                         &services.mappingProgress, [&services] {
+            if (!services.overlayManager.errorCode().isEmpty())
+                services.mappingProgress.consume({{"event", "failure"}, {"reason", services.overlayManager.errorDetail()}});
+        });
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
                                      "HotkeyCapture", &hotkeyCapture);
         qmlRegisterSingletonInstance("McOverlay", 1, 0,
@@ -231,7 +241,7 @@ int main(int argc, char *argv[])
             new ControllerUiSmoke(loader.mainWindow(), [&](bool ok) {
             if (!ok || qmlErrors) QCoreApplication::exit(EXIT_FAILURE);
             else lifecycle.requestExit(QStringLiteral("successful controller smoke test"));
-            },[&](bool dark){services->appSettings.setDarkTheme(dark);});
+            },[&](bool dark){services->appSettings.setDarkTheme(dark);}, &services->mappingProgress, &services->overlayManager);
 #else
             QTimer::singleShot(1000, &application, [&] {
                 if (qmlErrors) QCoreApplication::exit(EXIT_FAILURE);
@@ -242,7 +252,7 @@ int main(int argc, char *argv[])
     });
     QTimer::singleShot(0, &loader, &StartupLoader::start);
     // A broken asynchronous load must fail CI rather than hang forever.
-    if (smokeTest) QTimer::singleShot(30000, &application, [] {
+    if (smokeTest) QTimer::singleShot(40000, &application, [] {
         qCritical() << "Startup smoke test timed out";
         QCoreApplication::exit(EXIT_FAILURE);
     });

@@ -161,6 +161,7 @@ bool OverlayManager::busy() const noexcept
 
 bool OverlayManager::attachToProcess(quint32 pid)
 {
+    emit mappingAttachRequested(pid);
     if (pid == 0) {
         fail(QStringLiteral("INVALID_PID"),
              QStringLiteral("Select a Java process before loading the native agent."));

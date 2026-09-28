@@ -10,15 +10,16 @@
 #include <QDir>
 #include <QImage>
 #include <functional>
+#include "../src/MappingProgressController.h"
 
 // Explicit --smoke-test only. Delivers events to this owned QQuickWindow;
 // never moves the system pointer or sends input to another application.
 class ControllerUiSmoke final : public QObject {
 public:
     ControllerUiSmoke(QQuickWindow* window, std::function<void(bool)> finished,
-        std::function<void(bool)> setTheme = {})
+        std::function<void(bool)> setTheme = {}, MappingProgressController* progress=nullptr, OverlayManager* overlay=nullptr)
         : QObject(window), m_window(window), m_finished(std::move(finished)),
-          m_setTheme(std::move(setTheme)) {
+          m_setTheme(std::move(setTheme)), m_progress(progress), m_overlay(overlay) {
         connect(&m_timer,&QTimer::timeout,this,[this] { step(); });
         m_timer.start(500);
     }
@@ -125,8 +126,55 @@ private:
             if (!capture("mapping-console-light")) { finish(false); return; }
             QMetaObject::invokeMethod(m_popup,"close");
         } else if (phase == 32) {
-            finish(!m_popup->property("visible").toBool());
+            if(m_popup->property("visible").toBool() || !m_progress || !m_overlay) {finish(false);return;}
+            m_progressWindow=m_window->findChild<QQuickWindow*>("mappingProgressWindow");
+            if(!m_progressWindow || m_progressWindow->isVisible()) {finish(false);return;}
+            m_overlay->attachToProcess(0); // Real Attach entry; invalid PID prevents any JVM access.
+        } else if(phase==33) {
+            if(!m_progressWindow->isVisible()) {finish(false);return;}
+            m_progress->begin(42);
+            m_progress->consume({{"event","step"},{"index",0},{"state","success"}});
+            m_progress->consume({{"event","step"},{"index",1},{"state","success"}});
+            m_progress->consume({{"event","step"},{"index",2},{"state","running"}});
+            m_progress->consume({{"event","reference"},{"referenceAvailable",true},{"sourceClientFamily","Lunar"},
+                {"sourceFingerprint","reference-verified-8c913e"},{"sourcePack","cache/verified/pack.json"},
+                {"sourceSnapshot","cache/verified/snapshot.json"},{"targetClientFamily","Lunar"},
+                {"targetFingerprint","runtime-43a1f9"},{"selectionReason","UI fixture: verified reference with matching contracts"}});
+            for(const auto &key:QStringList{"Minecraft.thePlayer","World.players","Entity.position"})
+                m_progress->consume({{"event","symbol-queued"},{"symbol",key},{"required",key!="Entity.position"}});
+            m_progress->consume({{"event","symbol-started"},{"symbol","Minecraft.thePlayer"}});
+        } else if(phase==34) {
+            if(!captureProgress("mapping-progress-active")) {finish(false);return;}
+            m_progress->consume({{"event","symbol-matched"},{"symbol","Minecraft.thePlayer"},
+                {"runtimeName","ave.f"},{"verified",true},{"confidence",0.99},
+                {"evidence",QJsonArray{"Unique hierarchy, descriptor and normalized bytecode match"}}});
+        } else if(phase==35) {
+            if(m_progress->activeCount()!=1 || !captureProgress("mapping-progress-migrating")) {finish(false);return;}
+        } else if(phase==36) {
+            if(m_progress->completedCount()!=1) {finish(false);return;}
+            const auto state=m_overlay->state();
+            auto* stop=find(m_progressWindow->contentItem(),"mappingStopMatching");
+            if(!stop || !stop->isEnabled()) {finish(false);return;}
+            QTest::mouseClick(m_progressWindow,Qt::LeftButton,Qt::NoModifier,
+                stop->mapToScene(QPointF(stop->width()/2,stop->height()/2)).toPoint());
+            if(m_progress->matchingEnabled() || m_overlay->state()!=state) {finish(false);return;}
+            m_progressWindow->close();
+        } else if(phase==37) {
+            if(m_progressWindow->isVisible()) {finish(false);return;}
+            m_progress->consume({{"event","symbol-matched"},{"symbol","World.players"},{"runtimeName","bdb.j"},{"verified",true},{"confidence",1.0}});
+            m_progress->open();
+        } else if(phase==38) {
+            if(!m_progressWindow->isVisible() || !m_progress->successful() || !captureProgress("mapping-progress-success-light")) {finish(false);return;}
+            if(m_setTheme) m_setTheme(true);
+        } else if(phase==39) {
+            if(!captureProgress("mapping-progress-success-dark")) {finish(false);return;}
+            m_progressWindow->close();
+            finish(true);
         }
+    }
+    bool captureProgress(const QString& name) {
+        const auto path=qEnvironmentVariable("ARCVEIL_TEST_SCREENSHOTS");
+        return path.isEmpty() || (QDir().mkpath(path) && m_progressWindow->grabWindow().save(path+"/"+name+".png"));
     }
     bool capture(const QString& name) {
         auto* glyph=find(m_window->contentItem(),"aboutBrandGlyph");
@@ -140,6 +188,9 @@ private:
         return QDir().mkpath(path)&&m_window->grabWindow().save(path+"/"+name+".png");
     }
     QQuickWindow* m_window;
+    QQuickWindow* m_progressWindow=nullptr;
+    MappingProgressController* m_progress=nullptr;
+    OverlayManager* m_overlay=nullptr;
     QObject* m_popup=nullptr;
     std::function<void(bool)> m_finished;
     std::function<void(bool)> m_setTheme;

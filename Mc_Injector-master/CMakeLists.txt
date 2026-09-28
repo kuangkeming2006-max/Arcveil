@@ -26,6 +26,10 @@ qt_add_executable(MinecraftOverlayManager
     src/ApplicationLifecycle.cpp
     src/ProcessScanner.h
     src/ProcessScanner.cpp
+    src/MappingProgressModel.h
+    src/MappingProgressModel.cpp
+    src/MappingProgressController.h
+    src/MappingProgressController.cpp
     src/MappingService.h
     src/MappingService.cpp
     src/MappingEventModel.h
@@ -104,6 +108,7 @@ qt_add_resources(MinecraftOverlayManager "qml_resources"
     PREFIX "/"
     FILES
         qml/main.qml
+        qml/MappingProgressWindow.qml
         qml/MappingConsole.qml
         qml/WindowChrome.qml
         qml/NavigationRail.qml

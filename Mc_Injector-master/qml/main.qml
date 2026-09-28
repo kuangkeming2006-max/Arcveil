@@ -457,6 +457,8 @@ ApplicationWindow {
     // the DLL handshake succeeds.
     InjectionSnackbar { id: injectionSnackbar; host: app }
 
+    MappingProgressWindow { id: mappingProgressWindow; host: app }
+    Shortcut { sequence: "Ctrl+Shift+P"; onActivated: MappingProgress.open() }
     MappingConsole { id: mappingConsole; host: app }
     Shortcut { sequence: "Ctrl+Shift+M"; onActivated: mappingConsole.open() }
 
