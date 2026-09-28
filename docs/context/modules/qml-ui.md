@@ -69,5 +69,5 @@ rows dwell for 750 ms before migration, independent of window visibility. QML on
 renders roles/transitions. Closing hides the window; Ctrl+Shift+P reopens it.
 Stop disables presentation retry scheduling, never calls MappingService.cancel or
 OverlayManager.detach. The existing mandatory preflight is not a cancellable
-optional matcher. Structured service integration is the next stage.
+optional matcher. Structured service integration is now in MappingServiceProgress.cpp; only final verified receipts complete rows. Settings also provides a reopen button.
 Tests: MappingProgressTests and ControllerUiSmoke phases 32–39.

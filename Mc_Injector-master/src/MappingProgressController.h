@@ -39,11 +39,12 @@ class MappingProgressController final : public QObject {
     void matchingStopped();
 
   private:
+    void reset(quint32 pid);
     void step(int index, const QString &state);
     MappingProgressModel m_symbols;
     MappingProgressFilter m_active, m_completed, m_pending;
     QVariantList m_steps;
     QVariantMap m_reference;
     QString m_status, m_snapshot;
-    bool m_matchingEnabled = false, m_successful = false;
+    bool m_matchingEnabled = false, m_successful = false, m_stopRequested = false;
 };

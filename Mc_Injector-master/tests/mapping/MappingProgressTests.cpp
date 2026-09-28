@@ -88,6 +88,15 @@ int main(int argc, char **argv) {
     check(!c.successful(), "subcommand completion is not mapping completion");
     c.consume({{"event", "failure"}, {"reason", "fixture failure"}});
     check(c.steps()[3] == "failed" && c.status() == "fixture failure", "failure visible");
+    c.begin(900);
+    c.consume({{"event", "cancelled"}}); // Previous preflight teardown following a new Attach.
+    const int windowsBefore = opened;
+    c.consume({{"event", "session-start"}, {"pid", 900}});
+    check(c.matchingEnabled() && opened == windowsBefore,
+          "service start resets stale cancellation without reopening a hidden window");
+    c.stopMatching();
+    c.consume({{"event", "session-start"}, {"pid", 900}});
+    check(!c.matchingEnabled(), "manual stop survives delayed session start");
     std::printf("MappingProgress: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

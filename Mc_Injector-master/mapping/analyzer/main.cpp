@@ -125,6 +125,7 @@ int main(int argc, char **argv) {
                                               : ""},
                                {"fingerprint", result.at("fingerprint")},
                                {"classes", double(result.at("classes").array().size())},
+                               {"launchEvidence", result.contains("launchEvidence") ? result.at("launchEvidence") : Json(Json::Array{})},
                                {"methods", result.at("methodCount")},
                                {"captureKind", result.at("captureKind")},
                                {"pid", result.at("pid")},

@@ -1,4 +1,4 @@
-# Mapping pipeline — internal v55.7
+# Mapping pipeline — internal v55.8
 
 The controller validates mappings before loading the main Agent. Gameplay uses logical
 symbols; MappingRegistry remains the final registration boundary and freezes once.
@@ -140,3 +140,37 @@ retained. It is not part of normal application startup.
 Probe protocol v2 ships as `MappingProbe-v2.dll`, so a resident v1 probe cannot be
 accidentally reused after an application upgrade. The NativeLoader's module-identity
 checks remain enabled.
+
+
+## v55.8 Mapping progress window
+
+Attach opens an independent window with Cache / Snapshot / Resolve / Complete
+steps, reference provenance, and active/completed/pending symbol lists. Close
+hides the window; reopen from Settings or Ctrl+Shift+P. The developer console
+remains available independently (Ctrl+Shift+M).
+
+The window consumes structured events only. `MappingServiceProgress.cpp` emits
+schema queues, reference, snapshot updates, provisional progress, final verified
+symbols, and scoped completion. Analyzer `symbol` acceptance is provisional at
+the dictionary-attempt level; it never completes a row until the existing final
+fingerprint recheck and cache promotion succeed. Fresh validation receipts include
+only actually found member names in `runtimeMapping`; old cache proofs without
+per-symbol receipts expose required authored alias sets explicitly as cache data.
+New cache proofs retain the optional symbol display receipt and automatic
+confidence/evidence. These fields are not injection authorization.
+
+This iteration adds **state consumption, not a second autonomous matcher**.
+Changed snapshot events requeue unfinished presentation rows; accepted rows and
+in-flight migration timers remain stable. Stop disables subsequent progress/retry
+consumption and scanning animations, retaining completed rows and accepting final
+results of the current mandatory preflight. It never kills the preflight process,
+detaches/rolls back the Agent, or bypasses validation. Existing fail-closed behavior
+on runtime drift is unchanged; this UI does not introduce a background recapture
+loop or automatically restart a failed injection.
+
+Tests: MappingProgressTests (state transitions, snapshot retry, stop, generations),
+MappingServiceTests (real service/fake subprocess event boundary, unchanged ready
+and command order while stopped), ControllerUiSmoke (actual Attach entry, native
+window visibility, animations, close/reopen, light/dark screenshots). Structural
+resolver fixtures additionally check runtime-name receipts without changing
+matching scores or selection decisions.

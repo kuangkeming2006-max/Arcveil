@@ -32,6 +32,7 @@ qt_add_executable(MinecraftOverlayManager
     src/MappingProgressController.cpp
     src/MappingService.h
     src/MappingService.cpp
+    src/MappingServiceProgress.cpp
     src/MappingEventModel.h
     src/MappingEventModel.cpp
     mapping/cache/MappingCache.cpp

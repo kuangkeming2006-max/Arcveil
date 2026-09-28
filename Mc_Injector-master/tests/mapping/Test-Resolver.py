@@ -97,6 +97,10 @@ run(['inspect','--snapshot',str(folder/'renamed-raw.json'),'--out',str(folder/'t
 run(['resolve','--pack',str(folder/'pack.json'),'--reference',str(folder/'reference.json'),'--snapshot',str(folder/'target.json'),'--out',str(folder/'candidate.json'),'--write-pack',str(folder/'resolved.json')])
 candidate=json.loads((folder/'candidate.json').read_text());assert candidate['complete'] and len(candidate['symbols'])==257
 assert all(v['confidence']>=v['threshold'] and v['evidence'] for v in candidate['symbols'])
+# UI receipts report actual found member aliases, not every authored alias.
+for result in candidate['validation']['symbols']:
+    if contract['symbols'][result['symbol']]['kind'] in ('field','method') and result['accepted']:
+        assert result['runtimeMapping'] and all(result['runtimeMapping'])
 run(['validate','--pack',str(folder/'resolved.json'),'--snapshot',str(folder/'target.json')])
 # Missing reference cannot write a final pack; original output sentinel remains untouched.
 (folder/'sentinel.json').write_text('do not replace')

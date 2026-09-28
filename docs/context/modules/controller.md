@@ -85,3 +85,11 @@ Mapping Console v55.5: main.cpp registers MappingService as a QML singleton. Map
 `McOverlayMediaShutdownTests` uses a delayed child-process fixture. v55.7 disconnects
 media callbacks before member destruction and reaps the child after kill; this
 prevents shutdown callbacks from touching destroyed cached state.
+
+
+v55.8 adds MappingProgressController as a separate QML singleton. The composition
+root connects OverlayManager.mappingAttachRequested and MappingService.eventReceived.
+The independent ApplicationWindow consumes state only. Stop/close have no edge to
+cancel/detach/rollback; final preflight ready ordering is unchanged. Optional
+presentation receipts are emitted by MappingServiceProgress.cpp after recheck and
+cache promotion; failures in receipt rendering cannot block ready.

@@ -154,11 +154,13 @@ struct ControllerServices {
                                      "OverlayManager", &overlayManager);
         qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingService", overlayManager.mappingService());
         qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingProgress", &services.mappingProgress);
+        QObject::connect(overlayManager.mappingService(), &MappingService::eventReceived,
+                         &services.mappingProgress, &MappingProgressController::consume);
         QObject::connect(&overlayManager, &OverlayManager::mappingAttachRequested,
                          &services.mappingProgress, &MappingProgressController::begin);
         QObject::connect(&overlayManager, &OverlayManager::errorChanged,
                          &services.mappingProgress, [&services] {
-            if (!services.overlayManager.errorCode().isEmpty())
+            if (!services.mappingProgress.successful() && !services.overlayManager.errorCode().isEmpty())
                 services.mappingProgress.consume({{"event", "failure"}, {"reason", services.overlayManager.errorDetail()}});
         });
         qmlRegisterSingletonInstance("McOverlay", 1, 0,

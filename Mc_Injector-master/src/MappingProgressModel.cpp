@@ -76,6 +76,7 @@ void MappingProgressModel::retryUnfinished() {
             continue;
         r.status = "pending";
         r.reason.clear();
+        r.runtimeName.clear(); r.evidence.clear(); r.confidence=0;
         ++r.attempts;
         emit dataChanged(index(i), index(i));
     }

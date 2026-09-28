@@ -18,7 +18,7 @@ unlink or conceal the module.
 
 ## Current feature set
 
-Internal build: **v55.7**. The pre-connection About page shows the build number.
+Internal build: **v55.8**. The pre-connection About page shows the build number.
 
 ### Controller and in-game interface
 

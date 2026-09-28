@@ -142,3 +142,26 @@ Run-MappingCapture.ps1 -Detail [-DisableAttach] and opt-in McOverlayLiveMappingS
 
 The request-file protocol uses MappingProbe-v2.dll. Its versioned filename prevents
 an older resident Probe DLL from being mistaken for the current protocol.
+
+
+## v55.8 progress event consumption
+
+Start at `P/src/MappingProgressController.h`, `MappingProgressModel.h`, then
+`MappingServiceProgress.cpp` for event adaptation. QML receives three filter
+models and reference/step properties. OverlayManager.mappingAttachRequested opens
+the window; MappingService session-start resets late-cancelled presentation state
+without reopening a hidden window. No controller action reaches Agent freeze or
+MappingService.cancel. `stopMatching` stops presentation retry/progress scheduling;
+mandatory preflight and final result delivery continue. No new matcher/capture
+loop is introduced in this visualization-only stage.
+
+Structured JSONL events: session-start, step(index/state/message), reference,
+snapshot-update(fingerprint/classes), symbol-queued(symbol/logicalName/required),
+symbol-started, symbol-progress, symbol-retry, symbol-failed, symbol-matched
+(runtimeName/verified/confidence/evidence), complete(scope=mapping/source).
+Analyzer subcommand complete is not whole-pipeline completion. Raw `symbol`
+acceptance remains provisional; only the service's post-recheck receipt completes
+rows. Existing dictionary validation now reports found aliases as runtimeMapping;
+new cache proofs store optional symbol receipts, including automatic evidence.
+Older verified cache proofs retain required-only display with explicit alias-set
+provenance. Receipt read errors degrade the display, never the injection decision.

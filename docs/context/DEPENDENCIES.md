@@ -137,3 +137,8 @@ qml-ui → MappingProgressController → MappingProgressModel/filter models is a
 presentation-only boundary. OverlayManager.mappingAttachRequested opens a new
 session; no progress-window action reaches Agent registry, detach, rollback or
 preflight cancel. Closing the separate window does not destroy the controller.
+
+MappingService.eventReceived → MappingProgressController is one-way structured
+presentation input. Analyzer adds symbol-started and runtimeMapping evidence;
+MappingServiceProgress adapts raw attempts to provisional rows and final receipts.
+Cache proof symbols are optional UI metadata, not an extra verification authority.

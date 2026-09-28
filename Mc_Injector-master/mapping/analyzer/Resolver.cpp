@@ -76,18 +76,19 @@ Json dictionaryValidation(const Json& dictionary,const Model& model,const Json& 
     const std::string loader=anchor?anchor->json->at("loaderKey").string():"";
     bool valid=anchor!=nullptr;Json::Array results;std::map<std::string,bool> matched;
     for(const auto&[key,value]:symbols.object()){
-        const auto& spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();bool ok=false;std::string reason;
+        const auto& spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();bool ok=false;std::string reason;Json runtimeValue=value;
         if(kind=="class"){ok=anchor&&model.find(sig(value.string()),loader);reason=ok?"loaded class in anchor defining loader":"class missing or loader ambiguous";}
         else if(kind=="descriptor"){ok=true;reason="explicit pack descriptor; checked at member lookup";}
         else if(kind=="reserved"){ok=true;reason="reserved authored value; not consumed by current Agent";}
         else {
             const auto* owner=anchor?model.find(sig(symbols.at(spec.at("owner").string()).string()),loader):nullptr;
             auto names=values(value);bool any=false,all=true;const auto descriptor=render(spec.at("descriptor").string(),symbols);
-            for(const auto&name:names){bool found=!name.empty()&&model.member(owner,kind,name,descriptor,spec.at("static").boolean());any|=found;all&=found;}
+            Json::Array foundNames;for(const auto&name:names){bool found=!name.empty()&&model.member(owner,kind,name,descriptor,spec.at("static").boolean());any|=found;all&=found;if(found)foundNames.emplace_back(name);}
+            runtimeValue=foundNames;
             ok=spec.contains("alternatives")?any:all;reason=ok?"owner + exact descriptor + static/instance + inherited lookup":"live member missing (owner/descriptor/modifiers)";
         }
         matched[key]=ok;if(spec.at("required").boolean()&&!ok)valid=false;
-        auto e=symbolEvent(key,value,ok,reason);results.push_back(e);if(events)events(e);
+        auto e=symbolEvent(key,value,ok,reason);e["runtimeMapping"]=runtimeValue;results.push_back(e);if(events)events(e);
     }
     for(const auto&group:contracts.at("requiredAlternatives").array()){bool found=false;for(const auto&key:group.array())found|=matched.at(key.string());if(!found)valid=false;}
     for(const auto& ctor:contracts.at("constructors").array())if(ctor.at("required").boolean()){
@@ -246,6 +247,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
         }
         const auto rewrite=[&](std::string descriptor,bool& ok){std::string out;for(std::size_t i=0;i<descriptor.size();++i){if(descriptor[i]=='L'){auto end=descriptor.find(';',i);if(end==std::string::npos){ok=false;return descriptor;}auto name=descriptor.substr(i,end-i+1);if(names.contains(name))out+=names.at(name);else {out+=name;if(!name.starts_with("Ljava/")&&!name.starts_with("Ljavax/")&&!name.starts_with("Lcom/mojang/")&&!name.starts_with("Lorg/lwjgl/"))ok=false;}i=end;}else out+=descriptor[i];}return out;};
         for(const auto&[key,oldValue]:original.at("symbols").object()){
+            if(events)events(Json::Object{{"event","symbol-started"},{"symbol",key},{"dictionary",original.at("id")}});
             const auto&spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();bool ok=bool(baseline);std::string reason="reference snapshot unavailable";Json value=oldValue;
             if(baseline){
                 reason="no unique structural match above confidence/margin threshold";

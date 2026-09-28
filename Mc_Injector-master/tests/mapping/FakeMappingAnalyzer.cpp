@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QThread>
 #include <cstdio>
 #include <windows.h>
@@ -56,8 +57,17 @@ int main(int argc, char **argv) {
             return 3;
         }
         auto pack = readObject(get("--pack"));
+        auto provider=pack.value("providers").toArray().first().toObject();
+        auto dictionary=provider.value("dictionaries").toArray().first().toObject();
+        provider["dictionaries"]=QJsonArray{dictionary};pack["providers"]=QJsonArray{provider};
+        const auto contracts=readObject(get("--contracts")).value("symbols").toObject();
+        const auto values=dictionary.value("symbols").toObject();
+        QJsonArray symbols;
+        for(auto it=contracts.begin();it!=contracts.end();++it) if(it.value().toObject().value("required").toBool())
+            symbols.append(QJsonObject{{"symbol",it.key()},{"accepted",true},{"mapping",values.value(it.key())},{"confidence",1.0}});
         writeObject(get("--out"), {{"valid", true},
                                    {"injectionReady", true},
+                                   {"symbols", symbols},
                                    {"fingerprint", "fixture-fingerprint"},
                                    {"pack", pack}});
         event({{"event", "validation"}, {"valid", true}});

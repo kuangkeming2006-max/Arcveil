@@ -1,4 +1,5 @@
 #include "../../src/MappingService.h"
+#include "../../src/MappingProgressController.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -17,6 +18,12 @@ struct MappingServiceTests {
         };
         QTemporaryDir dir;
         MappingService service;
+        MappingProgressController progress;
+        QObject::connect(&service,&MappingService::eventReceived,&progress,&MappingProgressController::consume);
+        bool prematureMatch=false;
+        QObject::connect(&service,&MappingService::eventReceived,[&](const QJsonObject &e){
+            if(e.value("event")=="symbol-matched" && service.busy()) prematureMatch=true;
+        });
         service.m_root = dir.path() + "/cache";
         service.m_analyzer = fake;
         service.m_contracts = contracts;
@@ -40,11 +47,14 @@ struct MappingServiceTests {
             return !service.busy();
         };
         auto start = [&] {
+            progress.begin(quint32(QCoreApplication::applicationPid()));
             service.prepare(quint32(QCoreApplication::applicationPid()), "unused", "unused", true,
                             {});
         };
         start();
         check(wait() && ready == 1 && !failed, "known pack validated before ready");
+        check(progress.successful() && !prematureMatch,"real service emits verified symbols only after final recheck");
+        check(!progress.reference().value("referenceAvailable").toBool(),"first run has no reference");
         check(heartbeats > 0, "event loop responsive during subprocess work");
         QFile before(log);
         before.open(QIODevice::ReadOnly);
@@ -52,7 +62,11 @@ struct MappingServiceTests {
         before.close();
         check(first == "inspect\nvalidate\ninspect\n", "preflight ordering");
         start();
+        progress.stopMatching();
+        check(service.busy(),"stop matching leaves preflight running");
         check(wait() && ready == 2, "verified cache hit");
+        check(progress.successful() && progress.reference().value("referenceAvailable").toBool(),
+              "stopped observer still consumes cached results and injection ready");
         QFile after(log);
         after.open(QIODevice::ReadOnly);
         check(after.readAll() == first + "inspect\ninspect\n",

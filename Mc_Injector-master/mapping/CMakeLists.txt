@@ -26,9 +26,11 @@ target_compile_definitions(MappingBoundaryTests PRIVATE NOMINMAX WIN32_LEAN_AND_
 add_executable(FakeMappingAnalyzer EXCLUDE_FROM_ALL ../tests/mapping/FakeMappingAnalyzer.cpp cache/MappingCache.cpp)
 target_compile_features(FakeMappingAnalyzer PRIVATE cxx_std_20)
 target_link_libraries(FakeMappingAnalyzer PRIVATE Qt6::Core)
-add_executable(MappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/MappingServiceTests.cpp ../src/MappingService.cpp ../src/MappingEventModel.cpp ../src/MappingService.h cache/MappingCache.cpp)
+add_executable(MappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/MappingServiceTests.cpp ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingEventModel.cpp ../src/MappingService.h cache/MappingCache.cpp)
 target_compile_features(MappingServiceTests PRIVATE cxx_std_20)
 target_compile_definitions(MappingServiceTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_sources(MappingServiceTests PRIVATE ../src/MappingProgressModel.cpp ../src/MappingProgressModel.h
+    ../src/MappingProgressController.cpp ../src/MappingProgressController.h)
 target_link_libraries(MappingServiceTests PRIVATE Qt6::Core)
 add_dependencies(MappingServiceTests FakeMappingAnalyzer)
 

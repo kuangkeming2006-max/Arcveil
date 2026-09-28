@@ -48,6 +48,11 @@ class MappingService final : public QObject {
     void fail(const QString &reason);
     void event(QJsonObject value);
     void stopProcess();
+    void progressSchema();
+    void progressReference(const mapping_cache::Entry &reference);
+    void progressAnalyzer(const QJsonObject &event);
+    void progressVerified();
+    QJsonObject m_progressContracts, m_progressSymbols;
     QString m_root, m_tools, m_run, m_pack, m_java, m_helper, m_toolsJar, m_status, m_fingerprint,
         m_start, m_contractDigest;
     QString m_analyzer, m_contracts, m_defaultPack, m_probe;

@@ -106,6 +106,7 @@ Entry Cache::promote(const QString &pack, const QString &snapshot, const QString
         throw std::runtime_error("candidate staging failed; previous cache retained");
     const auto digest = fileDigest(dir + "/pack.json", 2 * 1024 * 1024);
     writeObject(dir + "/proof.json", {{"validated", true},
+                                      {"symbols", validation.value("symbols")},
                                       {"analyzerVersion", 4},
                                       {"fingerprint", fingerprint},
                                       {"contractDigest", contractDigest},

@@ -144,6 +144,7 @@ ApplicationWindow {
                             displaced: Transition { NumberAnimation { properties: "y"; duration: 230; easing.type: Easing.OutCubic } }
                             delegate: Rectangle {
                                 id: symbolRow
+                                required property string symbol
                                 required property string logicalName
                                 required property string runtimeName
                                 required property string symbolStatus
@@ -155,6 +156,19 @@ ApplicationWindow {
                                 width: list.width; height: content.implicitHeight + 20; radius: 8
                                 color: host.backgroundColor
                                 border.color: settling ? "#55b6a0" : host.outlineVariantColor
+                                HoverHandler { id: rowHover }
+                                ToolTip.visible: rowHover.hovered
+                                ToolTip.delay: 500
+                                ToolTip.text: symbolRow.symbol + "\n" + (symbolRow.reason || symbolRow.evidence)
+                                Rectangle {
+                                    visible: symbolRow.symbolStatus === "active" && !symbolRow.settling
+                                    anchors.bottom: parent.bottom; height: 2; width: parent.width / 4; color: "#9b80dc"
+                                    SequentialAnimation on x {
+                                        running: window.visible && MappingProgress.matchingEnabled && symbolRow.symbolStatus === "active" && !symbolRow.settling; loops: Animation.Infinite
+                                        NumberAnimation { from: 0; to: symbolRow.width * 3/4; duration: 1100 }
+                                        NumberAnimation { to: 0; duration: 1100 }
+                                    }
+                                }
                                 ColumnLayout {
                                     id: content
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
@@ -167,7 +181,7 @@ ApplicationWindow {
                                         color: symbolRow.settling || symbolRow.symbolStatus === "completed" ? "#55b6a0" : host.secondaryTextColor
                                         font.family: "Consolas"; font.pixelSize: 12
                                         SequentialAnimation on opacity {
-                                            running: window.visible && symbolRow.symbolStatus === "active" && !symbolRow.settling; loops: Animation.Infinite
+                                            running: window.visible && MappingProgress.matchingEnabled && symbolRow.symbolStatus === "active" && !symbolRow.settling; loops: Animation.Infinite
                                             NumberAnimation { to: 0.3; duration: 500 }
                                             NumberAnimation { to: 1; duration: 500 }
                                         }

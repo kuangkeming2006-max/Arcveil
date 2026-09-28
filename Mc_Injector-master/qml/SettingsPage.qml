@@ -36,6 +36,14 @@ Item {
         }
 
         MaterialButton {
+            objectName: "openMappingProgressButton"
+            text: "Mapping / 反混淆进度 · Ctrl+Shift+P"
+            Layout.preferredWidth: 330
+            containerColor: host.surfaceColor
+            foregroundColor: host.textColor
+            onClicked: MappingProgress.open()
+        }
+        MaterialButton {
             objectName: "openMappingConsoleButton"
             text: "Open Mapping Console"
             Layout.preferredWidth: 230
