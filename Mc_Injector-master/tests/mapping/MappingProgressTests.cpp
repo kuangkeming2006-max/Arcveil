@@ -53,7 +53,10 @@ int main(int argc, char **argv) {
     c.consume({{"event", "snapshot-update"}, {"fingerprint", "first"}});
     start("World.players");
     c.consume({{"event", "snapshot-update"}, {"fingerprint", "changed"}});
-    check(c.pendingCount() == 2 && c.completedCount() == 1, "snapshot retries unfinished only");
+    check(c.activeCount() == 1 && c.completedCount() == 1,
+          "snapshot observation alone does not invent retries in UI");
+    c.consume({{"event", "symbol-retry"}, {"symbol", "World.players"}});
+    check(c.pendingCount() == 2 && c.completedCount() == 1, "service retries unfinished only");
     auto completed = c.completed();
     check(completed->data(completed->index(0, 0), MappingProgressModel::RuntimeName) == "ave.f",
           "completed value stable");
@@ -63,7 +66,6 @@ int main(int argc, char **argv) {
     c.stopMatching();
     int prior = stopped;
     c.consume({{"event", "snapshot-update"}, {"fingerprint", "third"}});
-    c.consume({{"event", "symbol-retry"}, {"symbol", "World.players"}});
     check(!c.matchingEnabled() && c.activeCount() == 1 && c.completedCount() == 1,
           "stop disables retries without clearing in-flight or completed results");
     match("World.players", "bdb.j");
@@ -97,6 +99,42 @@ int main(int argc, char **argv) {
     c.stopMatching();
     c.consume({{"event", "session-start"}, {"pid", 900}});
     check(!c.matchingEnabled(), "manual stop survives delayed session start");
+    c.begin(1000);
+    queue("provisional", true);
+    c.consume({{"event", "symbol-matched"},
+               {"symbol", "provisional"},
+               {"runtimeName", "runtime.foo"},
+               {"provisional", true},
+               {"verified", false}});
+    wait();
+    check(c.completedCount() == 1 && !c.successful(),
+          "provisional row completes animation without injection success");
+    c.consume({{"event", "symbol-revalidated"}, {"symbol", "provisional"}, {"provisional", true}});
+    check(c.completedCount() == 1 &&
+              !c.completed()
+                   ->data(c.completed()->index(0, 0), MappingProgressModel::Settling)
+                   .toBool(),
+          "revalidation preserves completed row without animation");
+    c.consume({{"event", "symbol-matched"},
+               {"symbol", "provisional"},
+               {"runtimeName", "runtime.foo"},
+               {"verified", true}});
+    check(c.successful() && c.completedCount() == 1 &&
+              c.completed()
+                  ->data(c.completed()->index(0, 0), MappingProgressModel::Verified)
+                  .toBool(),
+          "final receipt upgrades provisional in place");
+    c.begin(1001);
+    queue("affected", true);
+    c.consume({{"event", "symbol-matched"},
+               {"symbol", "affected"},
+               {"runtimeName", "runtime.old"},
+               {"provisional", true}});
+    c.consume(
+        {{"event", "symbol-invalidated"}, {"symbol", "affected"}, {"reason", "evidence changed"}});
+    wait();
+    check(c.completedCount() == 0 && c.pendingCount() == 1,
+          "invalidated migration timer cannot resurrect a binding");
     std::printf("MappingProgress: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

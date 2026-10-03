@@ -105,7 +105,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v2.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v3.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
@@ -219,6 +219,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                     stats["capturePath"] = key;
                     events(stats);
                 }
+                if(failure.contains("retryable") && failure.at("retryable").boolean()) throw RuntimeChanged(failure.at("reason").string());
                 throw std::runtime_error(failure.at("reason").string());
             }
             if (!diagnostic.at("success").boolean())
@@ -279,12 +280,12 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                         throw std::runtime_error("duplicate detail candidate");
                 }
                 if (expected.size() != normalized.at("classes").array().size())
-                    throw std::runtime_error("detail selection count changed");
+                    throw RuntimeChanged("detail selection count changed");
                 for (const auto &klass : normalized.at("classes").array()) {
                     const auto id = klass.at("loaderKey").string() + klass.at("name").string();
                     if (!expected.contains(id) ||
                         sha256(classMetadata(klass).dump()) != expected.at(id))
-                        throw std::runtime_error(
+                        throw RuntimeChanged(
                             "class metadata changed between lite and detail: " +
                             klass.at("name").string());
                 }
@@ -292,6 +293,9 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             QFile::remove(qtPath(rawPath));
             QFile::remove(qtPath(statusPath));
             return normalized;
+        } catch (const RuntimeChanged &e) {
+            diagnostic["status"]="changed";diagnostic["reason"]=e.what();paths[key]=diagnostic;events(paths);
+            throw;
         } catch (const SnapshotLimit &e) {
             diagnostic["captureFailure"] = e.json();
             diagnostic["reason"] = e.what();

@@ -31,7 +31,7 @@ ApplicationWindow {
                 Label { text: "运行时映射 · 每一个结果都有来源"; color: host.secondaryTextColor }
             }
             Item { Layout.fillWidth: true }
-            Label { text: "ARCVEIL  /  v55.8"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
+            Label { text: "ARCVEIL  /  v55.9"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
         }
         RowLayout {
             Layout.fillWidth: true; spacing: 10
@@ -153,6 +153,7 @@ ApplicationWindow {
                                 required property string reason
                                 required property bool settling
                                 required property bool isRequired
+                                required property bool isVerified
                                 width: list.width; height: content.implicitHeight + 20; radius: 8
                                 color: host.backgroundColor
                                 border.color: settling ? "#55b6a0" : host.outlineVariantColor
@@ -191,6 +192,11 @@ ApplicationWindow {
                                         text: (symbolRow.isRequired ? "required" : "optional") + " · confidence " + symbolRow.confidence.toFixed(2)
                                     }
                                     Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 10
+                                        color: symbolRow.isVerified ? "#55b6a0" : symbolRow.runtimeName ? "#c99948" : host.secondaryTextColor
+                                        text: symbolRow.isVerified ? "verified" : symbolRow.runtimeName ? "provisional / awaiting-final-validation" : "unresolved"
+                                    }
+                                    Label {
                                         visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                                         text: symbolRow.reason || symbolRow.evidence; textFormat: Text.PlainText
                                         color: host.secondaryTextColor; font.pixelSize: 10
@@ -207,8 +213,9 @@ ApplicationWindow {
             Layout.fillWidth: true; spacing: 12
             Label { Layout.fillWidth: true; text: MappingProgress.status; textFormat: Text.PlainText; color: host.secondaryTextColor; wrapMode: Text.Wrap; font.pixelSize: 12 }
             Button { objectName: "mappingStopMatching"; text: "停止匹配"; enabled: MappingProgress.matchingEnabled; onClicked: MappingProgress.stopMatching() }
+            Button { text: "继续匹配"; visible: !MappingProgress.matchingEnabled && !MappingProgress.successful; enabled: MappingService.busy; onClicked: MappingProgress.resumeMatching() }
             Button { text: "关闭窗口"; onClicked: window.close() }
         }
-        Label { text: "关闭窗口不会停止后台任务。停止匹配不取消当前注入验证，也不会分离 Agent。"; color: host.secondaryTextColor; font.pixelSize: 11 }
+        Label { text: "关闭窗口不会停止后台任务。停止匹配会暂停后续 snapshot watch / retry，也不会分离 Agent。"; color: host.secondaryTextColor; font.pixelSize: 11 }
     }
 }

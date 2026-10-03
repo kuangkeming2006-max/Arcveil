@@ -18,8 +18,12 @@ void progress(const std::filesystem::path &output, const char *stage) {
     file << Json(Json::Object{{"stage", stage}}).dump();
 }
 void require(jvmtiError result, const char *operation) {
+    const auto reason = std::string(operation) + ": JVMTI " + std::to_string(result);
+    if (result == JVMTI_ERROR_CLASS_NOT_PREPARED || result == JVMTI_ERROR_INVALID_CLASS ||
+        result == JVMTI_ERROR_INVALID_METHODID || result == JVMTI_ERROR_INVALID_FIELDID)
+        throw RuntimeChanged(reason);
     if (result != JVMTI_ERROR_NONE)
-        throw std::runtime_error(std::string(operation) + ": JVMTI " + std::to_string(result));
+        throw std::runtime_error(reason);
 }
 template <class T> struct Buffer {
     jvmtiEnv *ti;
@@ -103,7 +107,7 @@ struct Capture {
             jboolean obsolete = JNI_FALSE;
             require(ti->IsMethodObsolete(methodIds.data[i], &obsolete), "IsMethodObsolete");
             if (obsolete)
-                throw std::runtime_error("class changed during capture");
+                throw RuntimeChanged("class changed during capture");
             std::string code;
             if (!lite && !(mods & (0x100 | 0x400))) {
                 jint length = 0;
@@ -259,7 +263,7 @@ struct Capture {
             auto first = members(classes.data[i]);
             auto second = members(classes.data[i]);
             if (first != second)
-                throw std::runtime_error("unstable transformed class: " + name);
+                throw RuntimeChanged("unstable transformed class: " + name);
             auto metadata = first;
             std::size_t cp = 0, code = 0;
             if (!lite) {
@@ -285,7 +289,7 @@ struct Capture {
             (*stats)["totalBytes"] = double(stream->bytes);
         }
         if (selection && captured != selection->at("classes").array().size())
-            throw std::runtime_error(
+            throw RuntimeChanged(
                 "selected classes disappeared, became unprepared, or changed defining loader");
         Json::Array loaderInfo;
         for (std::size_t i = 0; i < loaders.size(); ++i) {
@@ -523,6 +527,17 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
             ti->DisposeEnvironment();
         try {
             failure(e.json());
+        } catch (...) {
+        }
+        return JNI_ERR;
+    } catch (const RuntimeChanged &e) {
+        if (env && env->ExceptionCheck())
+            env->ExceptionClear();
+        if (ti)
+            ti->DisposeEnvironment();
+        try {
+            failure(Json::Object{
+                {"reason", e.what()}, {"retryable", true}, {"failureType", "runtime-drift"}});
         } catch (...) {
         }
         return JNI_ERR;

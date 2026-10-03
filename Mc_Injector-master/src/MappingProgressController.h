@@ -32,10 +32,16 @@ class MappingProgressController final : public QObject {
     void consume(const QJsonObject &event);
     Q_INVOKABLE void open() { emit openRequested(); }
     Q_INVOKABLE void stopMatching();
+    Q_INVOKABLE void resumeMatching() {
+        m_stopRequested = false;
+        emit resumeMatchingRequested();
+    }
   signals:
     void changed();
     void openRequested();
-    // Presentation retry lifecycle only, deliberately independent of preflight cancel/Agent detach.
+    void stopMatchingRequested();
+    void resumeMatchingRequested();
+    // Completion notification is separate from the user stop request.
     void matchingStopped();
 
   private:

@@ -96,7 +96,7 @@ private:
         } else if(phase==20) {
             auto* build=find(m_window->contentItem(),"aboutBuildLabel");
             if(m_window->property("activeRoute").toString()!="about"||!build||
-               !build->property("text").toString().contains("v55.8")||!capture("about-light")) {
+               !build->property("text").toString().contains("v55.9")||!capture("about-light")) {
                 finish(false);return;
             }
             if(m_setTheme) m_setTheme(true);
@@ -146,7 +146,7 @@ private:
         } else if(phase==34) {
             if(!captureProgress("mapping-progress-active")) {finish(false);return;}
             m_progress->consume({{"event","symbol-matched"},{"symbol","Minecraft.thePlayer"},
-                {"runtimeName","ave.f"},{"verified",true},{"confidence",0.99},
+                {"runtimeName","ave.f"},{"verified",false},{"provisional",true},{"confidence",0.99},
                 {"evidence",QJsonArray{"Unique hierarchy, descriptor and normalized bytecode match"}}});
         } else if(phase==35) {
             if(m_progress->activeCount()!=1 || !captureProgress("mapping-progress-migrating")) {finish(false);return;}
@@ -161,7 +161,10 @@ private:
             m_progressWindow->close();
         } else if(phase==37) {
             if(m_progressWindow->isVisible()) {finish(false);return;}
-            m_progress->consume({{"event","symbol-matched"},{"symbol","World.players"},{"runtimeName","bdb.j"},{"verified",true},{"confidence",1.0}});
+            m_progress->consume({{"event","symbol-matched"},{"symbol","World.players"},{"runtimeName","bdb.j"},{"verified",false},{"provisional",true},{"confidence",0.99}});
+            if(m_progress->successful()) {finish(false);return;}
+            m_progress->consume({{"event","symbol-matched"},{"symbol","Minecraft.thePlayer"},{"runtimeName","ave.f"},{"verified",true}});
+            m_progress->consume({{"event","symbol-matched"},{"symbol","World.players"},{"runtimeName","bdb.j"},{"verified",true}});
             m_progress->open();
         } else if(phase==38) {
             if(!m_progressWindow->isVisible() || !m_progress->successful() || !captureProgress("mapping-progress-success-light")) {finish(false);return;}

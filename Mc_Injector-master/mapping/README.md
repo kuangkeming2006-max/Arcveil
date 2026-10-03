@@ -1,4 +1,4 @@
-# Mapping pipeline — internal v55.8
+# Mapping pipeline — internal v55.9
 
 The controller validates mappings before loading the main Agent. Gameplay uses logical
 symbols; MappingRegistry remains the final registration boundary and freezes once.
@@ -29,7 +29,8 @@ from a runtime where the supplied pack validates. For Java 8 add --tools-jar wit
 that JDK's lib/tools.jar. Helper JAR, probe DLL and contracts default beside the tool.
 All commands emit eventVersion 1 JSONL. validate without a snapshot checks syntax
 only and reports injectionReady=false. Exit 3 is failed live validation; exit 4 is
-incomplete resolution. --write-pack is written only after complete validation.
+incomplete resolution; exit 5 is recoverable capture drift. --write-pack is written
+only after complete validation and is prohibited for incremental provisional state.
 
 Matching uses hierarchy, descriptors, member structure, normalized installed bytecode
 and call/reference graphs. Names have zero ranking weight. Exact unique structural
@@ -137,40 +138,76 @@ mapping plus renderer activation, and then detaches. The optional unique probe p
 supports testing while an older DLL is resident. Its cache directory is printed and
 retained. It is not part of normal application startup.
 
-Probe protocol v2 ships as `MappingProbe-v2.dll`, so a resident v1 probe cannot be
+v55.7 shipped protocol v2 as `MappingProbe-v2.dll`, so a resident v1 probe could not be
 accidentally reused after an application upgrade. The NativeLoader's module-identity
 checks remain enabled.
 
 
-## v55.8 Mapping progress window
+## v55.9 Dynamic matching and progress window
 
 Attach opens an independent window with Cache / Snapshot / Resolve / Complete
 steps, reference provenance, and active/completed/pending symbol lists. Close
 hides the window; reopen from Settings or Ctrl+Shift+P. The developer console
 remains available independently (Ctrl+Shift+M).
 
-The window consumes structured events only. `MappingServiceProgress.cpp` emits
-schema queues, reference, snapshot updates, provisional progress, final verified
-symbols, and scoped completion. Analyzer `symbol` acceptance is provisional at
-the dictionary-attempt level; it never completes a row until the existing final
-fingerprint recheck and cache promotion succeed. Fresh validation receipts include
-only actually found member names in `runtimeMapping`; old cache proofs without
-per-symbol receipts expose required authored alias sets explicitly as cache data.
-New cache proofs retain the optional symbol display receipt and automatic
-confidence/evidence. These fields are not injection authorization.
+MappingService owns the actual watch/retry lifecycle. Incomplete automatic
+resolution persists unique accepted bindings and an unresolved set in the run's
+matching-state.json, then waits. Lite-only capture starts after 2.5 seconds and
+backs off to 30 seconds for unchanged snapshots. Jobs are serialized on QProcess;
+changed relevant scopes debounce for 750 ms before selected detail capture.
+Unchanged lite fingerprints skip selection/detail; unrelated class changes skip
+detail after selection compares a loader-instance-bound relevant fingerprint.
+Watch requests do not hydrate authored classes or request bytecode/constant pools.
 
-This iteration adds **state consumption, not a second autonomous matcher**.
-Changed snapshot events requeue unfinished presentation rows; accepted rows and
-in-flight migration timers remain stable. Stop disables subsequent progress/retry
-consumption and scanning animations, retaining completed rows and accepting final
-results of the current mandatory preflight. It never kills the preflight process,
-detaches/rolls back the Agent, or bypasses validation. Existing fail-closed behavior
-on runtime drift is unchanged; this UI does not introduce a background recapture
-loop or automatically restart a failed injection.
+On a new selected generation, Analyzer revalidates accepted bindings using live
+lookup and normalized structural/bytecode/reference proofs. Still-valid results
+remain stable; only unresolved or invalidated symbols start matching again.
+Acceptance criteria, confidence tiers and the existing structural matcher remain
+unchanged. Without a verified reference, the service waits without guessing.
 
-Tests: MappingProgressTests (state transitions, snapshot retry, stop, generations),
-MappingServiceTests (real service/fake subprocess event boundary, unchanged ready
-and command order while stopped), ControllerUiSmoke (actual Attach entry, native
-window visibility, animations, close/reopen, light/dark screenshots). Structural
-resolver fixtures additionally check runtime-name receipts without changing
-matching scores or selection decisions.
+New unique matches emit symbol-started → symbol-progress → symbol-matched and
+symbol-provisional-match. They migrate to completed with an explicit
+provisional / awaiting-final-validation label. Provisional results cannot grant
+injection readiness or be exported through --write-pack. Required completion
+triggers independent full live validation, a new selected detail capture, final
+fingerprint and PID/creation-time checks, then cache promotion and ready().
+Final fingerprint drift starts another generation and rechecks affected bindings;
+it does not emit failed(). Typed capture drift (exit 5) also returns to waiting.
+Other capture failures get bounded recovery; a target exit or persistently
+unavailable capture is fatal. Cache candidate/verified/previous and rollback
+semantics remain intact. Agent registry/freeze and injection startup are unchanged.
+
+Stop Matching stops future watch/retry and preserves accepted results. It neither
+kills an in-flight job nor cancels attach, changes injection state, detaches or
+rolls back the Agent. That generation may finish validation and ready; if a new
+generation is needed it pauses. Resume Matching starts a fresh lite check. Cancel
+Attach remains the separate whole-operation cancellation action.
+
+The window consumes structured events only, including snapshot-watch,
+snapshot-unchanged, snapshot-changed, retry-scheduled, retry-started,
+symbol-provisional-match, symbol-revalidated, symbol-invalidated and
+waiting-for-runtime-change. Successful provisional rows keep their position and
+migration timers during revalidation. Final verification upgrades them in place.
+QML contains no retry or matching business logic.
+
+Standalone incremental usage (absolute output paths):
+
+```powershell
+.\tools\MappingAnalyzer.exe select --allow-empty --pack "$PWD/agent/mappings/default-v2.json" --reference "$PWD/reference.json" --snapshot "$PWD/index.jsonl" --out "$PWD/selection.json"
+.\tools\MappingAnalyzer.exe resolve --incremental --pack "$PWD/agent/mappings/default-v2.json" --reference "$PWD/reference.json" --snapshot "$PWD/detail.jsonl" --out "$PWD/state.json"
+.\tools\MappingAnalyzer.exe resolve --incremental --pack "$PWD/agent/mappings/default-v2.json" --reference "$PWD/reference.json" --snapshot "$PWD/next-detail.jsonl" --state "$PWD/state.json" --out "$PWD/next-state.json"
+```
+
+Incremental state binds the source pack/contracts/reference, dictionary and target
+PID/creation time. Its pack is a provisional draft; use independent validate and
+fresh capture before promotion. Normal standalone resolve --write-pack retains
+its existing complete-validation behavior. MappingProbe-v3.dll distinguishes
+recoverable runtime-drift output from older resident Probe versions.
+
+Tests: DynamicMappingServiceTests drives the production service and an external
+100-symbol analyzer fixture through 70 → 90 → 100, unchanged/irrelevant updates,
+stop/resume, final drift, cancellation and capture recovery. Test-Incremental.py
+exercises the real Analyzer's retention/invalidation and export gate.
+MappingProgressTests and ControllerUiSmoke cover provisional migration, verified
+upgrade, automatic open, stop, close/reopen and both themes. Exact evidence and
+limits are in tests/mapping/V55_9_VALIDATION.md.

@@ -60,7 +60,7 @@ struct MappingServiceTests {
         before.open(QIODevice::ReadOnly);
         auto first = before.readAll();
         before.close();
-        check(first == "inspect\nvalidate\ninspect\n", "preflight ordering");
+        check(first == "inspect\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n", "preflight ordering");
         start();
         progress.stopMatching();
         check(service.busy(),"stop matching leaves preflight running");
@@ -69,29 +69,33 @@ struct MappingServiceTests {
               "stopped observer still consumes cached results and injection ready");
         QFile after(log);
         after.open(QIODevice::ReadOnly);
-        check(after.readAll() == first + "inspect\ninspect\n",
+        check(after.readAll() == first + "inspect\nselect\ninspect-detail\ninspect\nselect\ninspect-detail\n",
               "cache hit still performs final runtime recheck");
         after.close();
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "changed");
         start();
-        check(wait() && ready == 2 && failed == 1, "changed fingerprint blocks injection");
+        check(wait() && ready == 3 && failed == 0, "final fingerprint drift revalidates and recovers without failure");
         service.m_root = dir.path() + "/unresolved";
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "unresolved");
         start();
-        check(wait() && ready == 2 && failed == 2,
-              "validation failure invokes resolver and fails closed");
+        QElapsedTimer pending;pending.start();
+        while(service.m_unresolved.isEmpty() && pending.elapsed()<10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents,10);
+        check(service.busy() && !service.m_unresolved.isEmpty() && ready==3 && failed==0,
+              "incomplete resolution waits without authorizing injection or fatal failure");
+        service.cancel();
         service.m_root = dir.path() + "/cancelled";
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "slow");
         start();
         QTimer::singleShot(30, &service, &MappingService::cancel);
-        check(wait() && ready == 2 && failed == 2, "cancel has no stale ready/failure callback");
+        check(wait() && ready == 3 && failed == 0, "cancel has no stale ready/failure callback");
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "success");
         start();
-        check(wait() && ready == 3, "new generation succeeds after cancellation");
+        check(wait() && ready == 4, "new generation succeeds after cancellation");
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "flood");
         const auto priorBeats = heartbeats;
         start();
-        check(wait() && ready == 4 && heartbeats > priorBeats + 2,
+        check(wait() && ready == 5 && heartbeats > priorBeats + 2,
               "JSONL flood remains responsive");
         service.clearEvents();
         check(service.events()->rowCount() == 0, "clear console view");

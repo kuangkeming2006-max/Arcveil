@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QStringList>
+#include <QJsonArray>
 #include <QTimer>
 #include <functional>
 class MappingService final : public QObject {
@@ -13,6 +14,7 @@ class MappingService final : public QObject {
     Q_PROPERTY(QAbstractItemModel *events READ events CONSTANT)
     Q_PROPERTY(double progress READ progress NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool matchingEnabled READ matchingEnabled NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(QString fingerprint READ fingerprint NOTIFY changed)
     Q_PROPERTY(QString logPath READ logPath NOTIFY changed)
@@ -23,6 +25,9 @@ class MappingService final : public QObject {
     double progress() const { return m_progress; }
     Q_INVOKABLE void clearEvents() { m_events.clear(); }
     bool busy() const { return m_busy; }
+    bool matchingEnabled() const { return m_busy && m_watchEnabled; }
+    Q_INVOKABLE void stopMatching();
+    Q_INVOKABLE void resumeMatching();
     QString status() const { return m_status; }
     QString fingerprint() const { return m_fingerprint; }
     QString logPath() const { return m_run.isEmpty() ? QString{} : m_run + "/events.jsonl"; }
@@ -39,6 +44,18 @@ class MappingService final : public QObject {
   private:
     friend struct MappingServiceTests;
     friend struct LiveMappingSmoke;
+    friend struct DynamicMappingServiceTests;
+    enum class CapturePhase { Initial, Watch, Final };
+    void captureLite(CapturePhase phase);
+    void selectDetail(CapturePhase phase);
+    void captureDetail(CapturePhase phase);
+    void scheduleRetry(const QString &reason, bool unchanged = false);
+    void watchLite();
+    bool identityValid() const;
+    bool captureFailed(int code);
+    void persistMatchingState();
+    void invalidate(const QString &symbol, const QString &reason);
+    void provisional(QJsonObject value);
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void choosePack();
@@ -64,5 +81,14 @@ class MappingService final : public QObject {
     quint32 m_pid = 0;
     bool m_busy = false, m_modular = true;
     QJsonObject m_validation, m_capture;
-    mapping_cache::Entry m_hit;
+    mapping_cache::Entry m_hit, m_reference;
+    QTimer m_watchTimer;
+    bool m_watchEnabled = false, m_dynamic = false, m_pendingChange = false;
+    int m_watchInterval = 2500, m_maxWatchInterval = 30000, m_debounceMs = 750,
+        m_captureFailures = 0;
+    quint64 m_snapshotGeneration = 0, m_captureSerial = 0;
+    QString m_snapshot, m_litePath, m_selectionPath, m_statePath, m_scopePack, m_observedLite,
+        m_relevantFingerprint, m_nextRelevant, m_finalFingerprint;
+    QJsonObject m_matchingState, m_provisional, m_analyzerFailure;
+    QStringList m_unresolved;
 };

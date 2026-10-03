@@ -32,17 +32,22 @@ int main(int argc, char **argv) {
     if (mode == "flood")
         for (int i = 0; i < 1000; ++i)
             event({{"event", "symbol"}, {"symbol", QString::number(i)}, {"confidence", 0.99}});
-    if (args[1] == "inspect") {
+    if(args[1]=="select") {
+        const auto snapshot=readObject(get("--snapshot"));
+        writeObject(get("--out"),{{"relevantFingerprint",snapshot.value("fingerprint")},{"classes",QJsonArray{QJsonObject{{"name","Fixture"}}}}});
+        return 0;
+    }
+    if (args[1] == "inspect" || args[1]=="inspect-detail") {
         auto pid = get("--pid").toUInt();
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         FILETIME c{}, e{}, k{}, u{};
         if (!h || !GetProcessTimes(h, &c, &e, &k, &u))
             return 1;
         CloseHandle(h);
-        QString fp = "fixture-fingerprint";
-        if (mode == "changed" && get("--out").endsWith("final-snapshot.json"))
+        QString fp = args[1]=="inspect"?"fixture-lite":"fixture-fingerprint";
+        if (mode == "changed" && args[1]=="inspect-detail" && get("--candidates").endsWith("selection-2.json"))
             fp = "changed-fingerprint";
-        writeObject(get("--out"), {{"testSnapshot", true}});
+        writeObject(get("--out"), {{"testSnapshot", true},{"fingerprint",fp}});
         event({{"event", "fingerprint"},
                {"fingerprint", fp},
                {"pid", double(pid)},
@@ -68,13 +73,17 @@ int main(int argc, char **argv) {
         writeObject(get("--out"), {{"valid", true},
                                    {"injectionReady", true},
                                    {"symbols", symbols},
-                                   {"fingerprint", "fixture-fingerprint"},
+                                   {"fingerprint", readObject(get("--snapshot")).value("fingerprint")},
                                    {"pack", pack}});
         event({{"event", "validation"}, {"valid", true}});
         return 0;
     }
     if (args[1] == "resolve") {
-        writeObject(get("--out"), {{"complete", false}, {"fingerprint", "fixture-fingerprint"}});
+        QJsonArray unresolved;const auto specs=readObject(get("--contracts")).value("symbols").toObject();
+        for(auto it=specs.begin();it!=specs.end();++it)unresolved.append(it.key());
+        writeObject(get("--out"), {{"stateVersion",1},{"complete", false},{"requiredComplete",false},
+            {"accepted",QJsonObject{}},{"unresolved",unresolved},{"pack",readObject(get("--pack"))},
+            {"fingerprint",readObject(get("--snapshot")).value("fingerprint")}});
         event({{"event", "candidate"}, {"complete", false}});
         return 4;
     }

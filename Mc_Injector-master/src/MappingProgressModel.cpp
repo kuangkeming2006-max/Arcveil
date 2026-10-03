@@ -29,6 +29,8 @@ QVariant MappingProgressModel::data(const QModelIndex &index, int role) const {
         return r.required;
     case Attempts:
         return r.attempts;
+    case Verified:
+        return r.verified;
     default:
         return {};
     }
@@ -37,7 +39,7 @@ QHash<int, QByteArray> MappingProgressModel::roleNames() const {
     return {{Symbol, "symbol"},       {LogicalName, "logicalName"}, {RuntimeName, "runtimeName"},
             {Status, "symbolStatus"}, {Confidence, "confidence"},   {Evidence, "evidence"},
             {Reason, "reason"},       {Settling, "settling"},       {Required, "isRequired"},
-            {Attempts, "attempts"}};
+            {Attempts, "attempts"},   {Verified, "isVerified"}};
 }
 int MappingProgressModel::find(const QString &key) const {
     for (int i = 0; i < m_rows.size(); ++i)
@@ -64,7 +66,7 @@ bool MappingProgressModel::requiredComplete() const {
     for (const auto &r : m_rows)
         if (r.required) {
             any = true;
-            if (!r.matched)
+            if (!r.verified)
                 return false;
         }
     return any;
@@ -76,7 +78,9 @@ void MappingProgressModel::retryUnfinished() {
             continue;
         r.status = "pending";
         r.reason.clear();
-        r.runtimeName.clear(); r.evidence.clear(); r.confidence=0;
+        r.runtimeName.clear();
+        r.evidence.clear();
+        r.confidence = 0;
         ++r.attempts;
         emit dataChanged(index(i), index(i));
     }
@@ -101,8 +105,29 @@ void MappingProgressModel::consume(const QJsonObject &e) {
         endInsertRows();
     }
     auto &r = m_rows[i];
-    if (r.matched)
-        return; // Accepted results remain stable, including during migration.
+    if (event == "symbol-invalidated") {
+        r.matched = false;
+        r.verified = false;
+        r.settling = false;
+        r.status = "pending";
+        ++r.migration;
+        r.runtimeName.clear();
+        r.confidence = 0;
+        r.evidence.clear();
+        r.reason = e.value("reason").toString();
+        emit dataChanged(index(i), index(i));
+        emit changed();
+        return;
+    }
+    if (r.matched) {
+        if (event == "symbol-matched" && e.value("verified").toBool()) {
+            r.verified = true;
+            r.reason.clear();
+            emit dataChanged(index(i), index(i));
+            emit changed();
+        }
+        return; // Revalidated/provisional rows retain their position and migration timer.
+    }
     if (event == "symbol-started" || event == "symbol-progress")
         r.status = "active";
     else if (event == "symbol-retry") {
@@ -112,18 +137,21 @@ void MappingProgressModel::consume(const QJsonObject &e) {
         r.status = "pending";
     else if (event == "symbol-matched") {
         const auto runtime = e.value("runtimeName").toString();
-        if (runtime.isEmpty() || !e.value("verified").toBool())
+        if (runtime.isEmpty() ||
+            (!e.value("verified").toBool() && !e.value("provisional").toBool()))
             return;
         r.runtimeName = runtime;
         r.matched = true;
+        r.verified = e.value("verified").toBool();
         r.settling = true;
         r.status = "active";
         const auto generation = m_generation;
-        QTimer::singleShot(750, this, [this, key, generation] {
+        const auto migration = ++r.migration;
+        QTimer::singleShot(750, this, [this, key, generation, migration] {
             if (generation != m_generation)
                 return;
             const int row = find(key);
-            if (row < 0)
+            if (row < 0 || !m_rows[row].matched || m_rows[row].migration != migration)
                 return;
             m_rows[row].status = "completed";
             m_rows[row].settling = false;

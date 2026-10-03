@@ -67,7 +67,18 @@ ApplicationWindow, automatically opened by OverlayManager.mappingAttachRequested
 owns symbol rows; three filter models expose active/completed/pending. Successful
 rows dwell for 750 ms before migration, independent of window visibility. QML only
 renders roles/transitions. Closing hides the window; Ctrl+Shift+P reopens it.
-Stop disables presentation retry scheduling, never calls MappingService.cancel or
+Historical v55.8 Stop disabled presentation retry scheduling and never called MappingService.cancel or
 OverlayManager.detach. The existing mandatory preflight is not a cancellable
 optional matcher. Structured service integration is now in MappingServiceProgress.cpp; only final verified receipts complete rows. Settings also provides a reopen button.
 Tests: MappingProgressTests and ControllerUiSmoke phases 32–39.
+
+
+v55.9: Stop/Resume route to the real MappingService watch lifecycle through
+MappingProgressController request signals. Close still hides only the window.
+MappingProgressModel adds isVerified: provisional matches migrate to completed
+with awaiting-final-validation visible; only verified required rows complete the
+steps. symbol-revalidated/verified upgrade preserve row position/timers;
+symbol-invalidated affects only its row. snapshot-update is observation, not a
+UI retry trigger. QML renders the status and allows resume while service busy.
+MappingProgressTests, DynamicMappingServiceTests and the 40-phase UI smoke cover
+these boundaries; no QML matching business logic or Agent IPC is introduced.

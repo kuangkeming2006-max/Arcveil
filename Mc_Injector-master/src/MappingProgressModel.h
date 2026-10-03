@@ -17,12 +17,14 @@ class MappingProgressModel final : public QAbstractListModel {
         Reason,
         Settling,
         Required,
-        Attempts
+        Attempts,
+        Verified
     };
     struct Row {
         QString symbol, logicalName, runtimeName, status = "pending", evidence, reason;
         double confidence = 0;
-        bool required = false, settling = false, matched = false;
+        bool required = false, settling = false, matched = false, verified = false;
+        quint64 migration = 0;
         int attempts = 0;
     };
     explicit MappingProgressModel(QObject *parent = nullptr) : QAbstractListModel(parent) {}

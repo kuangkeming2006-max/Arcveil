@@ -1,4 +1,5 @@
 #include "Analyzer.h"
+#include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <QCryptographicHash>
 #include <QSaveFile>
@@ -113,7 +114,7 @@ Json inspectSnapshot(Json snapshot) {
             auto it =
                 bindings.find(loader.at("type").string() + ":" + loader.at("instance").dump());
             if (it == bindings.end())
-                throw std::runtime_error("classloader set changed since lite capture");
+                throw RuntimeChanged("classloader set changed since lite capture");
             loaderKeys[loader.at("id").integer()] = it->second.at("loaderKey").string();
         }
     }

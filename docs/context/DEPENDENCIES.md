@@ -142,3 +142,16 @@ MappingService.eventReceived → MappingProgressController is one-way structured
 presentation input. Analyzer adds symbol-started and runtimeMapping evidence;
 MappingServiceProgress adapts raw attempts to provisional rows and final receipts.
 Cache proof symbols are optional UI metadata, not an extra verification authority.
+
+## Dynamic service matching v55.9
+MappingProgressController.stopMatchingRequested/resumeMatchingRequested →
+MappingService.stopMatching/resumeMatching controls the real watch QTimer.
+This edge never calls OverlayManager.detach/cancel or Agent IPC. The return edge
+is structured service events; QML does not select classes or schedule retries.
+
+MappingServiceDynamic → Analyzer lite/select/selected-detail/incremental state
+operates before main-Agent resolve. State retains accepted bindings and unresolved
+symbols; selected generations independently validate/recheck before cache promotion.
+ProbeProtocol::RuntimeChanged → retryable JSON/exit 5 → service waiting lifecycle.
+MappingProbe-v3.dll is the current resident-version boundary. Agent registry/freeze
+and normal injection authorization still begin only at MappingService.ready().

@@ -156,6 +156,10 @@ struct ControllerServices {
         qmlRegisterSingletonInstance("McOverlay", 1, 0, "MappingProgress", &services.mappingProgress);
         QObject::connect(overlayManager.mappingService(), &MappingService::eventReceived,
                          &services.mappingProgress, &MappingProgressController::consume);
+        QObject::connect(&services.mappingProgress,&MappingProgressController::stopMatchingRequested,
+                         overlayManager.mappingService(),&MappingService::stopMatching);
+        QObject::connect(&services.mappingProgress,&MappingProgressController::resumeMatchingRequested,
+                         overlayManager.mappingService(),&MappingService::resumeMatching);
         QObject::connect(&overlayManager, &OverlayManager::mappingAttachRequested,
                          &services.mappingProgress, &MappingProgressController::begin);
         QObject::connect(&overlayManager, &OverlayManager::errorChanged,

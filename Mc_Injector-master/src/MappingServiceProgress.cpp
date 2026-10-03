@@ -73,9 +73,6 @@ void MappingService::progressReference(const Entry &reference) {
 void MappingService::progressAnalyzer(const QJsonObject &input) {
     const auto kind = input.value("event").toString();
     if (kind == "fingerprint") {
-        event({{"event", "snapshot-update"},
-               {"fingerprint", input.value("fingerprint")},
-               {"classes", input.value("classes")}});
         QString family = "Unknown";
         int confidence = -1;
         for (const auto &v : input.value("launchEvidence").toArray()) {
@@ -100,6 +97,10 @@ void MappingService::progressAnalyzer(const QJsonObject &input) {
         if (input.value("accepted").toBool())
             e["reason"] = "Candidate evidence received; awaiting final validation";
         event(e);
+        if (input.value("provisional").toBool() && input.value("accepted").toBool())
+            provisional(input);
+    } else if (kind == "symbol-invalidated") {
+        invalidate(input.value("symbol").toString(), input.value("reason").toString());
     } else if (kind == "validation" && input.value("injectionReady").toBool()) {
         event({{"event", "reference"},
                {"targetClientFamily", dictionary(input.value("pack").toObject()).value("family")}});
@@ -162,7 +163,9 @@ void MappingService::progressVerified() {
         event({{"event", "complete"},
                {"scope", "mapping"},
                {"success", true},
-               {"source", cache ? "verified-cache" : m_progressSymbols.isEmpty() ? "live-validation" : "automatic"}});
+               {"source", cache                         ? "verified-cache"
+                          : m_progressSymbols.isEmpty() ? "live-validation"
+                                                        : "automatic"}});
     } catch (const std::exception &e) {
         event({{"event", "step"},
                {"index", 3},
@@ -170,4 +173,24 @@ void MappingService::progressVerified() {
                {"message", QString("Mapping verified; display receipt unavailable: %1")
                                .arg(QString::fromUtf8(e.what()))}});
     }
+}
+
+void MappingService::provisional(QJsonObject value) {
+    const auto symbol = value.value("symbol").toString();
+    if (symbol.isEmpty() || m_provisional.contains(symbol))
+        return;
+    const auto runtime = rendered(value.value("mapping"));
+    // Empty omissions are retained in state but have no actual runtime binding row.
+    m_provisional[symbol] = value;
+    if (runtime.isEmpty())
+        return;
+    auto owner = value.value("runtimeOwner").toString();
+    value["runtimeName"] = owner.isEmpty() ? runtime : owner + "." + runtime;
+    value["verified"] = false;
+    value["provisional"] = true;
+    value["reason"] = "provisional / awaiting-final-validation";
+    value["event"] = "symbol-provisional-match";
+    event(value);
+    value["event"] = "symbol-matched";
+    event(value);
 }

@@ -105,7 +105,7 @@ second snapshot detects observed change; main Agent still performs normal JNI
 resolution and immutable-cache publication afterward.
 
 ## Stage 5 — developer console and distribution
-MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.7.
+MappingEventModel retains 2,000 structured JSONL event rows; MappingService exposes events/progress/status/fingerprint/logPath. MappingConsole is opt-in from Settings or Ctrl+Shift+M. Rollback applies next injection; cancellation routes through OverlayManager. Standalone CLI usage and limitations are in `P/mapping/README.md`, installed to docs/mapping. Internal version v55.9.
 
 ## v55.6 capture diagnostics gate
 Start at `P/mapping/analyzer/CaptureClient.h` and `P/mapping/SnapshotStream.h`.
@@ -144,7 +144,7 @@ The request-file protocol uses MappingProbe-v2.dll. Its versioned filename preve
 an older resident Probe DLL from being mistaken for the current protocol.
 
 
-## v55.8 progress event consumption
+## v55.8 progress event consumption (historical)
 
 Start at `P/src/MappingProgressController.h`, `MappingProgressModel.h`, then
 `MappingServiceProgress.cpp` for event adaptation. QML receives three filter
@@ -165,3 +165,47 @@ rows. Existing dictionary validation now reports found aliases as runtimeMapping
 new cache proofs store optional symbol receipts, including automatic evidence.
 Older verified cache proofs retain required-only display with explicit alias-set
 provenance. Receipt read errors degrade the display, never the injection decision.
+
+## v55.9 service-level dynamic generations
+
+Start at `P/src/MappingService.h` / `MappingServiceDynamic.cpp`, then
+`P/mapping/analyzer/Resolver.h`. Service public API adds matchingEnabled,
+stopMatching(), resumeMatching(). Stop pauses future watch/retry only; cancel()
+is whole-attach cancellation. Existing ready/failed and Agent freeze boundaries
+remain unchanged. main.cpp wires progress-controller stop/resume request signals
+to the service; closing the QML window only hides it.
+
+prepare → initial lite/select/detail → exact cache or authored validation →
+incremental resolve. An incomplete result persists accepted/unresolved state and
+waits. QTimer schedules serialized lite capture with 2.5–30 s backoff; changed
+relevant scopes debounce 750 ms. Watch lite does not hydrate authored classes.
+Unchanged lite fingerprints skip detail; changed global fingerprints with unchanged
+relevant class metadata/loader instances also skip detail. Selected detail then
+revalidates retained proofs and resolves unresolved/affected symbols only.
+
+Analyzer `select --allow-empty` supports an empty waiting scope and emits a
+relevantFingerprint. `resolve --incremental [--state FILE]` emits stateVersion=1,
+accepted bindings with bindingProof/confidence/evidence, unresolved and a provisional
+draft pack. State binds source pack/contracts/reference, dictionary, PID and process
+creation time. Proofs use normalized bytecode and references plus descriptor/access
+metadata; enumeration order is immaterial. Incremental state cannot --write-pack.
+Normal resolve's acceptance criteria and complete export remain unchanged.
+
+Required completion → full independent live validation → final selected snapshot
+and PID/creation/fingerprint check → verified upgrade/cache promotion/ready.
+Final drift becomes a new generation and rechecks affected bindings, never a fatal
+failure. ProbeProtocol::RuntimeChanged carries transient class/method/loader drift
+as structured retryable failure and Analyzer exit 5; MappingProbe-v3.dll prevents
+reuse of a resident v2 protocol. Non-drift capture failures retry three times before
+capture is declared unavailable. No dynamic Agent registry replacement.
+
+Events add snapshot-watch/unchanged/changed, retry-scheduled/started,
+symbol-provisional-match/revalidated/invalidated and waiting-for-runtime-change.
+Provisional symbol-matched rows migrate immediately but cannot authorize injection.
+The model's isVerified role gates success; retained and verified upgrades do not
+restart migration. Only service events retry/invalidate rows, not QML snapshot logic.
+
+Tests: DynamicMappingServiceTests (100-symbol external subprocess through production
+service), Test-Incremental.py (real Analyzer), MappingServiceTests,
+MappingProgressTests, ControllerUiSmoke and existing capture/agent regressions.
+Evidence and limitations: P/tests/mapping/V55_9_VALIDATION.md.

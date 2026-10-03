@@ -1,4 +1,5 @@
 #include "MappingProgressController.h"
+#include <QJsonArray>
 MappingProgressController::MappingProgressController(QObject *parent)
     : QObject(parent), m_active(&m_symbols, "active", this),
       m_completed(&m_symbols, "completed", this), m_pending(&m_symbols, "pending", this) {
@@ -44,6 +45,7 @@ void MappingProgressController::stopMatching() {
     if (!m_successful)
         step(2, "degraded");
     m_status = QStringLiteral("已停止后续匹配 / 重试；当前注入验证继续，已完成结果保留");
+    emit stopMatchingRequested();
     emit matchingStopped();
     emit changed();
 }
@@ -62,15 +64,23 @@ void MappingProgressController::consume(const QJsonObject &e) {
     } else if (kind == "snapshot-update") {
         const auto fingerprint = e.value("fingerprint").toString();
         if (!fingerprint.isEmpty() && fingerprint != m_snapshot) {
-            if (!m_snapshot.isEmpty() && m_matchingEnabled)
-                m_symbols.retryUnfinished();
             m_snapshot = fingerprint;
             m_reference["targetFingerprint"] = fingerprint;
         }
     } else if (kind.startsWith("symbol-")) {
-        if (m_matchingEnabled ||
-            (kind != "symbol-retry" && kind != "symbol-started" && kind != "symbol-progress"))
-            m_symbols.consume(e);
+        m_symbols.consume(e);
+    } else if (kind == "snapshot-watch") {
+        m_matchingEnabled = e.value("state") != "paused";
+        if (!m_matchingEnabled)
+            m_status =
+                QStringLiteral("已停止 snapshot watch / retry；当前 attach 状态与已完成结果保留");
+    } else if (kind == "waiting-for-runtime-change") {
+        m_matchingEnabled = !e.value("paused").toBool();
+        m_status =
+            m_matchingEnabled
+                ? QStringLiteral("等待运行时变化 · %1 个 unresolved · 已完成项为 provisional")
+                      .arg(e.value("unresolved").toArray().size())
+                : QStringLiteral("匹配已暂停；可继续匹配，当前 attach 状态保留");
     } else if (kind == "failure" || kind == "cancelled") {
         m_successful = false;
         m_matchingEnabled = false;
@@ -81,10 +91,11 @@ void MappingProgressController::consume(const QJsonObject &e) {
         m_status = e.value("reason").toString(QStringLiteral("检查已取消"));
     } else if (kind == "complete" && e.value("scope") == "mapping") {
         if (m_symbols.requiredComplete()) {
-            const auto source=e.value("source").toString();
-            m_status=source=="verified-cache" ? QStringLiteral("反混淆成功 · 来自已验证 Cache") :
-                source=="automatic" ? QStringLiteral("反混淆成功 · 自动解析及最终验证通过") :
-                                      QStringLiteral("反混淆成功 · mapping pack 运行时验证通过");
+            const auto source = e.value("source").toString();
+            m_status = source == "verified-cache" ? QStringLiteral("反混淆成功 · 来自已验证 Cache")
+                       : source == "automatic"
+                           ? QStringLiteral("反混淆成功 · 自动解析及最终验证通过")
+                           : QStringLiteral("反混淆成功 · mapping pack 运行时验证通过");
         } else {
             step(3, "degraded");
             m_status = QStringLiteral("验证完成，但没有完整的 symbol 展示数据");

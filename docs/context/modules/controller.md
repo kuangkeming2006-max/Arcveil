@@ -93,3 +93,12 @@ The independent ApplicationWindow consumes state only. Stop/close have no edge t
 cancel/detach/rollback; final preflight ready ordering is unchanged. Optional
 presentation receipts are emitted by MappingServiceProgress.cpp after recheck and
 cache promotion; failures in receipt rendering cannot block ready.
+
+
+v55.9: MappingServiceDynamic.cpp owns real lite watch/backoff/debounce, incremental
+state and final-generation validation. MappingService public API adds matchingEnabled,
+stopMatching/resumeMatching; main connects the progress controller's separate user
+request signals. Stop preserves busy/OverlayManager state and in-flight validation;
+only cancel cancels the whole attach. Incomplete matching waits, final drift starts
+another generation, and ready still follows validation, identity check and promotion.
+Tests add DynamicMappingServiceTests with production service/external subprocess.

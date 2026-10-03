@@ -69,6 +69,21 @@ struct Model {
         (void)owner;return usageIndex[&member];
     }
 };
+
+// Loader content keys can change when unrelated classes load. Runtime instance identity
+// remains stable; use it for retention evidence and relevant-set comparison only.
+std::string stableLoader(const Json& snapshot,const std::string& key) {
+    if(key=="bootstrap") return key;
+    if(snapshot.contains("loaderInstances")) for(const auto& item:snapshot.at("loaderInstances").array())
+        if(item.at("loaderKey").string()==key) return item.at("type").string()+":"+item.at("instance").dump();
+    return key; // Offline snapshots without runtime identity cannot prove loader continuity.
+}
+Json stableClass(Json klass,const Json& snapshot) {
+    klass["loaderKey"]=stableLoader(snapshot,klass.at("loaderKey").string());
+    klass["super"]["loaderKey"]=stableLoader(snapshot,klass.at("super").at("loaderKey").string());
+    for(auto& item:klass["interfaces"].array()) item["loaderKey"]=stableLoader(snapshot,item.at("loaderKey").string());
+    return klass;
+}
 Json symbolEvent(const std::string& key,const Json& value,bool ok,const std::string& reason,double confidence=1.0){return Json::Object{{"event","symbol"},{"symbol",key},{"mapping",value},{"confidence",ok?confidence:0.0},{"accepted",ok},{"evidence",Json::Array{reason}},{"reason",ok?"":reason}};}
 Json dictionaryValidation(const Json& dictionary,const Model& model,const Json& contracts,const Events& events){
     const auto& symbols=dictionary.at("symbols");contractCheck(contracts,symbols);
@@ -107,7 +122,7 @@ std::string detectedFamily(const Json& pack,const Model& model){
 }
 }
 Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *reference,
-                            const Json &contracts, const Events &events) {
+                            const Json &contracts, const Events &events, bool allowEmpty) {
     (void)bindings::parseMappingPack(pack);
     Model live(lite);
     if (!lite.contains("detailLevel") || lite.at("detailLevel").string() != "lite")
@@ -161,15 +176,16 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
                 add(i);
         }
     }
-    if (selected.empty())
+    if (selected.empty() && !allowEmpty)
         throw std::runtime_error("no detail candidates: authored anchors unavailable and no "
                                  "compatible verified structural reference");
     std::map<std::string, Json> loaders;
     for (const auto &item : lite.at("loaderInstances").array())
         loaders[item.at("loaderKey").string()] = item;
-    Json::Array classes;
+    Json::Array classes, relevant;
     for (const auto *c : selected) {
         const auto &value = *c->json;
+        relevant.push_back(classMetadata(stableClass(value,lite)));
         const auto &loader = loaders.at(value.at("loaderKey").string());
         classes.push_back(Json::Object{{"name", value.at("name")},
                                        {"loaderKey", value.at("loaderKey")},
@@ -180,12 +196,14 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
     }
     std::sort(classes.begin(), classes.end(),
               [](const Json &a, const Json &b) { return a.dump() < b.dump(); });
+    std::sort(relevant.begin(),relevant.end(),[](const Json&a,const Json&b){return a.dump()<b.dump();});
     if (events)
         events(Json::Object{{"event", "selection"},
                             {"totalClasses", double(lite.at("classes").array().size())},
                             {"candidateClasses", double(classes.size())},
                             {"referenceAvailable", reference != nullptr}});
     return Json::Object{{"candidateVersion", 1},
+                        {"relevantFingerprint",sha256(Json(relevant).dump())},
                         {"pid", lite.at("pid")},
                         {"processStart", lite.at("processStart")},
                         {"liteFingerprint", lite.at("fingerprint")},
@@ -209,11 +227,17 @@ Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts
     }
     return Json::Object{{"valid",false},{"injectionReady",false},{"level","live-members"},{"reason","no family-compatible dictionary passed required live bindings"},{"attempts",attempts},{"fingerprint",model.snapshot.at("fingerprint")}};
 }
-Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contracts,const Events& events){
+Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contracts,const Events& events,const Json* state,bool incremental){
     if((target.contains("detailLevel")&&target.at("detailLevel").string()=="lite")||(reference&&reference->contains("detailLevel")&&reference->at("detailLevel").string()=="lite"))throw std::runtime_error("lite metadata cannot enter normalized bytecode/call-graph matching; inspect-detail required");
     (void)bindings::parseMappingPack(pack);Model live(target,true);Json::Array attempts;
     std::unique_ptr<Model> baseline;if(reference)baseline=std::make_unique<Model>(*reference,true);
+    Json best; int bestScore=-1;
+    const bool stateBound=state && state->contains("stateVersion") && state->at("stateVersion").integer()==1 &&
+        state->at("packDigest").string()==sha256(pack.dump()) && state->at("contractDigest").string()==sha256(contracts.dump()) &&
+        state->at("pid")==target.at("pid") && state->at("processStart")==target.at("processStart") && baseline &&
+        state->at("referenceFingerprint")==baseline->snapshot.at("fingerprint");
     for(const auto&p:pack.at("providers").array())for(const auto&original:p.at("dictionaries").array()){
+        if(stateBound && state->at("dictionary")!=original.at("id")) continue;
         auto dict=original;auto& symbols=dict["symbols"];contractCheck(contracts,symbols);
         bool complete=bool(baseline);Json::Array results;std::map<const Class*,const Class*> classes;std::map<std::string,std::string> names;
         if(baseline){
@@ -246,7 +270,60 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             for(const auto&[from,to]:classes)names[from->json->at("name").string()]=to->json->at("name").string();
         }
         const auto rewrite=[&](std::string descriptor,bool& ok){std::string out;for(std::size_t i=0;i<descriptor.size();++i){if(descriptor[i]=='L'){auto end=descriptor.find(';',i);if(end==std::string::npos){ok=false;return descriptor;}auto name=descriptor.substr(i,end-i+1);if(names.contains(name))out+=names.at(name);else {out+=name;if(!name.starts_with("Ljava/")&&!name.starts_with("Ljavax/")&&!name.starts_with("Lcom/mojang/")&&!name.starts_with("Lorg/lwjgl/"))ok=false;}i=end;}else out+=descriptor[i];}return out;};
+
+        // A retained binding needs the same unique class correspondence, runtime owner,
+        // descriptor/modifiers, installed bytes and incoming references as its original proof.
+        const auto proof=[&](const std::string& key,const Json& value)->std::string {
+            if(!baseline) return "";
+            const auto authored=values(original.at("symbols").at(key));
+            if(std::all_of(authored.begin(),authored.end(),[](const auto& v){return v.empty();}))return sha256("authored-omission:"+key);
+            const auto& spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();
+            std::set<std::string> dependencies;
+            const auto scan=[&](const std::string& descriptor) {
+                for(std::size_t at=0;(at=descriptor.find('L',at))!=std::string::npos;){
+                    auto end=descriptor.find(';',at);if(end==std::string::npos)break;
+                    const auto name=descriptor.substr(at,end-at+1);
+                    if(baseline->find(name)) dependencies.insert(name);at=end+1;
+                }
+            };
+            if(kind=="class") dependencies.insert(sig(original.at("symbols").at(key).string()));
+            else if(kind=="descriptor") scan(original.at("symbols").at(key).string());
+            else if(spec.contains("owner")) {
+                dependencies.insert(sig(original.at("symbols").at(spec.at("owner").string()).string()));
+                scan(render(spec.at("descriptor").string(),original.at("symbols")));
+            }
+            Json::Array evidence;
+            for(const auto& name:dependencies) {
+                const auto* old=baseline->find(name);if(!old || !classes.contains(old))return "";
+                const auto* current=classes.at(old);
+                Json::Array refs, methods;for(const auto& ref:live.classReferences(current))refs.emplace_back(ref);
+                for(const auto& method:current->methods)methods.emplace_back(Json::Object{
+                    {"name",method.json->at("name")},{"descriptor",method.json->at("descriptor")},
+                    {"fingerprint",method.code.fingerprint},{"supported",method.code.supported}});
+                std::sort(methods.begin(),methods.end(),[](const Json&a,const Json&b){return a.dump()<b.dump();});
+                evidence.emplace_back(Json::Object{{"class",stableClass(classMetadata(*current->json),live.snapshot)},
+                    {"normalizedMethods",methods},{"references",refs}});
+            }
+            return sha256(Json(Json::Object{{"mapping",value},{"evidence",evidence}}).dump());
+        };
+        Json::Object accepted;Json::Array unresolved;
+        if(stateBound) for(const auto&[key,saved]:state->at("accepted").object()) symbols[key]=saved.at("mapping");
+        const auto retainedValidation=stateBound?dictionaryValidation(dict,live,contracts,{}):Json();
+        std::map<std::string,bool> retainedValid;
+        if(stateBound) for(const auto& e:retainedValidation.at("symbols").array())retainedValid[e.at("symbol").string()]=e.at("accepted").boolean();
         for(const auto&[key,oldValue]:original.at("symbols").object()){
+            if(incremental && stateBound && state->at("accepted").contains(key)) {
+                const auto& saved=state->at("accepted").at(key);const auto digest=proof(key,saved.at("mapping"));
+                const auto oldNames=values(oldValue);
+                const bool omission=std::all_of(oldNames.begin(),oldNames.end(),[](const auto& v){return v.empty();});
+                if(!digest.empty() && (retainedValid[key] || omission) && saved.at("bindingProof").string()==digest) {
+                    accepted[key]=saved;results.push_back(saved);
+                    if(events){auto e=saved;e["event"]="symbol-revalidated";e["provisional"]=true;events(e);}
+                    continue;
+                }
+                if(events)events(Json::Object{{"event","symbol-invalidated"},{"symbol",key},{"reason","binding evidence or unique correspondence changed"}});
+            }
+
             if(events)events(Json::Object{{"event","symbol-started"},{"symbol",key},{"dictionary",original.at("id")}});
             const auto&spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();bool ok=bool(baseline);std::string reason="reference snapshot unavailable";Json value=oldValue;
             if(baseline){
@@ -281,7 +358,41 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             // Empty optional values are intentional authored omissions, not guesses.
             auto oldNames=values(oldValue);if(std::all_of(oldNames.begin(),oldNames.end(),[](const auto&n){return n.empty();})){ok=true;value=oldValue;reason="explicit optional omission retained";}
             if(ok)symbols[key]=value;else complete=false;
-            auto e=symbolEvent(key,ok?value:Json(nullptr),ok,reason,0.99);e["threshold"]=0.98;e["margin"]=ok?1.0:0.0;e["nameWeight"]=0.0;results.push_back(e);if(events){events(e);events(Json::Object{{"event","progress"},{"phase","symbols"},{"completed",int(results.size())},{"total",int(original.at("symbols").object().size())}});}
+            auto e=symbolEvent(key,ok?value:Json(nullptr),ok,reason,0.99);e["threshold"]=0.98;e["margin"]=ok?1.0:0.0;e["nameWeight"]=0.0;if(ok && spec.contains("owner") && baseline){const auto* owner=baseline->find(sig(original.at("symbols").at(spec.at("owner").string()).string()));if(owner && classes.contains(owner))e["runtimeOwner"]=binary(classes.at(owner)->json->at("name").string());}if(incremental) {
+                if(ok) {e["bindingProof"]=proof(key,value);e["provisional"]=true;accepted[key]=e;}
+                else unresolved.emplace_back(key);
+            }
+            results.push_back(e);if(events){events(e);events(Json::Object{{"event","progress"},{"phase","symbols"},{"completed",int(results.size())},{"total",int(original.at("symbols").object().size())}});}
+        }
+
+        if(incremental) {
+            bool requiredComplete=true;int requiredMatched=0;
+            for(const auto&[key,spec]:contracts.at("symbols").object())if(spec.at("required").boolean()){
+                if(!accepted.contains(key))requiredComplete=false;else ++requiredMatched;
+            }
+            for(const auto& group:contracts.at("requiredAlternatives").array()) {
+                bool found=false;for(const auto& key:group.array())found|=accepted.contains(key.string());
+                requiredComplete &= found;
+            }
+            // Unresolved optional symbols are disabled in the draft, never copied as guessed names.
+            for(const auto& key:unresolved) {
+                const auto& old=original.at("symbols").at(key.string());
+                try {Json::Array empty;for(const auto& v:old.array()){(void)v;empty.emplace_back("");}symbols[key.string()]=empty;}
+                catch(const std::bad_variant_access&){symbols[key.string()]="";}
+            }
+            const int score=requiredMatched*10000+int(accepted.size());
+            if(score>bestScore) {
+                bestScore=score;
+                auto draft=selectedPack(pack,p,dict);draft["packVersion"]=pack.at("packVersion").integer()+1;
+                best=Json::Object{{"candidateVersion",1},{"stateVersion",1},{"complete",requiredComplete},
+                    {"requiredComplete",requiredComplete},{"fingerprint",live.snapshot.at("fingerprint")},
+                    {"packDigest",sha256(pack.dump())},{"contractDigest",sha256(contracts.dump())},
+                    {"pid",target.at("pid")},{"processStart",target.at("processStart")},
+                    {"referenceFingerprint",baseline?baseline->snapshot.at("fingerprint"):Json("")},
+                    {"dictionary",original.at("id")},{"accepted",accepted},{"unresolved",unresolved},
+                    {"symbols",results},{"pack",draft}};
+            }
+            continue;
         }
         Json attempt=Json::Object{{"dictionary",dict.at("id")},{"symbols",results},{"complete",complete}};
         if(complete){auto candidatePack=selectedPack(pack,p,dict);candidatePack["packVersion"]=pack.at("packVersion").integer()+1;auto validation=validateRuntime(candidatePack,target,contracts,{});bool allMappedValid=validation.at("valid").boolean();
@@ -292,6 +403,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             if(allMappedValid)return Json::Object{{"candidateVersion",1},{"complete",true},{"fingerprint",live.snapshot.at("fingerprint")},{"referenceFingerprint",baseline->snapshot.at("fingerprint")},{"threshold",0.98},{"symbols",results},{"pack",candidatePack},{"validation",validation}};attempt["complete"]=false;attempt["reason"]="post-resolution live validation failed";}
         attempts.push_back(attempt);
     }
+    if(incremental) return best;
     return Json::Object{{"candidateVersion",1},{"complete",false},{"fingerprint",live.snapshot.at("fingerprint")},{"threshold",0.98},{"reason",reference?"insufficient or ambiguous structural evidence":"a verified reference snapshot is required; names alone cannot authorize mappings"},{"attempts",attempts}};
 }
 }

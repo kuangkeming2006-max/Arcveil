@@ -18,7 +18,11 @@ unlink or conceal the module.
 
 ## Current feature set
 
-Internal build: **v55.8**. The pre-connection About page shows the build number.
+Internal build: **v55.9**. The pre-connection About page shows the build number.
+Mapping preflight now watches lite snapshots while unresolved symbols remain,
+retains revalidated bindings and independently verifies every completed generation
+before injection. The separate progress window displays provisional/verified state;
+Stop Matching pauses future capture/retry without cancelling attach or detaching the Agent.
 
 ### Controller and in-game interface
 

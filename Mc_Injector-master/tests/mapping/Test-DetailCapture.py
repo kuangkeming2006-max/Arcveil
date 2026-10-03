@@ -19,8 +19,8 @@ assert lite['stats']['bytecodeBytes']==0 and lite['stats']['constantPoolBytes']=
 selection=json.loads((f/'snapshot.json.candidates.json').read_text(encoding='utf-8'))
 selection['classes'][0]['metadataDigest']='0'*64
 bad=f/'stale-selection.json';bad.write_text(json.dumps(selection),encoding='utf-8')
-base=[str(b/'MappingAnalyzer.exe'),'inspect-detail','--pid',pid,'--java',str(jdk/'bin/java.exe'),'--helper',str(b/'attach-helper/McOverlayAttachHelper.jar'),'--probe',str(b/'MappingProbe-v2.dll'),'--native-loader',str(b/'McOverlayNativeLoader.exe'),'--candidates',str(bad),'--out',str(f/'rejected-detail.jsonl')]
-r=subprocess.run(base,capture_output=True,encoding='utf-8');assert r.returncode!=0 and 'metadata changed' in r.stdout,r.stdout
+base=[str(b/'MappingAnalyzer.exe'),'inspect-detail','--pid',pid,'--java',str(jdk/'bin/java.exe'),'--helper',str(b/'attach-helper/McOverlayAttachHelper.jar'),'--probe',str(b/'MappingProbe-v3.dll'),'--native-loader',str(b/'McOverlayNativeLoader.exe'),'--candidates',str(bad),'--out',str(f/'rejected-detail.jsonl')]
+r=subprocess.run(base,capture_output=True,encoding='utf-8');assert r.returncode==5 and 'metadata changed' in r.stdout,r.stdout
 selection['processStart']='stale-process';bad.write_text(json.dumps(selection),encoding='utf-8')
 r=subprocess.run(base,capture_output=True,encoding='utf-8');assert r.returncode!=0 and 'different JVM instance' in r.stdout,r.stdout
 base[base.index('--candidates')+1]=str(f/'snapshot.json.candidates.json')

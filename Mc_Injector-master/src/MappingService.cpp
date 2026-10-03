@@ -31,9 +31,11 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
-    m_probe = m_tools + "/MappingProbe-v2.dll";
+    m_probe = m_tools + "/MappingProbe-v3.dll";
     m_contracts = m_tools + "/contracts-v1.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
+    m_watchTimer.setSingleShot(true);
+    connect(&m_watchTimer, &QTimer::timeout, this, &MappingService::watchLite);
     m_timeout.setSingleShot(true);
     connect(&m_timeout, &QTimer::timeout, this, [this] { fail("Mapping analysis timed out"); });
 }
@@ -71,6 +73,8 @@ void MappingService::stopProcess() {
 }
 void MappingService::cancel() {
     ++m_generation;
+    m_watchTimer.stop();
+    m_watchEnabled = false;
     stopProcess();
     if (m_busy) {
         m_busy = false;
@@ -81,6 +85,8 @@ void MappingService::cancel() {
 }
 void MappingService::fail(const QString &reason) {
     ++m_generation;
+    m_watchTimer.stop();
+    m_watchEnabled = false;
     stopProcess();
     m_busy = false;
     m_status = reason;
@@ -103,6 +109,21 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_modular = modular;
     m_toolsJar = toolsJar;
     m_hit = {};
+    m_reference = {};
+    m_matchingState = {};
+    m_provisional = {};
+    m_unresolved.clear();
+    m_dynamic = false;
+    m_pendingChange = false;
+    m_watchEnabled = true;
+    m_captureFailures = 0;
+    m_snapshotGeneration = 0;
+    m_captureSerial = 0;
+    m_observedLite.clear();
+    m_relevantFingerprint.clear();
+    m_statePath.clear();
+    m_snapshot.clear();
+    m_scopePack = m_defaultPack;
     m_validation = {};
     m_capture = {};
     m_fingerprint.clear();
@@ -110,8 +131,11 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_start = processStart(pid);
     m_run = m_root + "/runs/" + QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_busy = true;
-    event({{"event","session-start"},{"pid",double(pid)}});
-    event({{"event","step"},{"index",0},{"state","running"},{"message","Checking local cache index"}});
+    event({{"event", "session-start"}, {"pid", double(pid)}});
+    event({{"event", "step"},
+           {"index", 0},
+           {"state", "running"},
+           {"message", "Checking local cache index"}});
     m_status = "Checking runtime mappings";
     emit changed();
     try {
@@ -119,8 +143,12 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
             throw std::runtime_error("mapping analyzer/runtime unavailable");
         m_contractDigest = fileDigest(m_contracts);
         progressSchema();
-        event({{"event","step"},{"index",0},{"state","success"},
-               {"message",QFile::exists(m_root+"/index.json")?"Local cache found; exact lookup follows runtime fingerprint":"No local cache; capturing runtime fingerprint"}});
+        event({{"event", "step"},
+               {"index", 0},
+               {"state", "success"},
+               {"message", QFile::exists(m_root + "/index.json")
+                               ? "Local cache found; exact lookup follows runtime fingerprint"
+                               : "No local cache; capturing runtime fingerprint"}});
         Cache(m_root).candidate(m_run, {}, "inspecting");
         inspect(false);
     } catch (const std::exception &e) {
@@ -128,6 +156,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     }
 }
 void MappingService::launch(QStringList arguments, std::function<void(int)> finished) {
+    m_analyzerFailure = {};
     struct Output {
         QByteArray bytes;
         qsizetype total = 0;
@@ -173,8 +202,15 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
             const auto object = doc.object();
             if (object.value("event").toString() == "fingerprint")
                 m_capture = object;
-            event(object);
-            progressAnalyzer(object);
+            if (object.value("event") == "failure") {
+                m_analyzerFailure = object;
+                auto diagnostic = object;
+                diagnostic["event"] = "analyzer-diagnostic";
+                event(diagnostic);
+            } else {
+                event(object);
+                progressAnalyzer(object);
+            }
             if (generation != m_generation)
                 return;
         }
@@ -227,161 +263,26 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
     m_timeout.start(120000);
 }
 
+bool MappingService::identityValid() const {
+    return processStart(m_pid) == m_start && !m_start.isEmpty();
+}
 void MappingService::inspect(bool finalCheck) {
-    m_capture = {};
-    event({{"event","step"},{"index",finalCheck?3:1},{"state","running"},
-           {"message",finalCheck?"Confirming runtime identity before injection":"Capturing lite index and selected class details"}});
-    m_progress = -1;
-    m_status = finalCheck ? "Confirming runtime fingerprint" : "Inspecting runtime classes";
-    emit changed();
-    QStringList args = {"inspect",
-                        "--pid",
-                        QString::number(m_pid),
-                        "--java",
-                        m_java,
-                        "--helper",
-                        m_helper,
-                        "--probe",
-                        m_probe,
-                        "--native-loader",
-                        m_tools + "/McOverlayNativeLoader.exe",
-                        "--pack",
-                        m_defaultPack,
-                        "--contracts",
-                        m_contracts,
-                        "--out",
-                        m_run + (finalCheck ? "/final-snapshot.json" : "/snapshot.json")};
-    const auto reference = Cache(m_root).reference(m_contractDigest);
-    progressReference(reference);
-    if (reference.valid())
-        args << "--reference" << reference.snapshot;
-    if (!m_modular)
-        args << "--tools-jar" << m_toolsJar;
-    launch(args, [this, finalCheck](int code) {
-        if (code || m_capture.value("fingerprint").toString().isEmpty())
-            throw std::runtime_error("live JVM mapping capture failed; see Mapping Console");
-        if (m_capture.value("processStart").toString() != m_start ||
-            m_capture.value("pid").toDouble() != m_pid || processStart(m_pid) != m_start)
-            throw std::runtime_error("target JVM changed during mapping analysis");
-        const auto fingerprint = m_capture.value("fingerprint").toString();
-        if (finalCheck) {
-            if (fingerprint != m_fingerprint)
-                throw std::runtime_error(
-                    "runtime classes changed during validation; retry after loading completes");
-            finalize();
-        } else {
-            event({{"event","step"},{"index",1},{"state","success"}});
-            m_fingerprint = fingerprint;
-            emit changed();
-            choosePack();
-        }
-    });
-}
-void MappingService::choosePack() {
-    auto cache = Cache(m_root);
-    m_hit = cache.lookup(m_fingerprint, m_contractDigest);
-    if (m_hit.valid()) {
-        m_pack = m_hit.pack;
-        event({{"event","step"},{"index",2},{"state","degraded"},{"message","Verified fingerprint cache hit; automatic matching not needed"}});
-        event({{"event", "cache"},
-               {"stage", "verified"},
-               {"hit", true},
-               {"fingerprint", m_fingerprint}});
-        inspect(true);
-        return;
-    }
-    event({{"event", "cache"},
-           {"stage", "verified"},
-           {"hit", false},
-           {"fingerprint", m_fingerprint}});
-    validate(m_defaultPack, false);
-}
-void MappingService::validate(const QString &pack, bool automatic) {
-    m_progress = -1;
-    m_status = "Validating mapping pack";
-    event({{"event","step"},{"index",2},{"state","running"},{"message","Validating authored pack against installed classes"}});
-    emit changed();
-    event({{"event", "pack"}, {"path", pack}, {"automatic", automatic}});
-    launch({"validate", "--pack", pack, "--snapshot", m_run + "/snapshot.json", "--contracts",
-            m_contracts, "--out", m_run + "/validation.json"},
-           [this, automatic](int code) {
-               if (code) {
-                   if (automatic)
-                       throw std::runtime_error("candidate failed independent live validation");
-                   resolve();
-                   return;
-               }
-               m_validation = readObject(m_run + "/validation.json");
-               if (!m_validation.value("injectionReady").toBool() ||
-                   m_validation.value("fingerprint").toString() != m_fingerprint)
-                   throw std::runtime_error("invalid validation receipt");
-               if (automatic) {
-                   auto results=m_validation.value("symbols").toArray();
-                   for(int i=0;i<results.size();++i) {
-                       auto result=results[i].toObject();
-                       const auto source=m_progressSymbols.value(result.value("symbol").toString()).toObject();
-                       if(!source.isEmpty()) {
-                           result["confidence"]=source.value("confidence");result["evidence"]=source.value("evidence");
-                           results[i]=result;
-                       }
-                   }
-                   m_validation["symbols"]=results;
-               }
-               m_pack = m_run + "/candidate-pack.json";
-               writeObject(m_pack, m_validation.value("pack").toObject());
-               Cache(m_root).candidate(m_run, m_fingerprint, "validated-awaiting-recheck");
-               inspect(true);
-           });
-}
-void MappingService::resolve() {
-    m_progress = -1;
-    m_status = "Matching runtime symbols";
-    event({{"event","step"},{"index",2},{"state","running"},{"message","Automatic structural resolution using verified reference"}});
-    emit changed();
-    const auto reference = Cache(m_root).reference(m_contractDigest);
-    progressReference(reference);
-    QStringList args = {"resolve",
-                        "--pack",
-                        reference.valid() ? reference.pack : m_defaultPack,
-                        "--snapshot",
-                        m_run + "/snapshot.json",
-                        "--contracts",
-                        m_contracts,
-                        "--out",
-                        m_run + "/candidate.json"};
-    if (reference.valid())
-        args << "--reference" << reference.snapshot;
-    event({{"event", "analysis"},
-           {"phase", "structural-resolution"},
-           {"referenceAvailable", reference.valid()}});
-    Cache(m_root).candidate(m_run, m_fingerprint, "analyzing");
-    launch(args, [this](int code) {
-        auto candidate = readObject(m_run + "/candidate.json");
-        if (code || !candidate.value("complete").toBool() ||
-            candidate.value("fingerprint").toString() != m_fingerprint)
-            throw std::runtime_error(
-                "no verified mapping candidate: insufficient or ambiguous evidence");
-        m_progressSymbols = {};
-        for(const auto &v:candidate.value("symbols").toArray()) {
-            const auto result=v.toObject();m_progressSymbols[result.value("symbol").toString()]=result;
-        }
-        const auto path = m_run + "/resolved-pack.json";
-        writeObject(path, candidate.value("pack").toObject());
-        validate(path, true);
-    });
+    captureLite(finalCheck ? CapturePhase::Final : CapturePhase::Initial);
 }
 void MappingService::finalize() {
     if (processStart(m_pid) != m_start)
         throw std::runtime_error("target JVM exited before injection");
     if (!m_hit.valid())
-        m_hit = Cache(m_root).promote(m_pack, m_run + "/snapshot.json", m_fingerprint,
-                                      m_contractDigest, m_validation);
+        m_hit = Cache(m_root).promote(m_pack, m_snapshot, m_fingerprint, m_contractDigest,
+                                      m_validation);
     event({{"event", "validation"},
            {"valid", true},
            {"stage", "verified"},
            {"fingerprint", m_fingerprint},
            {"pack", m_hit.pack},
            {"digest", m_hit.digest}});
+    m_watchEnabled = false;
+    m_watchTimer.stop();
     m_busy = false;
     m_status = "Mapping verified";
     progressVerified();

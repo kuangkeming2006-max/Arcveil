@@ -33,6 +33,7 @@ qt_add_executable(MinecraftOverlayManager
     src/MappingService.h
     src/MappingService.cpp
     src/MappingServiceProgress.cpp
+    src/MappingServiceDynamic.cpp
     src/MappingEventModel.h
     src/MappingEventModel.cpp
     mapping/cache/MappingCache.cpp
@@ -216,7 +217,7 @@ add_custom_target(mc_overlay_runtime_files ALL
             "${CMAKE_CURRENT_SOURCE_DIR}/mapping/packs/default-v2.json"
             "$<TARGET_FILE_DIR:MinecraftOverlayManager>/agent/mappings/default-v2.json"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:MappingAnalyzer>" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/MappingAnalyzer.exe"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:MappingProbe>" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/MappingProbe-v2.dll"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:MappingProbe>" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/MappingProbe-v3.dll"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/mapping/contracts-v1.json" "$<TARGET_FILE_DIR:MinecraftOverlayManager>/tools/contracts-v1.json"
     DEPENDS MappingAnalyzer MappingProbe
         mc_mapping_packs

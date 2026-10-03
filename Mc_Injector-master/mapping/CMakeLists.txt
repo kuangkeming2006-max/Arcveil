@@ -9,7 +9,7 @@ add_library(MappingProbe SHARED probe/MappingProbe.cpp)
 target_compile_features(MappingProbe PRIVATE cxx_std_20)
 target_include_directories(MappingProbe PRIVATE "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 target_compile_definitions(MappingProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-set_target_properties(MappingProbe PROPERTIES OUTPUT_NAME "MappingProbe-v2" PREFIX "" AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+set_target_properties(MappingProbe PROPERTIES OUTPUT_NAME "MappingProbe-v3" PREFIX "" AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 if(MINGW)
     target_link_options(MappingProbe PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
@@ -26,7 +26,7 @@ target_compile_definitions(MappingBoundaryTests PRIVATE NOMINMAX WIN32_LEAN_AND_
 add_executable(FakeMappingAnalyzer EXCLUDE_FROM_ALL ../tests/mapping/FakeMappingAnalyzer.cpp cache/MappingCache.cpp)
 target_compile_features(FakeMappingAnalyzer PRIVATE cxx_std_20)
 target_link_libraries(FakeMappingAnalyzer PRIVATE Qt6::Core)
-add_executable(MappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/MappingServiceTests.cpp ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingEventModel.cpp ../src/MappingService.h cache/MappingCache.cpp)
+add_executable(MappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/MappingServiceTests.cpp ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingServiceDynamic.cpp ../src/MappingEventModel.cpp ../src/MappingService.h cache/MappingCache.cpp)
 target_compile_features(MappingServiceTests PRIVATE cxx_std_20)
 target_compile_definitions(MappingServiceTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_sources(MappingServiceTests PRIVATE ../src/MappingProgressModel.cpp ../src/MappingProgressModel.h
@@ -45,3 +45,16 @@ add_executable(MappingProgressTests EXCLUDE_FROM_ALL ../tests/mapping/MappingPro
     ../src/MappingProgressController.cpp ../src/MappingProgressController.h)
 target_compile_features(MappingProgressTests PRIVATE cxx_std_20)
 target_link_libraries(MappingProgressTests PRIVATE Qt6::Core)
+
+add_executable(FakeDynamicMappingAnalyzer EXCLUDE_FROM_ALL ../tests/mapping/FakeDynamicMappingAnalyzer.cpp cache/MappingCache.cpp)
+target_compile_features(FakeDynamicMappingAnalyzer PRIVATE cxx_std_20)
+target_link_libraries(FakeDynamicMappingAnalyzer PRIVATE Qt6::Core)
+target_compile_definitions(FakeDynamicMappingAnalyzer PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+add_executable(DynamicMappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/DynamicMappingServiceTests.cpp
+    ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingServiceDynamic.cpp ../src/MappingService.h
+    ../src/MappingEventModel.cpp ../src/MappingProgressModel.cpp ../src/MappingProgressModel.h
+    ../src/MappingProgressController.cpp ../src/MappingProgressController.h cache/MappingCache.cpp)
+target_compile_features(DynamicMappingServiceTests PRIVATE cxx_std_20)
+target_link_libraries(DynamicMappingServiceTests PRIVATE Qt6::Core)
+target_compile_definitions(DynamicMappingServiceTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+add_dependencies(DynamicMappingServiceTests FakeDynamicMappingAnalyzer)

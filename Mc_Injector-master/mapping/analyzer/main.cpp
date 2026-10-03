@@ -1,4 +1,5 @@
 #include "Analyzer.h"
+#include "../ProbeProtocol.h"
 #include "CaptureClient.h"
 #include "../SnapshotStream.h"
 #include "Resolver.h"
@@ -46,7 +47,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < args.size(); ++i) {
             if (!args[i].startsWith("--") || options.contains(args[i]))
                 throw std::runtime_error("invalid/duplicate option");
-            if (args[i] == "--lite") {
+            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty") {
                 options[args[i]] = "true";
                 continue;
             }
@@ -139,7 +140,7 @@ int main(int argc, char **argv) {
                 source = &reference;
             }
             result = selectDetailCandidates(Json::read(filePath(option("--pack"))), lite, source,
-                                            contracts(), events);
+                                            contracts(), events, options.contains("--allow-empty"));
             writeJson(filePath(option("--out")), result);
         } else if (command == "validate") {
             const auto pack = Json::read(filePath(option("--pack")));
@@ -161,12 +162,16 @@ int main(int argc, char **argv) {
                 reference = readSnapshot(filePath(option("--reference")));
                 source = &reference;
             }
-            result = resolveMappings(pack, source, target, contracts(), events);
+            Json state;const Json* prior=nullptr;
+            if(options.contains("--state")){state=Json::read(filePath(option("--state")));prior=&state;}
+            result = resolveMappings(pack, source, target, contracts(), events, prior, options.contains("--incremental"));
             writeJson(filePath(option("--out")), result);
             event("candidate", Json::Object{{"complete", result.at("complete")},
                                             {"fingerprint", result.at("fingerprint")}});
             if (!result.at("complete").boolean())
                 return 4;
+            if (options.contains("--write-pack") && options.contains("--incremental"))
+                throw std::runtime_error("incremental results are provisional; independent final validation required");
             if (options.contains("--write-pack"))
                 writeJson(filePath(option("--write-pack")), result.at("pack"));
         } else if (command == "diff") {
@@ -179,6 +184,9 @@ int main(int argc, char **argv) {
             throw std::runtime_error("unsupported command");
         event("complete", Json::Object{{"success", true}, {"command", command.toStdString()}});
         return 0;
+    } catch (const RuntimeChanged &e) {
+        event("failure",Json::Object{{"reason",e.what()},{"retryable",true},{"failureType","runtime-drift"}});
+        return 5;
     } catch (const SnapshotLimit &e) {
         event("failure", e.json());
         return 1;
