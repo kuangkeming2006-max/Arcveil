@@ -94,6 +94,8 @@ add_executable(McOverlayRendererTests EXCLUDE_FROM_ALL
     ../agent/overlay_renderer_draw.cpp
     ../agent/overlay_renderer_world.cpp
     ../agent/overlay_renderer_clickgui.cpp
+    ../agent/ui/ClickGui.cpp
+    ../agent/ui/AnimatedWidgets.cpp
     ../agent/overlay_renderer_blacklist.cpp
     ../agent/overlay_renderer_textgui.cpp
     ../agent/overlay_renderer_stats.cpp

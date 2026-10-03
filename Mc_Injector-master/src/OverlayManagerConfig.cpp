@@ -1,4 +1,5 @@
 #include "OverlayManager.h"
+#include "../agent/ui/GuiTypography.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -143,10 +144,12 @@ bool OverlayManager::applyConfig(const QString &requestedName)
     emit featureSettingsChanged();
     emit menuHotkeyChanged();
     emit guiScaleIndexChanged();
+    emit guiTypographyChanged();
     emit configStateChanged();
     sendFeatureSnapshot();
     sendBindSnapshot();
     sendGuiScaleSnapshot();
+    sendGuiTypographySnapshot();
     sendMediaSettings();
     setStatusMessage(QStringLiteral("Applied config “%1”").arg(name));
     return true;
@@ -178,6 +181,10 @@ void OverlayManager::loadFeatureSettings()
         QStringLiteral("menuHotkey"), 0xDE).toInt(), 0, 254);
     m_guiScaleIndex = std::clamp(settings.value(
         QStringLiteral("guiScaleIndex"), 1).toInt(), 0, 3);
+    const auto typography=mcoverlay::ui::normalizeTypography({
+        settings.value(QStringLiteral("guiFontSize"),18).toInt(),
+        settings.value(QStringLiteral("guiFontWeight"),600).toInt()});
+    m_guiFontSize=typography.size;m_guiFontWeight=typography.weight;
     m_espEnabled = settings.value(QStringLiteral("espEnabled"), true).toBool();
     m_entityEspEnabled = settings.value(QStringLiteral("entityEspEnabled"), true).toBool();
     m_entityEspPlayersOnly = settings.value(QStringLiteral("entityEspPlayersOnly"), false).toBool();
@@ -396,6 +403,8 @@ void OverlayManager::flushFeatureSettings()
     settings.beginGroup(QStringLiteral("features"));
     settings.setValue(QStringLiteral("menuHotkey"), m_menuHotkey);
     settings.setValue(QStringLiteral("guiScaleIndex"), m_guiScaleIndex);
+    settings.setValue(QStringLiteral("guiFontSize"),m_guiFontSize);
+    settings.setValue(QStringLiteral("guiFontWeight"),m_guiFontWeight);
     settings.setValue(QStringLiteral("espEnabled"), m_espEnabled);
     settings.setValue(QStringLiteral("entityEspEnabled"), m_entityEspEnabled);
     settings.setValue(QStringLiteral("entityEspPlayersOnly"), m_entityEspPlayersOnly);
@@ -514,4 +523,3 @@ void OverlayManager::flushFeatureSettings()
         settings.sync();
     }
 }
-

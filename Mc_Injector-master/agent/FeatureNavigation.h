@@ -22,7 +22,25 @@ inline bool contains(std::string_view text,std::string_view query) noexcept {
     return std::search(text.begin(),text.end(),query.begin(),query.end(),
         [&](char a,char b){return lower(static_cast<unsigned char>(a))==lower(static_cast<unsigned char>(b));})!=text.end();
 }
-struct Result { std::array<Row,rows.size()> rows{}; std::size_t count=0; };
+struct Result { std::array<Row,navigation::rows.size()> rows{}; std::size_t count=0; };
+inline constexpr std::array<const char*,6> categories{
+    "Combat", "Movement", "Visuals", "HUD & Alerts", "Players", "Settings"};
+inline int categoryForPage(int page) noexcept {
+    int category=-1;
+    for(const auto& row:rows) {
+        if(row.page<0) ++category;
+        else if(row.page==page) return category;
+    }
+    return -1;
+}
+inline int firstPage(int category) noexcept {
+    int current=-1;
+    for(const auto& row:rows) {
+        if(row.page<0) ++current;
+        else if(current==category) return row.page;
+    }
+    return 0;
+}
 inline Result filter(std::string_view query) noexcept {
     while(!query.empty() && query.front()==' ') query.remove_prefix(1);
     while(!query.empty() && query.back()==' ') query.remove_suffix(1);
@@ -33,6 +51,16 @@ inline Result filter(std::string_view query) noexcept {
         if(category && !added) { result.rows[result.count++]=*category; added=true; }
         result.rows[result.count++]=row;
     }
+    return result;
+}
+// Search spans categories; an empty query shows just the selected category.
+// This retains multilingual aliases without leaving orphan group headings.
+inline Result filterCategory(int category,std::string_view query) noexcept {
+    if(query.find_first_not_of(' ')!=std::string_view::npos) return filter(query);
+    Result result;
+    for(const auto& row:rows)
+        if(row.page>=0 && categoryForPage(row.page)==category)
+            result.rows[result.count++]=row;
     return result;
 }
 // A moving centre lights entire glyphs, never a gradient clipped across a glyph.

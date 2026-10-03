@@ -30,6 +30,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 | Controller → Agent | FEATURE_STATE / _V2 / _V3（当前发送 V3） | sendFeatureSnapshot → handleControlLine 的兼容分支 |
 | Controller → Agent | AIM_OPTIONS、AIM_ATTACK_CPS、SMART_HOTBAR | sendFeatureSnapshot → 同名 command；packed 值用 SmartHotbarPolicy 校验 |
 | Controller → Agent | BIND、GUI_SCALE、BED_RESCAN | sendBindSnapshot/sendGuiScaleSnapshot/refreshBedCache → 同名 command |
+| Controller → Agent | GUI_TYPOGRAPHY `<size> <weight>` | sendGuiTypographySnapshot → handleControlLine；size 14–24，weight 400/600/700 |
 | Controller → Agent | HYPIXEL_RESULT、STATS、STATS_ERROR | publishHypixelResult/publishPlayerStats/publishPlayerStatsError → 同名 command |
 | Controller → Agent | MEDIA_STATE、MEDIA_SPECTRUM、MEDIA_SETTINGS | publishMediaState/publishMediaSpectrum/sendMediaSettings → 同名 command |
 | Controller → Agent | BLACKLIST_RESET、SETTINGS、PRESET、ENTRY、REMOVE、WARNING、SYNC_END（均带 BLACKLIST_ 前缀） | BlacklistService.commandReady → OverlayManager.sendBlacklistCommand → handleControlLine |
@@ -37,6 +38,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 | Agent → Controller | RENDERER_READY、STATE_CHANGED | queueRendererReady/queueStateChanged → telemetryMain → processAgentLine |
 | Agent → Controller | FEATURE_STATE_CHANGED / _V2 / _V3（当前发 V3）、AIM_OPTIONS_CHANGED、AIM_ATTACK_CPS_CHANGED、SMART_HOTBAR_CHANGED | queueFeatureChanged → telemetryMain → processAgentLine |
 | Agent → Controller | BIND_CHANGED、GUI_SCALE_CHANGED | 对应 queue* → telemetryMain → processAgentLine |
+| Agent → Controller | GUI_TYPOGRAPHY_CHANGED `<size> <weight>` | packed atomic + revision → telemetryMain → processAgentLine → QSettings |
 | Agent → Controller | GAME_STATE | queueTelemetry → formatGameState/telemetryMain → processAgentLine |
 | Agent → Controller | PLAYER_FOUND、PLAYER_STATUS、MATCH_STATE、HYPIXEL_QUERY | mailbox/queueHypixelQuery → telemetryMain → processAgentLine → controller signals |
 | Agent → Controller | MEDIA_ACTION、MEDIA_SETTINGS_CHANGED | queueMediaAction/queueMediaSettingsChanged → telemetryMain → processAgentLine |
@@ -45,6 +47,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 
 Agent 还发送 STATE_APPLIED、FEATURE_STATE_APPLIED、BIND_APPLIED、GUI_SCALE_APPLIED、MEDIA_SETTINGS_APPLIED、BED_RESCAN_ACCEPTED 等 ACK。
 当前 controller 的主要分派没有为上述每个 ACK 建独立状态迁移；部分由 smoke 脚本验证。
+GUI_TYPOGRAPHY_APPLIED 同样为确认消息；字体不加入 FEATURE_STATE_V3 的位置字段。
 不能仅因协议注释有某个消息就认定 controller 会处理它，未来搬迁也不顺带改变 ACK 消费行为。
 
 GAME_STATE v1 是 15 个空格分隔字段：消息名、版本、sequence、unix-ms、valid、health、max-health、entity-id、x/y/z、loaded-entities、bed-count、mapping、state。

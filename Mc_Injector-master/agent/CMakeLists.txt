@@ -176,6 +176,8 @@ add_library(McOverlayAgent SHARED
     overlay_renderer_draw.cpp
     overlay_renderer_world.cpp
     overlay_renderer_clickgui.cpp
+    ui/ClickGui.cpp
+    ui/AnimatedWidgets.cpp
     overlay_renderer_blacklist.cpp
     overlay_renderer_textgui.cpp
     overlay_renderer_stats.cpp

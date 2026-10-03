@@ -1,4 +1,5 @@
 #include "OverlayManager.h"
+#include "../agent/ui/GuiTypography.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -569,6 +570,22 @@ void OverlayManager::setGuiScaleIndex(const int index)
     storeFeatureSettings();
     emit guiScaleIndexChanged();
     sendGuiScaleSnapshot();
+}
+
+void OverlayManager::setGuiFontSize(int size)
+{
+    const auto value=mcoverlay::ui::normalizeTypography({size,m_guiFontWeight});
+    if(value.size==m_guiFontSize) return;
+    m_guiFontSize=value.size;
+    storeFeatureSettings();emit guiTypographyChanged();sendGuiTypographySnapshot();
+}
+
+void OverlayManager::setGuiFontWeight(int weight)
+{
+    const auto value=mcoverlay::ui::normalizeTypography({m_guiFontSize,weight});
+    if(value.weight==m_guiFontWeight) return;
+    m_guiFontWeight=value.weight;
+    storeFeatureSettings();emit guiTypographyChanged();sendGuiTypographySnapshot();
 }
 
 QStringList OverlayManager::textGuiModules() const
