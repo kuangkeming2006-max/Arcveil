@@ -18,7 +18,7 @@ unlink or conceal the module.
 
 ## Current feature set
 
-Internal build: **v53**. The pre-connection About page shows the build number.
+Internal build: **v56**. The pre-connection About page shows the build number.
 
 ### Controller and in-game interface
 
@@ -31,8 +31,9 @@ Internal build: **v53**. The pre-connection About page shows the build number.
 - Animated page transitions and collapsible Aim Assist sections, stable smooth
   scrolling, searchable feature navigation, four crisp GUI scale presets,
   theme/accent controls and fullscreen IME support.
-- Sidebar left-click toggles a feature; right-click opens its settings. Enabled
-  rows retain a white shimmer with animated selection and hover surfaces.
+- Six detached category tabs sit above a scoped feature sidebar. Clicking a
+  feature name opens its settings; its status dot toggles the feature, and
+  right-click also opens settings. Controls share animated hover/press feedback.
 - A configurable Click GUI key plus per-feature hotkeys synchronized between
   the controller and the injected agent.
 
@@ -159,6 +160,10 @@ the build tree. For offline/reproducible builds, set
 checkouts and disable `MC_OVERLAY_FETCH_AGENT_DEPENDENCIES`.
 
 ## Build
+
+Interface → Typography provides independent font size (14–24) and weight
+(Regular/Semibold/Bold), saved with Windows config profiles. The default
+18 epx / Semibold includes framebuffer-density adaptation for 2560×1600 screens.
 
 From the repository root with Qt MinGW:
 

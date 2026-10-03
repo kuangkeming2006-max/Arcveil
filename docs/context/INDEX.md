@@ -26,7 +26,7 @@
 | 页面、主题、导航、弹窗、Qt 属性绑定 | [qml-ui](modules/qml-ui.md) | `P/qml/main.qml` 的路由/目标页面、`P/src/main.cpp` 的注册区 |
 | Agent 启停、线程、帧调度、设置桥接 | [agent-runtime](modules/agent-runtime.md) | `P/agent/src/AgentRuntime.h` |
 | 游戏映射、快照、床扫描、游戏逻辑 | [game-bindings](modules/game-bindings.md) | `P/agent/bindings/GameBindings.h`、`MappingProvider.h` |
-| 游戏内 ImGui、HUD、输入、IME、OpenGL 资源 | [renderer](modules/renderer.md) | `P/agent/overlay_renderer.h` |
+| 游戏内 ImGui、HUD、输入、IME、OpenGL 资源 | [renderer](modules/renderer.md) | `P/agent/ui/ClickGui.h`、`P/agent/overlay_renderer.h` |
 | JVM 导出、线程附着、Win32/OpenGL detour、Java 变换 | [jvm-hooks](modules/jvm-hooks.md) | `P/agent/jvm.h`、`opengl_hook.h`、`wndproc_hook.h`、对应 `Live*Transform.h` |
 | 消息、握手、序列化、同步、断线 | [ipc](modules/ipc.md) | `ControlProtocol.h` + 两端解析/发送符号 |
 | 构建、打包、测试入口 | 本页下方，然后目标模块“测试” | 工程、agent、tests 三处 `CMakeLists.txt` |

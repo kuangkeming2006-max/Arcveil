@@ -38,6 +38,20 @@ namespace mcoverlay {
 
 using namespace renderer_detail;
 
+void OverlayRenderer::setGuiTypography(ui::GuiTypography value) noexcept
+{
+    if(!m_guiDesign.typographyDirty)
+        m_guiDesign.typography=ui::normalizeTypography(value);
+}
+
+bool OverlayRenderer::consumeGuiTypographyChange(ui::GuiTypography& value) noexcept
+{
+    if(!m_guiDesign.typographyDirty) return false;
+    value=m_guiDesign.typography;
+    m_guiDesign.typographyDirty=false;
+    return true;
+}
+
 bool OverlayRenderer::consumeClickGuiToggle() noexcept
 {
     pollFallbackInput();

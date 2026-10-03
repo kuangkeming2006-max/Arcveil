@@ -381,6 +381,17 @@ try {
         }
     }
 
+    # Typography is independent of the positional feature protocol. Exercise
+    # both size boundaries and all supported weights on the live Agent parser.
+    foreach ($typography in @('14 400', '24 700', '18 600')) {
+        $writer.WriteLine('GUI_TYPOGRAPHY ' + $typography)
+        do {
+            $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+                -LimitSeconds $TimeoutSeconds -Operation 'applying GUI typography' `
+                -Received $received
+        } while ($line -cne ('GUI_TYPOGRAPHY_APPLIED ' + $typography))
+    }
+
     # Exercise the complete persisted feature-state grammar. The synthetic JVM
     # has no Minecraft classes, but the renderer/control protocol must still
     # accept and acknowledge the settings atomically.

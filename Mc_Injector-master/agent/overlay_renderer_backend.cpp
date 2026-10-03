@@ -152,11 +152,14 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
     const UINT windowsLength = ::GetWindowsDirectoryA(windowsDirectory, MAX_PATH);
     std::array<char, MAX_PATH> fontPath{};
     std::array<char, MAX_PATH> boldFontPath{};
+    std::array<char, MAX_PATH> semiboldFontPath{};
     if (windowsLength > 0U && windowsLength + 20U < fontPath.size()) {
         std::snprintf(fontPath.data(), fontPath.size(), "%s\\Fonts\\segoeui.ttf",
                       windowsDirectory);
         std::snprintf(boldFontPath.data(), boldFontPath.size(),
                       "%s\\Fonts\\segoeuib.ttf", windowsDirectory);
+        std::snprintf(semiboldFontPath.data(),semiboldFontPath.size(),
+                      "%s\\Fonts\\seguisb.ttf",windowsDirectory);
     }
     constexpr std::array<float, 4U> fontSizes{15.0F, 19.0F, 23.0F, 27.0F};
     for (std::size_t index = 0U; index < m_fonts.size(); ++index) {
@@ -184,6 +187,12 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
         }
         if (m_boldFonts[index] == nullptr) m_boldFonts[index] = m_fonts[index];
     }
+    if(semiboldFontPath[0U]!='\0') {
+        ImFontConfig config{};
+        config.OversampleH=3;config.OversampleV=2;
+        m_semiboldFont=io.Fonts->AddFontFromFileTTF(semiboldFontPath.data(),18.F,&config);
+    }
+    if(!m_semiboldFont) m_semiboldFont=m_boldFonts[0];
     // One dedicated CJK font is enough for the transient IME card. Building
     // four full CJK atlases would waste substantial memory inside the game.
     std::array<char, MAX_PATH> imeFontPath{};
@@ -260,6 +269,7 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
         m_imguiContext = nullptr;
         m_fonts = {};
         m_boldFonts = {};
+        m_semiboldFont=nullptr;
         m_imeFont = nullptr;
         m_mediaFont = nullptr;
         return false;
@@ -270,6 +280,7 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
         m_imguiContext = nullptr;
         m_fonts = {};
         m_boldFonts = {};
+        m_semiboldFont=nullptr;
         m_imeFont = nullptr;
         m_mediaFont = nullptr;
         return false;
@@ -449,6 +460,7 @@ void OverlayRenderer::shutdownWithCurrentContext() noexcept
     m_imguiContext = nullptr;
     m_fonts = {};
     m_boldFonts = {};
+    m_semiboldFont=nullptr;
     m_imeFont = nullptr;
     m_mediaFont = nullptr;
     m_blurTexture = 0U;
@@ -502,6 +514,7 @@ void OverlayRenderer::abandonForContextChange() noexcept
     m_imguiContext = nullptr;
     m_fonts = {};
     m_boldFonts = {};
+    m_semiboldFont=nullptr;
     m_imeFont = nullptr;
     m_mediaFont = nullptr;
     // The old HGLRC is unavailable, so its texture cannot be deleted here.
@@ -539,6 +552,7 @@ void OverlayRenderer::abandonAfterWndProcDrainTimeout() noexcept
     m_imguiContext = nullptr;
     m_fonts = {};
     m_boldFonts = {};
+    m_semiboldFont=nullptr;
     m_imeFont = nullptr;
     m_mediaFont = nullptr;
     m_blacklistTextures = {};

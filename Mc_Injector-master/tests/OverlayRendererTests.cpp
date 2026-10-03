@@ -1,5 +1,6 @@
 #include "overlay_renderer.h"
 #include "UiColors.h"
+#include "FeatureNavigation.h"
 #include "tsf_candidates.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -140,6 +141,9 @@ struct OverlayRendererTestAccess {
     static ImGuiContext* context(OverlayRenderer& r) { return r.m_imguiContext; }
     static void prepare(OverlayRenderer& r, int page, int scale, bool light) {
         r.m_clickGuiPage = page;
+        r.m_guiDesign.category=mcoverlay::navigation::categoryForPage(page);
+        r.m_guiDesign.pageElapsed=.38F;
+        r.m_guiDesign.railElapsed=.35F;
         r.m_clickGuiProgress = r.m_clickGuiPageProgress = 1;
         r.m_clickGuiVelocity = 0;
         r.m_clickGuiNavPosition = 0;
@@ -173,14 +177,24 @@ struct OverlayRendererTestAccess {
         r.setFeatureSettings(settings);
         return r.m_clickGuiThemeProgress==1.0F;
     }
+    template<class Check> static void typographyMailbox(OverlayRenderer& r,Check check) {
+        r.setGuiTypography({18,600});
+        r.m_guiDesign.typography={22,700};r.m_guiDesign.typographyDirty=true;
+        r.setGuiTypography({18,400});
+        check(r.m_guiDesign.typography==ui::GuiTypography{22,700},
+            "old snapshot cannot overwrite a pending typography edit");
+        ui::GuiTypography changed;
+        check(r.consumeGuiTypographyChange(changed) && changed==ui::GuiTypography{22,700},
+            "typography edit publishes size and weight together");
+        check(!r.consumeGuiTypographyChange(changed),"typography edit is consumed once");
+        r.setGuiTypography({18,600});
+        check(r.m_guiDesign.typography==ui::GuiTypography{},"controller edit applies after consume");
+    }
     static void freeLookPreview(OverlayRenderer& r) {
         r.m_features.freeLookEnabled=true;
         r.m_features.featureHotkeys[17U]=VK_LMENU;
         r.m_toggleAnimation[54]=1.0F;
-        // The test selects pages directly instead of clicking the navigation
-        // row, so place the rail where a real click would already have left it.
-        r.m_navigationScroll.current=240.0F;
-        r.m_navigationScroll.target=240.0F;
+        r.m_navigationScroll={};
     }
     static void predictionOnly(OverlayRenderer& r) {
         r.m_imePositionEditing = false;
@@ -645,6 +659,7 @@ int main(int argc, char** argv)
           "only composition and relevant candidate messages may query IME state");
     check(mcoverlay::OverlayRendererTestAccess::hiddenThemeLoadsWithoutTransition(*renderer),
         "first-open light theme is initialized before the first visible frame");
+    mcoverlay::OverlayRendererTestAccess::typographyMailbox(*renderer,check);
     const auto surfaceLuminance=[]() {
         std::array<unsigned char,4> pixel{};
         glReadBuffer(GL_BACK);
@@ -680,7 +695,8 @@ int main(int argc, char** argv)
         if (auto* gui = ImGui::GetCurrentContext())
             for(auto* w:gui->Windows)
                 if(std::strstr(w->Name,"##navigationScroll")) rail=w;
-        check(rail && rail->ScrollMax.y>0, "every page/size has independent scrollable rail");
+        check(rail && rail->Active && rail->Size.y>0,
+              "each category has an independent clipped feature rail");
         if (page==0 && size==0) saveFrame(theme ? "gui-light.png" : "gui-dark.png");
         if(page==8&&size==0) saveFrame(theme?"aimassist-v48-light.png":"aimassist-v48-dark.png");
         if (page==22 && size==0 && theme==0) saveFrame("freelook-v40.png");
@@ -751,7 +767,7 @@ int main(int argc, char** argv)
     check(rail && rail->ScrollMax.y<1,"empty search does not extend parent bounds");
     mcoverlay::OverlayRendererTestAccess::search(*renderer,"");
     frame(true); frame(true);
-    check(rail && rail->ScrollMax.y>0,"clearing search restores full navigation");
+    check(rail && rail->ScrollMax.y<1,"clearing search restores the scoped category rail");
     for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) {
         mcoverlay::OverlayRendererTestAccess::prepare(*renderer,11,size,theme!=0);
         for (int variant=0;variant<3;++variant) {

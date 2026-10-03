@@ -62,6 +62,11 @@ readAgentMessages 有每轮消息数/字节数/时间预算和后续调度，避
 GAME_STATE 有会话序列及 stale 判断；重连不能延用旧会话认证状态。
 feature 属性、持久化字段与 Agent feature 位/位置字段是重复表示，改一边时必须按 IPC 文档核对另一边。
 
+guiFontSize/guiFontWeight Qt 属性共用 guiTypographyChanged；features QSettings 和配置
+档案保存两值。sendGuiTypographySnapshot 在会话初始同步、应用配置、属性编辑时发送；
+GUI_TYPOGRAPHY_CHANGED 验证字号/字重后保存并通知 QML。共享校验仅依赖
+agent/ui/GuiTypography.h 的纯值策略，不引入 renderer、ImGui 或 JNI。
+
 现有 include 例外是 OverlayManagerCodec.internal.cpp → SmartHotbarPolicy.h 的 validPacked 纯函数；不意味着控制器可以读 BindingCache 或调用 JNI。
 
 ## 测试与按需下钻

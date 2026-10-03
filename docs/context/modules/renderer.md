@@ -17,6 +17,7 @@ runtime 提供 GameSnapshot、FeatureSettings、Hypixel/PlayerStats/Blacklist/Me
 - render 的 bool 返回值表示某个 HWND/HGLRC generation 首次成功初始化/绘制，不是一般“帧成功”。
 - initialized/ownsCurrentContext 与 shutdownWithCurrentContext/abandonAfterHookDisabled 表达 GL context 生命周期。
 - setFeatureSettings 与 consumeFeatureSettings；setMenuHotkey/setGuiScaleIndex 及 consume 改动。
+- setGuiTypography/consumeGuiTypographyChange：独立字号/字重设置；dirty 保护先发布再合并外部快照。
 - set*Snapshot 与 consumeHypixelQuery/consumeBlacklistAction/consumeMediaAction/consumeMediaSettings。
 - consumeClickGuiToggle/consumeBedRescanRequest/setGameScreenOpen。
 - shieldAttacker 只从 UI 选择和 snapshot 计算标识值，runtime 将其纳入游戏设置；不执行攻击或 JNI。
@@ -35,7 +36,13 @@ runtime 提供 GameSnapshot、FeatureSettings、Hypixel/PlayerStats/Blacklist/Me
 | overlay_renderer_draw.cpp | renderer_detail 下唯一绘图、颜色、投影、格式 helper |
 | overlay_renderer_internal.h | OverlayInputState、private RenderFrameContext、helper 声明与值类型 |
 | overlay_renderer_world.cpp | renderWorldOverlay |
-| overlay_renderer_clickgui.cpp | renderClickGui，产出本帧主题颜色供弹窗使用 |
+| overlay_renderer_clickgui.cpp | Windows 适配器；保留原 renderer 状态/dirty mailbox、热键桥和本帧主题回传 |
+| ui/UiModel.h | 无平台依赖的 FeatureSettings、媒体、统计、黑名单值类型；virtual-key 整数保留原 wire 编码 |
+| ui/GuiDesignState.h | 无 ImGui 依赖的分类、页面记忆、控件动效状态；OverlayRenderer public header 只依赖值类型 |
+| ui/GuiTypography.h | 字号 14–24、字重 400/600/700 校验与原子打包；Click GUI 分辨率适配策略 |
+| ui/ClickGui.h / .cpp | 完整共享 Click GUI，顶部六分类独立标签、分类内功能侧栏、全局搜索、24 个设置页 |
+| ui/AnimatedWidgets.h / .cpp | 每个 GUI 独立持有的 hover/press/value/focus 动效；开关、滑块、菜单、按钮、色彩与输入框 |
+| ui/NavigationLabel.h | 以原 FeatureNavigation::glyphGlow 绘制已启用侧栏功能的逐字往返流光；适配字重、字号与 reduced motion |
 | overlay_renderer_blacklist.cpp | renderBlacklistAddDialog、renderBlacklistPanel |
 | overlay_renderer_textgui.cpp / _stats.cpp | renderTextGui、renderPlayerStatsPanel |
 
@@ -62,6 +69,26 @@ OpenGlJvmSmoke 的 unified/split modes 验证实际 hooked 帧与 teardown；Nav
 
 只改 HUD 时读目标块和 helper 声明；只有输入/context 问题才读 hook 实现。renderer 对 game-bindings 默认仅需 snapshot 类型，不能将 BindingCache 或 JNI 操作移入绘图层。
 
+
+## 2026-10-02 Windows 游戏内 GUI 设计
+
+`ui/ClickGui.cpp` 实现 Windows 游戏内 GUI。`ClickGuiRefs`
+绑定原 renderer 的 settings、UI 状态和 dirty 标记；`ClickGuiHost` 只桥接按键捕获、
+平台键名、toast 和瞬态 blur，不调用 JNI。只读 `ClickGuiSnapshot` 限定到当前页面
+需要的能力和玩家标识，Windows 适配器每帧投影既有 GameSnapshot。
+
+顶部标签记住各分类的最后设置页。侧栏点击名称打开设置、尾部状态点启停，右键仍打开
+设置；页首保留主开关。搜索仍跨全部分类、支持已有中文关键字并排除两个 retired 页面。
+页首显示 Arcveil / 分类 / 当前功能路径；底部装饰文字和左下主题控件已移除，主题在
+Interface 的 THEME 设置区切换。控件焦点边框在控件边界内绘制，避免 child clip 裁切。
+原设置页滚动、输入捕获、dirty/ack 合并和安全 interlock 留在原路径。
+
+Interface 的 Typography 提供独立字号与字重；默认 18 epx / Semibold。共享 view 根据
+framebuffer 高度补偿密度并按视口收敛布局，2560×1600 / M 下正文约 36px；HUD 继续
+使用原字体。Windows 主体用 Segoe UI Regular/Semibold/Bold 三种字重。
+字体按实际大小由 ImGui 1.92 动态 atlas 光栅化；副标题可换行，slider 为长标签留出
+额外高度。字体编辑走 GUI_TYPOGRAPHY 独立消息，不改变 FEATURE_STATE_V3 的位置字段。
+新增 shared cpp 已同步加入 Agent 和 McOverlayRendererTests 构建目标。
 
 ## v54 IME 生命周期验证入口
 
