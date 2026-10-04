@@ -4,6 +4,8 @@
 /Arcveil/
 /Arcveil_r*/
 /Arcveil_v*/
+/Arcveil-v*/
+/package-v*/
 /render-*/
 *.zip
 *.user
@@ -13,6 +15,7 @@
 
 # Local investigation, handoff and one-off conversion material
 /.research/
+/mapping-stage3-review/
 /handoff.md
 /WindowsMediaBridge_VS_v3/
 /download_blocks.py

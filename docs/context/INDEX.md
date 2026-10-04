@@ -7,7 +7,7 @@
 - 分析基线：2026-09-25，Git `5877207`；拆分完成：2026-09-26。
 - Git 根目录是当前仓库；实际 CMake 工程位于 [Mc_Injector-master](../../Mc_Injector-master/CMakeLists.txt)。本文档集放在仓库根目录的 `docs/context/`。
 - 本文档中的简写 `P/` 表示 `Mc_Injector-master/`；符号名比行号更稳定，历史行号只用于计划对照；当前导航以模块页的文件族和符号为准。
-- 工作区原有未跟踪文件 `P/agent/bindings/NativeHotbarBridge_v49.java`、`P/tests/V48_VALIDATION.md`、`V49_VALIDATION.md`、`V50_VALIDATION.md` 不作为已纳入构建或测试通过的证据。
+- 工作区原有未跟踪文件 `P/agent/bindings/NativeHotbarBridge_v49.java`、`P/tests/V48_VALIDATION.md`、`V49_VALIDATION.md`、`V50_VALIDATION.md` 已于 2026-10-04 保留原路径结构归档到本地 `.research/workspace-maintenance-20261004/legacy-files/`，SHA256 清单位于该归档根目录的 `legacy-files-manifest.json`；这些历史资料不作为已纳入构建或测试通过的证据。
 - 模块边界由原分析和拆后代码核对；验证范围及局限见各模块页和 REFACTOR_FOLLOWUPS.md。
 
 ## 阅读顺序

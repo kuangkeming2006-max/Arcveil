@@ -20,7 +20,12 @@
 - 修改改变 module ownership、public interface、cross-module dependency 或 IPC/interface boundary 时，更新受影响的 context 文档。
 - 纯内部实现变化不需要无意义更新架构文档。本文件只维护导航规则，不复制模块文件列表、接口列表或依赖图。
 
-## 大型模块化重构
+## Git
+
+每次修改完代码并测试完之后，请提交Git和GitHub，并标明内部版本号和修改内容的要点，以便review；
+构建的build请打包依赖并解压，以便直接我启动测试
+
+## 大型模块化重构(重构已完成，请忽略，除非再次重构任务)
 
 - 仅在实施当前计划中的模块化重构时，读取 [docs/context/REFACTOR_PLAN.md](docs/context/REFACTOR_PLAN.md) 的对应章节。
 - 按计划逐模块实施，不一次加载所有大型源码文件。
