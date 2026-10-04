@@ -74,12 +74,6 @@ void clearImeComposition(OverlayInputState& input) noexcept
     input.composingInput.store(false,std::memory_order_release);
 }
 
-UINT imeCandidateRefreshMessage() noexcept
-{
-    static const UINT value=::RegisterWindowMessageW(L"Arcveil.IME.Candidates.Refresh");
-    return value;
-}
-
 void updateImeState(OverlayInputState& input, const HWND window,
                     const ImeMessageAction action,const LPARAM lParam) noexcept
 {
@@ -131,6 +125,9 @@ void updateImeState(OverlayInputState& input, const HWND window,
         const LONG bytes = ::ImmGetCompositionStringW(
             ime, GCS_COMPSTR, composition.data(),
             static_cast<DWORD>((composition.size() - 1U) * sizeof(wchar_t)));
+        char diagnostic[160]{};
+        std::snprintf(diagnostic,sizeof(diagnostic),"IMM_COMP bytes=%ld",static_cast<long>(bytes));
+        log::info(diagnostic);
         if (bytes > 0) {
             composition[std::min<std::size_t>(
                 static_cast<std::size_t>(bytes) / sizeof(wchar_t),
@@ -138,22 +135,27 @@ void updateImeState(OverlayInputState& input, const HWND window,
             composing = true;
         }
 
-        if(action==ImeMessageAction::QueryCandidates) {
+        if(action==ImeMessageAction::QueryCandidates||
+           action==ImeMessageAction::QueryComposition) {
         candidates={};candidateCount=0U;candidateSelection=0U;
         alignas(CANDIDATELIST) std::array<unsigned char, 8192U> candidateBytes{};
-        const DWORD candidateMask=static_cast<DWORD>(lParam);
+        // Composition lParam contains GCS flags, not a candidate-list mask.
+        const DWORD candidateMask=action==ImeMessageAction::QueryCandidates
+            ?static_cast<DWORD>(lParam):0U;
         DWORD candidateIndex=0U;
         if(candidateMask!=0U) {
             while(candidateIndex<31U &&
                   (candidateMask&(1U<<candidateIndex))==0U) ++candidateIndex;
         }
         const DWORD required = ::ImmGetCandidateListW(ime,candidateIndex,nullptr,0U);
+        DWORD totalCandidates=0U,selection=0U;
         if (required >= sizeof(CANDIDATELIST) &&
             required <= candidateBytes.size()) {
             auto* const list = reinterpret_cast<CANDIDATELIST*>(
                 candidateBytes.data());
             if (::ImmGetCandidateListW(ime,candidateIndex,list,
                     static_cast<DWORD>(candidateBytes.size())) > 0U) {
+                totalCandidates=list->dwCount;selection=list->dwSelection;
                 const DWORD pageStart = std::min(list->dwPageStart, list->dwCount);
                 const DWORD pageCount = std::min<DWORD>(
                     std::min(list->dwPageSize, list->dwCount - pageStart),
@@ -185,6 +187,11 @@ void updateImeState(OverlayInputState& input, const HWND window,
                 composing = composing || candidateCount != 0U;
             }
         }
+        std::snprintf(diagnostic,sizeof(diagnostic),
+            "IMM_CAND required=%lu count=%lu selection=%lu",
+            static_cast<unsigned long>(required),static_cast<unsigned long>(totalCandidates),
+            static_cast<unsigned long>(selection));
+        log::info(diagnostic);
         }
         ::ImmReleaseContext(window, ime);
     }
@@ -374,18 +381,22 @@ LRESULT OverlayRenderer::onWindowMessage(OverlayInputState& input,
         if(input.tsf&&input.imeEnabled.load(std::memory_order_acquire))
             input.tsf->refreshOnWindowThread();
         handled=true;return 0;
-    } else if(message==imeCandidateRefreshMessage()) {
-        if(input.imeEnabled.load(std::memory_order_acquire))
-            updateImeState(input,window,ImeMessageAction::QueryCandidates,lParam);
-        handled=true;return 0;
     } else if (input.tsf) {
         input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire),window);
     }
     const ImeMessageAction imeAction=classifyImeMessage(message,wParam,
         input.imeEnabled.load(std::memory_order_acquire));
-    if(imeAction==ImeMessageAction::QueryCandidates)
-        (void)::PostMessageW(window,imeCandidateRefreshMessage(),0,lParam);
-    else if(imeAction!=ImeMessageAction::Ignore)
+    if(imeAction!=ImeMessageAction::Ignore||
+       (input.imeEnabled.load(std::memory_order_acquire)&&
+        message>=WM_IME_SETCONTEXT&&message<=WM_IME_KEYUP)) {
+        char diagnostic[160]{};
+        std::snprintf(diagnostic,sizeof(diagnostic),
+            "IME_MSG msg=0x%X wParam=0x%llX lParam=0x%llX",message,
+            static_cast<unsigned long long>(wParam),static_cast<unsigned long long>(lParam));
+        log::info(diagnostic);
+    }
+    // Read while this IME message still owns its valid HIMC.
+    if(imeAction!=ImeMessageAction::Ignore)
         updateImeState(input,window,imeAction,lParam);
     // A GSMTC-rejecting player is controlled through the helper's native
     // media-key fallback. The GUI's blanket keyboard capture used to swallow

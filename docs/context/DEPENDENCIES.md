@@ -48,6 +48,12 @@
 
 ## 现有跨目录例外与模块内服务关系
 
+2026-10-02：renderer 的 `ui/UiModel.h` 与 `ui/ClickGui.h` 增加无 Win32/JNI 的 UI
+边界。Windows renderer → ClickGuiRefs/ClickGuiSnapshot/ClickGuiHost → UI 绘制。
+运行时与控制器仍通过原 OverlayRenderer public 契约访问 FeatureSettings。字号与字重
+新增独立 GUI_TYPOGRAPHY / GUI_TYPOGRAPHY_CHANGED，不扩展既有 V3 位置字段。
+controller → ui/GuiTypography.h 为另一纯值跨目录依赖，仅校验边界和权重。
+
 | A → B | 原因 | 使用的接口与入口 | 内部读取策略 |
 | --- | --- | --- | --- |
 | controller → game-bindings 下的纯策略 | 验证 Smart Hotbar 打包值 | `mcoverlay::hotbar::validPacked`，`P/agent/bindings/SmartHotbarPolicy.h`；`OverlayManagerCodec.internal.cpp` | 允许读此纯值契约头；不允许据此扩展到 GameBindings.cpp/JNI。未来可另议 shared-contracts，机械拆分阶段不搬路径 |
@@ -155,3 +161,7 @@ symbols; selected generations independently validate/recheck before cache promot
 ProbeProtocol::RuntimeChanged → retryable JSON/exit 5 → service waiting lifecycle.
 MappingProbe-v3.dll is the current resident-version boundary. Agent registry/freeze
 and normal injection authorization still begin only at MappingService.ready().
+
+### v54 callback 行为边界补充
+
+jvm-hooks 的 hotbar consumed-key callback → game-bindings：可在该按键阶段本地选择 hotbar currentItem，包同步由原版 controller 负责；背包 windowClick 仍留在 input PRE。callback 签名、Java bridge 和 IPC 均未改动。

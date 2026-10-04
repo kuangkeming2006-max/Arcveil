@@ -1,4 +1,5 @@
 #include "OverlayManager.h"
+#include "../agent/ui/GuiTypography.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -560,6 +561,14 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             storeFeatureSettings();
             emit guiScaleIndexChanged();
         }
+    } else if(type==QByteArrayLiteral("GUI_TYPOGRAPHY_CHANGED")) {
+        bool validSize=false,validWeight=false;
+        const int size=fields.value(1).toInt(&validSize),weight=fields.value(2).toInt(&validWeight);
+        if(fields.size()==3 && validSize && validWeight && mcoverlay::ui::validTypography(size,weight) &&
+            (size!=m_guiFontSize || weight!=m_guiFontWeight)) {
+            m_guiFontSize=size;m_guiFontWeight=weight;
+            storeFeatureSettings();emit guiTypographyChanged();
+        }
     } else if (type == QByteArrayLiteral("PLAYER_FOUND")) {
         if (fields.size() != 3 && fields.size() != 4) return;
         const QString playerName = decodeProtocolToken(fields.at(1));
@@ -779,6 +788,7 @@ void OverlayManager::sendStateSnapshot()
     sendFeatureSnapshot();
     sendBindSnapshot();
     sendGuiScaleSnapshot();
+    sendGuiTypographySnapshot();
     sendMediaSettings();
 }
 
@@ -904,3 +914,10 @@ void OverlayManager::sendGuiScaleSnapshot()
                       + QByteArray::number(std::clamp(m_guiScaleIndex, 0, 3)) + '\n');
 }
 
+void OverlayManager::sendGuiTypographySnapshot()
+{
+    if(!m_authenticated) return;
+    const auto value=mcoverlay::ui::normalizeTypography({m_guiFontSize,m_guiFontWeight});
+    writeAgentCommand(QByteArrayLiteral("GUI_TYPOGRAPHY ")+QByteArray::number(value.size)+' '+
+        QByteArray::number(value.weight)+'\n');
+}

@@ -510,6 +510,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         (void)m_ipc->sendLine(std::string("GUI_SCALE_APPLIED ") + std::to_string(index));
         return true;
     }
+    if(command=="GUI_TYPOGRAPHY") {
+        int size=0,weight=0;
+        std::string trailing;
+        if(!(stream>>size>>weight) || (stream>>trailing) || !ui::validTypography(size,weight)) {
+            (void)m_ipc->sendLine("ERROR BAD_GUI_TYPOGRAPHY expected-size-14-24-weight-400-600-700");
+            return true;
+        }
+        m_guiTypography.store(ui::packTypography({size,weight}),std::memory_order_release);
+        (void)m_ipc->sendLine(std::string("GUI_TYPOGRAPHY_APPLIED ")+std::to_string(size)+" "+std::to_string(weight));
+        return true;
+    }
     if (command == "MEDIA_STATE") {
         int available = 0;
         int playing = 0;

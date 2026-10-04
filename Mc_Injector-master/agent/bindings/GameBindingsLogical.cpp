@@ -514,7 +514,7 @@ bool GameBindings::consumeLogicalInteraction(
     const bool down=entry==LiveInteractionTransform::Entry::Click || heldDown;
     if(!observeLogicalCamera(env,minecraft,down)) return false;
     // Input/PRE may run before heading PRE. Both boundaries honor the same
-    // feature-level owner, never a transient target/rotation phase.
+    // active Silent Lock owner; holding attack without a lock stays vanilla.
     if(env&&minecraft&&c&&syncSprintOwner()==SprintOwner::SilentCombat&&
        c->setSprinting&&c->playerField) {
         jobject player=env->GetObjectField(minecraft,c->playerField);

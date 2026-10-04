@@ -2,6 +2,7 @@
 #include "src/AgentLog.h"
 #include <algorithm>
 #include <cwchar>
+#include <cstdio>
 #include <oleauto.h>
 
 namespace mcoverlay {
@@ -153,14 +154,22 @@ bool TsfCandidates::read(DWORD id) noexcept
         ~ReadingScope() { flag.clear(std::memory_order_release); }
     } readingScope{m_reading};
     ITfUIElement* element = nullptr;
-    if (FAILED(m_elements->GetUIElement(id, &element))||!element) return false;
+    char diagnostic[128]{};
+    const HRESULT elementHr=m_elements->GetUIElement(id, &element);
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_GET_ELEMENT hr=0x%08lX",static_cast<unsigned long>(elementHr));
+    log::info(diagnostic);
+    if (FAILED(elementHr)||!element) return false;
     CandidateListElement* list = nullptr;
     HRESULT hr = element->QueryInterface(kCandidateListId,
                                          reinterpret_cast<void**>(&list));
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_QI hr=0x%08lX",static_cast<unsigned long>(hr));
+    log::info(diagnostic);
     if (FAILED(hr)||!list) {element->Release();return false;}
     ImeCandidates next{};
     UINT total = 0, selection = 0, page = 0, pages = 0;
     hr = list->GetCount(&total);
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_GET_COUNT hr=0x%08lX count=%u",static_cast<unsigned long>(hr),total);
+    log::info(diagnostic);
     if (SUCCEEDED(hr)) hr = list->GetSelection(&selection);
     if(FAILED(hr)||generation!=m_generation||!m_enabled) {
         list->Release();element->Release();return false;
@@ -214,6 +223,10 @@ bool TsfCandidates::read(DWORD id) noexcept
 }
 HRESULT TsfCandidates::BeginUIElement(DWORD id, BOOL* show)
 {
+    char diagnostic[128]{};
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_BEGIN id=%lu transitioning=%d",static_cast<unsigned long>(id),m_transitioning?1:0);
+    log::info(diagnostic);
+    m_transitioning=false; // A live TIP callback supersedes deferred settle.
     if (!show) return E_POINTER;
     *show=TRUE;
     if(!m_enabled) return S_OK;
@@ -227,6 +240,10 @@ HRESULT TsfCandidates::BeginUIElement(DWORD id, BOOL* show)
 }
 HRESULT TsfCandidates::UpdateUIElement(DWORD id)
 {
+    char diagnostic[128]{};
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_UPDATE id=%lu transitioningBefore=%d",static_cast<unsigned long>(id),m_transitioning?1:0);
+    log::info(diagnostic);
+    m_transitioning=false;
     // The TIP guarantees this ID is live only during its Update callback.
     // read() guards against re-entry and generation changes.
     if(m_enabled) (void)read(id);
@@ -234,6 +251,9 @@ HRESULT TsfCandidates::UpdateUIElement(DWORD id)
 }
 HRESULT TsfCandidates::EndUIElement(DWORD id)
 {
+    char diagnostic[80]{};
+    std::snprintf(diagnostic,sizeof(diagnostic),"TSF_END id=%lu",static_cast<unsigned long>(id));
+    log::info(diagnostic);
     if(id==m_hiddenId) restoreHiddenOnWindowThread();
     if (id == m_activeId) {
         m_activeId = TF_INVALID_COOKIE;

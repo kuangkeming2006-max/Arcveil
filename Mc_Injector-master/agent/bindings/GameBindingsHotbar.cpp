@@ -102,9 +102,11 @@ bool GameBindings::consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept
         if(matches&&actions[static_cast<std::size_t>(slot)]!=0) {triggeredSlot=slot;break;}
     }
     if(triggeredSlot<0) return false;
-    // isPressed has already decremented the real queued press. The hook only
-    // records intent; all inventory/controller calls happen at input PRE.
+    // This is the vanilla hotbar key phase. A hotbar-only change writes the
+    // selected slot here and lets vanilla synchronize it before the next use.
+    // Main-inventory transfers remain queued for the guarded input boundary.
     m_smartHotbarRequest.store(triggeredSlot+1,std::memory_order_release);
+    (void)processSmartHotbarRequests(env,minecraft,true);
     return true;
 }
 
@@ -138,10 +140,11 @@ void GameBindings::restoreHotbarMovement(JNIEnv* env) noexcept
     m_hotbarPauseStartedMs=0U;
 }
 
-bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noexcept
+bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
+                                               const bool hotbarKeyPhase) noexcept
 {
     int encoded=m_smartHotbarRequest.exchange(0,std::memory_order_acq_rel);
-    const bool refill=encoded==0;
+    const bool refill=encoded==0&&!hotbarKeyPhase;
     if(refill) encoded=m_smartHotbarRefillRequest.exchange(0,std::memory_order_acq_rel);
     const auto serial=m_movementPacketSerial.load(std::memory_order_acquire);
     if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket&&
@@ -151,7 +154,7 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
         int empty=0;(void)queue.compare_exchange_strong(empty,encoded,
             std::memory_order_release,std::memory_order_relaxed);
     };
-    if(m_hotbarPausePhase!=HotbarPausePhase::None&&
+    if(!hotbarKeyPhase&&m_hotbarPausePhase!=HotbarPausePhase::None&&
        GetTickCount64()-m_hotbarPauseStartedMs>500U) {
         restoreHotbarMovement(env);
         m_logicalController.debug().event("HOTBAR_PAUSE_TIMEOUT",
@@ -159,7 +162,7 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
         if(encoded>0&&encoded<=9) requeue();
         return false;
     }
-    if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
+    if(!hotbarKeyPhase&&m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
         const auto* c=m_cache.get();
         jobject player=env&&minecraft&&c&&c->playerField
             ?env->GetObjectField(minecraft,c->playerField):nullptr;
@@ -174,17 +177,6 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
             restoreHotbarMovement(env);
         return false;
     }
-    // Grim keeps the preceding use/right-click transaction open until a
-    // subsequent movement packet. Never send CLICK_WINDOW or HELD_ITEM_CHANGE
-    // from either source before that boundary, or while an action is held.
-    const bool actionHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
-        (GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0||
-        m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
-    if(actionHeld||(refill&&m_movementPacketSerial.load(std::memory_order_acquire)<=
-        m_refillQueuedPacketSerial.load(std::memory_order_acquire))) {
-        if(actionHeld) restoreHotbarMovement(env);
-        requeue();return false;
-    }
     const auto* c=m_cache.get();
     if(!env||!minecraft||!c||!hotbar::enabled(
            m_smartHotbarConfig.load(std::memory_order_acquire))||
@@ -197,10 +189,6 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
     jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
     if(screen||!player||!inventory||!stacks||!controller||env->ExceptionCheck()) {
         restoreHotbarMovement(env);
-        requeue();return false;
-    }
-    if(m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
-        setHotbarMovementPaused(env,player);
         requeue();return false;
     }
     const int destination=encoded-1;
@@ -229,20 +217,32 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
     }
     const int current=std::clamp(static_cast<int>(env->GetIntField(inventory,c->currentItem)),0,8);
     if(env->ExceptionCheck()) {requeue();return false;}
+    // A manual slot selection supersedes an older automatic refill request.
+    if(refill&&current!=destination) return false;
     const auto available=std::span<const hotbar::ItemKind>(
         kinds.data(),static_cast<std::size_t>(length));
     const int source=refill?hotbar::selectRefillSource(available,current):
         hotbar::selectSource(available,current,wanted);
     if(source<0) {
-        restoreHotbarMovement(env);
+        if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket) restoreHotbarMovement(env);
         // A configured shortcut with no matching item keeps the normal hotbar
         // selection instead of silently swallowing the player's key press.
         if(refill) return false;
         env->SetIntField(inventory,c->currentItem,destination);
-        if(!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
+        // No eager C09: the vanilla controller owns held-item publication.
         return env->ExceptionCheck()!=JNI_TRUE;
     }
     if(source>=9) {
+        if(hotbarKeyPhase) {requeue();return false;}
+        // Inventory clicks require action release and a post-use boundary.
+        const bool actionHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
+            (GetAsyncKeyState(VK_RBUTTON)&0x8000)!=0||
+            m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
+        if(actionHeld||(refill&&serial<=
+            m_refillQueuedPacketSerial.load(std::memory_order_acquire))) {
+            if(actionHeld) restoreHotbarMovement(env);
+            requeue();return false;
+        }
         if(!m_silentRotationHook.ready()) {requeue();return false;}
         // Use raw key states, not residual velocity. A held key is temporarily
         // masked across a real movement POST before CLICK_WINDOW, then restored
@@ -306,7 +306,9 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
         m_logicalController.debug().event("HOTBAR_TRANSFER",
             m_logicalController.latest(),"inventory swap after neutral packet",true);
     } else {
-        restoreHotbarMovement(env);
+        // Cancel an unexecuted transfer, but preserve the resume boundary of
+        // an already-sent inventory click. Neither blocks this slot selection.
+        if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket) restoreHotbarMovement(env);
         char detail[128]{};
         std::snprintf(detail,sizeof(detail),
             "source=%d destination=%d serial=%llu noPositionRun=%u",
@@ -316,7 +318,7 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft) noe
             m_logicalController.latest(),detail,true);
     }
     env->SetIntField(inventory,c->currentItem,source<9?source:destination);
-    if(!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
+    if(source>=9&&!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
     return env->ExceptionCheck()!=JNI_TRUE;
 }
 

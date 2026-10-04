@@ -57,6 +57,7 @@ private:
     void queueHypixelQuery(const std::array<char, 17U>& playerId) noexcept;
     void queueMenuHotkeyChanged(unsigned virtualKey) noexcept;
     void queueGuiScaleChanged(int index) noexcept;
+    void queueGuiTypographyChanged(ui::GuiTypography value) noexcept;
     void queueMediaSettingsChanged(const MediaOverlaySettings& settings) noexcept;
     void queueMediaAction(MediaAction action) noexcept;
     void queueBlacklistAction(const BlacklistAction& action) noexcept;
@@ -266,6 +267,9 @@ private:
     std::atomic<int> m_guiScaleIndex{1};
     std::atomic<int> m_guiScaleChangedIndex{1};
     std::atomic<std::uint32_t> m_guiScaleChangedRevision{0U};
+    std::atomic<int> m_guiTypography{ui::packTypography({})};
+    std::atomic<int> m_guiTypographyChanged{ui::packTypography({})};
+    std::atomic<std::uint32_t> m_guiTypographyChangedRevision{0U};
     std::atomic<bool> m_frameFaulted{false};
     std::uint64_t m_lastTelemetryTick = 0U; // render-thread owned
     std::uint64_t m_telemetrySequence = 0U; // render-thread owned

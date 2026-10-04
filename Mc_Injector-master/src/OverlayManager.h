@@ -116,6 +116,8 @@ public:
     Q_PROPERTY(int menuHotkey READ menuHotkey WRITE setMenuHotkey NOTIFY menuHotkeyChanged)
     Q_PROPERTY(int guiScaleIndex READ guiScaleIndex WRITE setGuiScaleIndex
                    NOTIFY guiScaleIndexChanged)
+    Q_PROPERTY(int guiFontSize READ guiFontSize WRITE setGuiFontSize NOTIFY guiTypographyChanged)
+    Q_PROPERTY(int guiFontWeight READ guiFontWeight WRITE setGuiFontWeight NOTIFY guiTypographyChanged)
     Q_PROPERTY(bool configAutoSave READ configAutoSave WRITE setConfigAutoSave
                    NOTIFY configStateChanged)
     Q_PROPERTY(QStringList configNames READ configNames NOTIFY configStateChanged)
@@ -232,6 +234,8 @@ public:
     [[nodiscard]] QString bedDefensePanelColor() const { return m_bedDefensePanelColor; }
     [[nodiscard]] int menuHotkey() const noexcept { return m_menuHotkey; }
     [[nodiscard]] int guiScaleIndex() const noexcept { return m_guiScaleIndex; }
+    [[nodiscard]] int guiFontSize() const noexcept { return m_guiFontSize; }
+    [[nodiscard]] int guiFontWeight() const noexcept { return m_guiFontWeight; }
     [[nodiscard]] bool configAutoSave() const noexcept { return m_configAutoSave; }
     [[nodiscard]] QStringList configNames() const { return m_configNames; }
     [[nodiscard]] QString activeConfig() const { return m_activeConfig; }
@@ -343,6 +347,8 @@ public slots:
     void setBedDefensePanelColor(const QString &color);
     void setMenuHotkey(int virtualKey);
     void setGuiScaleIndex(int index);
+    void setGuiFontSize(int size);
+    void setGuiFontWeight(int weight);
     void setConfigAutoSave(bool enabled);
     void sendBlacklistCommand(const QByteArray &command);
     void publishHypixelResult(int state, const QString &uuid, const QString &displayName,
@@ -386,6 +392,7 @@ signals:
     void playerStatusChanged();
     void menuHotkeyChanged();
     void guiScaleIndexChanged();
+    void guiTypographyChanged();
     void configStateChanged();
     void mediaPreviousRequested();
     void mediaNextRequested();
@@ -453,6 +460,7 @@ private:
     void sendFeatureSnapshot();
     void sendBindSnapshot();
     void sendGuiScaleSnapshot();
+    void sendGuiTypographySnapshot();
     void sendMediaSettings();
     void loadFeatureSettings();
     void storeFeatureSettings();
@@ -608,6 +616,8 @@ private:
     QString m_bedDefensePanelColor = QStringLiteral("#191621");
     int m_menuHotkey = 0xDE; // VK_OEM_7 / apostrophe
     int m_guiScaleIndex = 1; // S/M/L/XL -> 0..3
+    int m_guiFontSize=18;
+    int m_guiFontWeight=600;
     bool m_configAutoSave = false;
     QStringList m_configNames;
     QString m_activeConfig;

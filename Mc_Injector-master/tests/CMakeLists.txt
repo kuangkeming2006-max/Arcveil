@@ -95,6 +95,8 @@ add_executable(McOverlayRendererTests EXCLUDE_FROM_ALL
     ../agent/overlay_renderer_draw.cpp
     ../agent/overlay_renderer_world.cpp
     ../agent/overlay_renderer_clickgui.cpp
+    ../agent/ui/ClickGui.cpp
+    ../agent/ui/AnimatedWidgets.cpp
     ../agent/overlay_renderer_blacklist.cpp
     ../agent/overlay_renderer_textgui.cpp
     ../agent/overlay_renderer_stats.cpp
@@ -135,3 +137,14 @@ add_executable(McOverlayMediaShutdownTests EXCLUDE_FROM_ALL MediaShutdownTests.c
 target_compile_features(McOverlayMediaShutdownTests PRIVATE cxx_std_20)
 target_compile_definitions(McOverlayMediaShutdownTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(McOverlayMediaShutdownTests PRIVATE Qt6::Core)
+
+# Uses the same production input/TSF code, with stdout diagnostics for live TIP QA.
+get_target_property(_ime_live_sources McOverlayRendererTests SOURCES)
+list(REMOVE_ITEM _ime_live_sources OverlayRendererTests.cpp ../agent/src/AgentLog.cpp)
+add_executable(McOverlayImeLiveTests EXCLUDE_FROM_ALL ImeLiveTests.cpp ${_ime_live_sources})
+target_compile_features(McOverlayImeLiveTests PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayImeLiveTests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_include_directories(McOverlayImeLiveTests PRIVATE
+    ../agent "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+target_link_libraries(McOverlayImeLiveTests PRIVATE mc_agent::imgui Qt6::Gui
+    opengl32 gdi32 user32 dwmapi imm32 ole32 oleaut32 uuid advapi32)

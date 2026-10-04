@@ -105,7 +105,6 @@ void endSmoothChild(SmoothScroll& scroll,const float delta) noexcept;
 UINT imeShutdownMessage() noexcept;
 void stopTsf(HWND window, OverlayInputState* input) noexcept;
 void clearImeComposition(OverlayInputState& input) noexcept;
-UINT imeCandidateRefreshMessage() noexcept;
 void updateImeState(OverlayInputState& input, const HWND window,
                     const ImeMessageAction action,const LPARAM lParam) noexcept;
 void advancePresentationSpring(float& value, float& velocity,

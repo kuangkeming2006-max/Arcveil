@@ -131,6 +131,8 @@ struct ControllerResponsivenessTests {
         }
         manager.setMenuHotkey(119);
         manager.setGuiScaleIndex(3);
+        manager.setGuiFontSize(21);
+        manager.setGuiFontWeight(700);
         while(manager.m_featureSettingsStoreTimer.isActive() && persistenceClock.elapsed()<3000)
             QCoreApplication::processEvents(QEventLoop::AllEvents,5);
         if(manager.m_featureSettingsStoreTimer.isActive() ||
@@ -139,9 +141,22 @@ struct ControllerResponsivenessTests {
         }
         manager.setMenuHotkey(120);
         manager.setGuiScaleIndex(0);
+        manager.setGuiFontSize(14);
+        manager.setGuiFontWeight(400);
         if(!manager.applyConfig(QStringLiteral("Input profile")) ||
-           manager.menuHotkey()!=119 || manager.guiScaleIndex()!=3) {
+           manager.menuHotkey()!=119 || manager.guiScaleIndex()!=3 ||
+           manager.guiFontSize()!=21 || manager.guiFontWeight()!=700) {
             std::puts("FAIL input config restore"); return false;
+        }
+        manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 25 600");
+        manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 18 500");
+        manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 18 400 extra");
+        if(manager.guiFontSize()!=21 || manager.guiFontWeight()!=700) {
+            std::puts("FAIL invalid typography accepted");return false;
+        }
+        manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 20 600");
+        if(manager.guiFontSize()!=20 || manager.guiFontWeight()!=600) {
+            std::puts("FAIL native typography echo");return false;
         }
         // Optional statistics failures may update status, but must keep the
         // authenticated transport and resident Agent session alive.

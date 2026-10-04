@@ -785,7 +785,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 targetDiag.angle=std::hypot(aim::wrap(desired.yaw-yaw),desired.pitch-pitch);
                 targetDiag.withinFov=targetDiag.angle<=
                     std::clamp(requested.aimFovDegrees,1,360)*0.5+1.0e-5;
-                targetDiag.withinPreAim=targetDiag.aimPointDistance<=preAimRange+1.0e-5;
+                const silent::TargetCandidate distanceCandidate{entity.entityId,0,aimPoint.point,bounds};
+                targetDiag.withinPreAim=silent::targetSelectionDistance(
+                    distanceCandidate,combatEye,requested.aimAttackViability)<=preAimRange+1.0e-5;
             }
             targetDiag.attackAvailable=!requested.aimAttackViability||aimPoint.available;
             targetDiag.candidateAdded=true;
@@ -824,7 +826,6 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         m_headingHook.ready()&&m_logicalMovementHook.ready()&&
         m_logicalJumpHook.ready();
     m_sprintFeatureEnabled.store(sprintFeature,std::memory_order_release);
-    (void)syncSprintOwner();
     const jfloat sensitivity = env->GetFloatField(settings, cache->mouseSensitivity);
     if (env->ExceptionCheck() == JNI_TRUE) return fail();
     const bool silentRotationReady = silentAvailable();
@@ -884,6 +885,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             [&](const silent::LogicalFramePlan& pending) noexcept {
                 return traceLogicalBlock(env,world,pending);
             });
+    (void)syncSprintOwner();
 
     if(m_logicalController.debug().enabled()&&diagnosticId>=0) {
         const bool cameraMissing=previousCombat.cameraMouseOverEntityId>=0&&

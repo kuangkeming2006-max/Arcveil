@@ -96,7 +96,7 @@ private:
         } else if(phase==20) {
             auto* build=find(m_window->contentItem(),"aboutBuildLabel");
             if(m_window->property("activeRoute").toString()!="about"||!build||
-               !build->property("text").toString().contains("v55.9")||!capture("about-light")) {
+               !build->property("text").toString().contains("v56.1")||!capture("about-light")) {
                 finish(false);return;
             }
             if(m_setTheme) m_setTheme(true);

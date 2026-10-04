@@ -50,3 +50,7 @@ MinHook v1.3.4、Dear ImGui v1.92.9 的版本是当前 CMake 声明；机械拆�
 
 只读所需 hook 的 header 和注册点；排查 stop/drain/异常时才下钻 cpp 或 header 中相应实现。一般 controller/QML 任务不需读取 MethodWeaver 或桥接字节数组。
 
+
+### v54 hotbar 回调边界
+
+LiveHotbarTransform 的回调仍过滤已经消费的 isPressed，但 game-bindings 可在此原版快捷栏按键阶段本地改 currentItem；不得在该回调发 inventory click 或主动同步手持包。背包交换仍由后续 input PRE 执行，bridge ABI 不变。

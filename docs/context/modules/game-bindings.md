@@ -76,3 +76,10 @@ v55.4: GameBindings constructor additionally accepts an optional mapping pack pa
 and digest; registry is constructed from the verified bytes before runResolver.
 Default callers still load the adjacent pack. Digest mismatch leaves the registry
 unhealthy. No setter or post-freeze registration capability was introduced.
+
+## v54 行为修复（2026-09-26）
+
+- 开启攻击可用性时，TargetSelector 以 eye-to-hitbox 距离筛选；瞄准点仍用于角度，攻击射线仍独立验证 reach/遮挡。
+- movement 与 sprint 接管需要实际 Silent Lock 和 control adaptation；MovementIntentResolver 输出原版八方向及输入自带的每轴减速，物理 tick 仍由消费者提交。
+- Smart Hotbar 的 consumed-key callback 现在可以直接改选中 hotbar slot，不调用 syncCurrentPlayItem/windowClick；原版 controller 在正常路径同步手持物品。主背包交换仍排队到 input PRE，并保留动作释放、neutral/resume movement packet 边界。
+- 手动切槽会使旧槽位的自动补货请求失效。onItemUse 仍只观察与排队。

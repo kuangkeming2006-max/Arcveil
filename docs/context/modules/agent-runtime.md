@@ -25,6 +25,11 @@
 m_renderLock、active callback 计数与 idle event、telemetry mailbox lock、服务 snapshot lock 解决不同问题；不能为了文件拆分合并或更换这些锁。
 queueTelemetry 的发布采用非阻塞尝试获取锁；样本可以被后续最新值替代，帧回调不执行字符串格式化或 named-pipe I/O。
 
+字体设置由 GUI_TYPOGRAPHY 接收为单个 packed atomic（ui/GuiTypography.h），帧线程
+用 setGuiTypography 同步 renderer；consumeGuiTypographyChange → queueGuiTypographyChanged
+发布 revision mailbox。telemetryMain 发送 GUI_TYPOGRAPHY_CHANGED，成功发送后才推进
+sent revision。字号/字重一起发布，避免跨线程混用两次编辑的值。
+
 ## 调用流
 
 启动：jvm 导出 → AgentRuntime.start → workerMain → OpenGlHook.install → resolver/scanner/telemetry 启动 → IPC handshake。
@@ -60,4 +65,3 @@ AgentRuntime.h 当前直接包含 overlay_renderer.h，传递引入 binding/tran
 
 已有验证为 Attach、NativeLoader、OpenGL/JVM smoke（含 split threads），以及相邻 renderer/controller 测试。
 没有独立全面的 runtime command codec 测试，协议版本/feature round-trip 是后续验证缺口。2026-09-26 构建、Attach、NativeLoader（含驻留重附加）、OpenGL unified/split smoke 均通过。
-
