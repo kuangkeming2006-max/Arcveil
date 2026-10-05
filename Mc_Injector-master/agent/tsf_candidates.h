@@ -25,6 +25,7 @@ struct ImeCandidates {
     unsigned selected = 0;
     unsigned pageStart = 0;
     bool active = false;
+    std::uint64_t generation = 0;
 };
 
 // COM apartment belongs to the HWND thread, not necessarily the WGL thread.
@@ -37,6 +38,9 @@ public:
     void refreshOnWindowThread() noexcept;
     void shutdownOnWindowThread() noexcept;
     ImeCandidates snapshot() noexcept;
+    bool onWindowTimer(UINT_PTR timer) noexcept;
+    // Render thread acknowledges only a submitted frame containing candidates.
+    void candidatesDrawn(std::uint64_t generation) noexcept;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** result) override;
     ULONG STDMETHODCALLTYPE AddRef() override;
     ULONG STDMETHODCALLTYPE Release() override;
@@ -47,6 +51,7 @@ private:
     friend struct TsfCandidatesTestAccess;
     ~TsfCandidates() = default;
     bool read(DWORD id) noexcept;
+    void candidateReadFailed(DWORD id) noexcept;
     void restoreHiddenOnWindowThread() noexcept;
     std::atomic<ULONG> m_refs{1};
     SRWLOCK m_lock = SRWLOCK_INIT;
@@ -57,11 +62,16 @@ private:
     DWORD m_activeId = TF_INVALID_COOKIE;
     DWORD m_hiddenId = TF_INVALID_COOKIE;
     ITfUIElement* m_hiddenElement = nullptr;
+    UINT_PTR m_watchdogTimer = 0;
+    ULONGLONG m_hiddenSince = 0;
+    std::atomic<std::uint64_t> m_drawnGeneration{0};
+    std::atomic<ULONGLONG> m_drawnTick{0};
     DWORD m_thread = 0;
     HWND m_window=nullptr;
     std::uint64_t m_generation=0U;
     bool m_refreshQueued=false;
     bool m_transitioning=false;
+    bool m_restoringNative=false;
     bool m_enabled = false;
     bool m_activated = false;
     bool m_comInitialized = false;

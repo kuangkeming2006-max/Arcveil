@@ -260,6 +260,7 @@ private:
     int m_mediaSlideDirection = -1;
     std::uint64_t m_lastImeRevision = 0U;
     std::uint64_t m_lastImeActivityTick = 0U;
+    std::uint64_t m_imeDrawnGeneration = 0U;
     float m_imePanelProgress = 0.0F;
     bool m_imePositionEditing = false;
     bool m_imeDragging = false;
