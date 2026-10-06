@@ -17,8 +17,10 @@ namespace mcoverlay {
 struct TsfCandidatesTestAccess {
     struct Candidates final:detail::CandidateListElement {
         UINT count=2;int showCalls=0;TsfCandidates* sink=nullptr;
-        bool reenterOnCount=false;
-        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** out) override {*out=this;AddRef();return S_OK;}
+        bool reenterOnCount=false,failCount=false,supported=true;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** out) override {
+            *out=supported?this:nullptr;if(supported)AddRef();return supported?S_OK:E_NOINTERFACE;
+        }
         ULONG STDMETHODCALLTYPE AddRef() override {return 2;}
         ULONG STDMETHODCALLTYPE Release() override {return 1;}
         HRESULT STDMETHODCALLTYPE GetDescription(BSTR* out) override {*out=SysAllocString(L"fixture");return S_OK;}
@@ -29,7 +31,7 @@ struct TsfCandidatesTestAccess {
         HRESULT STDMETHODCALLTYPE GetDocumentMgr(ITfDocumentMgr** out) override {*out=nullptr;return S_OK;}
         HRESULT STDMETHODCALLTYPE GetCount(UINT* out) override {
             if(reenterOnCount&&sink)sink->UpdateUIElement(11);
-            *out=count;return S_OK;
+            *out=count;return failCount?E_FAIL:S_OK;
         }
         HRESULT STDMETHODCALLTYPE GetSelection(UINT* out) override {*out=1;return S_OK;}
         HRESULT STDMETHODCALLTYPE GetString(UINT index,BSTR* out) override {*out=SysAllocString(index?L"拟好":L"你好");return S_OK;}
@@ -58,37 +60,43 @@ struct TsfCandidatesTestAccess {
         sink->m_thread=GetCurrentThreadId();sink->m_window=window;
         BOOL show=FALSE;
         sink->BeginUIElement(7,&show);
-        check(show&&manager.reads==0&&!sink->snapshot().active,
-            "Begin only tracks the candidate and leaves native UI visible");
+        check(show&&manager.reads==1&&!sink->snapshot().active,
+            "unknown Begin keeps the native UI visible");
         sink->UpdateUIElement(7);
-        check(manager.reads==1&&!sink->snapshot().active,
+        check(manager.reads==2&&!sink->snapshot().active,
             "Update reads its live UIElement synchronously");
         sink->refreshOnWindowThread();
-        check(manager.reads==1,
+        check(manager.reads==2,
             "deferred message never reads a UIElement ID");
         sink->resetOnWindowThread();
         sink->BeginUIElement(8,&show);
-        check(!sink->m_transitioning&&manager.reads==1,
-            "live Begin ends transition without reading an incomplete element");
+        check(!sink->m_transitioning&&manager.reads==3,
+            "live Begin ends transition and only probes the interface");
         sink->UpdateUIElement(8);
-        check(manager.reads==2&&!sink->m_transitioning,
+        check(manager.reads==4&&!sink->m_transitioning,
             "first live Update is never discarded after layout change");
         sink->refreshOnWindowThread();
-        check(manager.reads==2&&!sink->snapshot().active&&!sink->m_transitioning,
+        check(manager.reads==4&&!sink->snapshot().active&&!sink->m_transitioning,
             "deferred settle never rereads a stale element");
         sink->BeginUIElement(9,&show);
         sink->EndUIElement(9);sink->refreshOnWindowThread();
-        check(manager.reads==2,"candidate closure does not read an ended element");
+        check(manager.reads==5,"candidate closure does not read an ended element");
         sink->m_enabled=false;
         sink->BeginUIElement(10,&show);sink->UpdateUIElement(10);sink->refreshOnWindowThread();
-        check(show&&manager.reads==2,"disabled fullscreen IME never probes candidate objects");
+        check(show&&manager.reads==5,"disabled fullscreen IME never probes candidate objects");
         Candidates words;words.sink=sink;words.reenterOnCount=true;
         manager.candidate=&words;
         sink->m_enabled=true;
         sink->resetOnWindowThread();
         sink->BeginUIElement(11,&show);
-        check(!sink->snapshot().active,"Begin cannot publish an incomplete candidate element");
+        check(!show&&sink->m_watchdogTimer&&!sink->snapshot().active,
+              "supported candidate requests UI-less updates without reading incomplete contents");
+        sink->UpdateUIElement(11);
+        check(sink->snapshot().count==2&&words.showCalls==0,
+              "candidate handoff publishes real contents before retaining native UI ownership");
         sink->resetOnWindowThread(); // Some TIPs send Update without a new Begin.
+        check(words.showCalls==1&&!sink->snapshot().active,
+              "layout reset restores native UI and rejects reentrant restoration updates");
         const int readsBeforeLiveUpdate=manager.reads;
         sink->UpdateUIElement(11);
         const auto initial=sink->snapshot();
@@ -100,11 +108,41 @@ struct TsfCandidatesTestAccess {
               "synchronous TSF candidate read rejects nested Update re-entry");
         sink->refreshOnWindowThread();
         check(sink->snapshot().count==2,"late settle preserves the first live candidate snapshot");
-        check(words.showCalls==0&&!sink->m_refreshQueued,
-              "TSF snapshot never hides the native candidate fallback");
+        sink->BeginUIElement(11,&show);sink->UpdateUIElement(11);
+        const auto timer=sink->m_watchdogTimer;
+        sink->m_hiddenSince=GetTickCount64()-600U;
+        sink->candidatesDrawn(sink->snapshot().generation);
+        check(sink->onWindowTimer(timer)&&sink->m_hiddenElement&&words.showCalls==1,
+              "submitted candidate frame keeps UI-less updates enabled");
+        sink->m_drawnTick=GetTickCount64()-600U;
+        sink->onWindowTimer(timer);
+        check(words.showCalls==2&&!sink->m_watchdogTimer&&!sink->snapshot().active,
+              "stalled candidate rendering restores native UI within the watchdog bound");
+        sink->refreshOnWindowThread();
+        sink->BeginUIElement(11,&show);sink->UpdateUIElement(11);
+        sink->m_hiddenSince=GetTickCount64()-600U;
+        sink->candidatesDrawn(initial.generation); // Late frame from an old composition.
+        sink->onWindowTimer(sink->m_watchdogTimer);
+        check(words.showCalls==3&&!sink->snapshot().active,
+              "an old candidate frame cannot keep a new generation hidden");
+        sink->refreshOnWindowThread();sink->BeginUIElement(11,&show);
         words.count=0;sink->UpdateUIElement(11);
-        check(!sink->snapshot().active&&words.showCalls==0,
+        check(!sink->snapshot().active&&words.showCalls==4&&!sink->m_watchdogTimer,
               "empty TSF snapshot gives system UI and IMM fallback back their ownership");
+        words.count=2;sink->BeginUIElement(11,&show);sink->UpdateUIElement(11);words.failCount=true;
+        sink->UpdateUIElement(11);
+        check(words.showCalls==5&&!sink->m_hiddenElement&&!sink->snapshot().active,
+              "failed candidate retrieval clears stale words and immediately restores native UI");
+        words.failCount=false;words.supported=false;sink->BeginUIElement(12,&show);
+        check(show&&!sink->m_watchdogTimer,"unsupported TIP UI is never suppressed");
+        words.supported=true;sink->BeginUIElement(11,&show);sink->UpdateUIElement(11);
+        sink->EndUIElement(11);
+        check(words.showCalls==6&&!sink->snapshot().active&&!sink->m_watchdogTimer,
+              "candidate end clears the snapshot and releases timer/native ownership");
+        sink->BeginUIElement(11,&show);sink->UpdateUIElement(11);
+        sink->shutdownOnWindowThread();
+        check(words.showCalls==7&&!sink->snapshot().active&&!sink->m_hiddenElement,
+              "feature disable restores native UI and drains candidate ownership");
         sink->m_elements=nullptr;sink->Release();
         MSG queued{};
         while(PeekMessageW(&queued,window,TsfCandidates::refreshMessage(),

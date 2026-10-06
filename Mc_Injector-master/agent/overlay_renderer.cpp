@@ -241,6 +241,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
     }
     ImGui::Render();
     ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+    if(m_inputState->tsf&&m_imeDrawnGeneration)
+        m_inputState->tsf->candidatesDrawn(m_imeDrawnGeneration);
     return newlyInitialized;
 }
 

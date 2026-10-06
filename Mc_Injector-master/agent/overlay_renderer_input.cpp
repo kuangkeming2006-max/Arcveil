@@ -377,6 +377,11 @@ LRESULT OverlayRenderer::onWindowMessage(OverlayInputState& input,
         if (message == imeShutdownMessage()) { handled = true; return 0; }
     } else if(message==WM_INPUTLANGCHANGE||message==WM_INPUTLANGCHANGEREQUEST) {
         if(input.tsf) input.tsf->resetOnWindowThread();
+    } else if(message==WM_TIMER&&input.tsf) {
+        input.tsf->enableOnWindowThread(input.imeEnabled.load(std::memory_order_acquire),window);
+        if(input.tsf->onWindowTimer(static_cast<UINT_PTR>(wParam))) {
+            handled=true;return 0;
+        }
     } else if(message==TsfCandidates::refreshMessage()) {
         if(input.tsf&&input.imeEnabled.load(std::memory_order_acquire))
             input.tsf->refreshOnWindowThread();

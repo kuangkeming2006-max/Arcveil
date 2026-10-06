@@ -41,7 +41,9 @@ using namespace renderer_detail;
 void OverlayRenderer::renderImeOverlay(const float deltaSeconds,
                                        const float uiScale) noexcept
 {
+    m_imeDrawnGeneration=0U;
     if (m_inputState == nullptr) return;
+    std::uint64_t candidateGeneration=0U;
     std::array<wchar_t, 80U> name{};
     std::array<wchar_t, 128U> composition{};
     std::array<std::array<wchar_t, 64U>, 9U> candidates{};
@@ -63,6 +65,7 @@ void OverlayRenderer::renderImeOverlay(const float deltaSeconds,
             candidateCount = tsf.count;
             candidateSelection = tsf.selected;
             composing = true;
+            candidateGeneration=tsf.generation;
         }
     }
     if (m_imePositionEditing) {
@@ -211,6 +214,8 @@ void OverlayRenderer::renderImeOverlay(const float deltaSeconds,
                 numbered);
             draw->PopClipRect();
         }
+        if(!m_imePositionEditing&&m_features.fullscreenImeFixEnabled)
+            m_imeDrawnGeneration=candidateGeneration;
     }
 }
 

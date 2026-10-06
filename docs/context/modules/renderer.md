@@ -95,3 +95,27 @@ framebuffer 高度补偿密度并按视口收敛布局，2560×1600 / M 下正�
 BeginUIElement/UpdateUIElement 的 live callback 结束 layout transition；Update 在 callback 内读取，保留 m_reading guard。WM_IME_COMPOSITION 同步尝试 IMM list 0；candidate notify 在原消息内读取，WM_INPUTLANGCHANGE 仍 reset-only。ABI、ActivateEx flag 和绘制路径不变，系统候选 UI 保持可见。
 
 McOverlayImeLiveTests 是显式运行的真实 Windows TIP 测试，激活已安装中文输入法并向自己的前台窗口输入 nihao；可加 --raw 测试游戏式 HWND。诊断写 stdout，返回 0 仅表示实际候选已进入 overlay 输入快照；fixture 测试不能替代这个验收。v54 本机微软拼音的两种窗口均返回 1：composition 非空，IMM candidate count=0，未收到 candidate Update；此项未通过。完整记录见 P/tests/V54_VALIDATION.md。
+
+## v56.2 IME 候选协商与渲染回退
+
+`TsfCandidates::BeginUIElement` 只探测候选接口，不读取尚未完成的候选内容。
+支持的 candidate element 返回 `*show=FALSE` 请求 UI-less Update；未知 UI 返回 TRUE。
+微软拼音在 TRUE 时可以不发 Update，且 IMM 候选为空，这是 v54 实测失败的原因。
+内容继续在 live Update 同步读取，保留 COM ABI、窗口线程、重入与 generation 检查。
+
+`ImeCandidates::generation` 随候选生命周期变化；renderer 仅在实际生成候选绘制命令并
+提交 OpenGL 后调用 `candidatesDrawn(generation)`，位置预览不算确认。窗口线程通过
+`onWindowTimer` 处理仅属于 TSF helper 的 100ms timer：超过 500ms 未提交当前 generation
+的候选帧时恢复 native UI。旧帧确认不能维持新候选的隐藏状态。读取失败清空旧快照并回退；
+End、语言切换、禁用和卸载取消 timer、恢复并释放 retained native element。
+Show(TRUE) 引发的回调受 restoration guard 保护，不重新发布旧候选。
+
+`McOverlayImeLiveTests` 仍是显式运行的真实 TIP 测试。`--render` 使用生产 WGL renderer；
+`--split` 将 OpenGL 放到独立线程；`--stall` 验证暂停渲染后归还 native UI 的请求成功；
+`--output <dir>` 保存实际候选截图；`--hold` 保留窗口 45 秒供观察。返回 0 还要求
+空格提交“你好”且 TSF 候选清空；render 模式要求提交过候选帧和请求的截图成功。
+v56.2 本机微软拼音 native EDIT、raw、WGL unified/split 与 stalled renderer 均通过。
+真实 Minecraft 客户端并未运行；WGL 窗口验证使用真实输入法与生产 IME/绘制路径。
+系统候选窗口可以在测试 HWND 截图范围外；旧 element 在 Show(TRUE) 后可能结束。
+`priorElementShown` 仅表示旧接口状态，不能据此否定用户看到的候选窗口；
+`stalledRendererNativeRestoreRequested` 验证恢复请求 HRESULT，未自动验证完整系统 UI。

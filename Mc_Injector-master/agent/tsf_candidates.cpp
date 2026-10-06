@@ -43,13 +43,13 @@ void TsfCandidates::resetOnWindowThread() noexcept
     // Show(FALSE) is ownership we must explicitly return before discarding the
     // generation. Keeping the interface alive avoids querying a transitioning
     // input context from WM_INPUTLANGCHANGE.
-    restoreHiddenOnWindowThread();
     ++m_generation;
     m_transitioning=true;
     m_activeId=TF_INVALID_COOKIE;
     AcquireSRWLockExclusive(&m_lock);
     m_snapshot={};
     ReleaseSRWLockExclusive(&m_lock);
+    restoreHiddenOnWindowThread();
     // This message only settles the layout transition after WndProc returns.
     // A UIElement ID from the old generation must never be read later.
     if(m_enabled&&m_window&&!m_refreshQueued)
@@ -64,13 +64,46 @@ void TsfCandidates::refreshOnWindowThread() noexcept
 
 void TsfCandidates::restoreHiddenOnWindowThread() noexcept
 {
+    if(m_watchdogTimer) KillTimer(m_window,m_watchdogTimer);
+    m_watchdogTimer=0;
     ITfUIElement* const element=m_hiddenElement;
     m_hiddenElement=nullptr;
     m_hiddenId=TF_INVALID_COOKIE;
     if(element) {
-        (void)element->Show(TRUE);
+        m_restoringNative=true;
+        const HRESULT showHr=element->Show(TRUE);
+        BOOL shown=FALSE;
+        const HRESULT stateHr=element->IsShown(&shown);
+        char diagnostic[128]{};
+        std::snprintf(diagnostic,sizeof(diagnostic),
+            "TSF_NATIVE_UI restoreRequested=%d priorElementShown=%d stateHr=0x%08lX",
+            SUCCEEDED(showHr)?1:0,SUCCEEDED(stateHr)&&shown?1:0,
+            static_cast<unsigned long>(stateHr));
+        log::info(diagnostic);
         element->Release();
+        m_restoringNative=false;
     }
+}
+
+void TsfCandidates::candidatesDrawn(const std::uint64_t generation) noexcept
+{
+    if(!generation) return;
+    m_drawnTick.store(GetTickCount64(),std::memory_order_relaxed);
+    m_drawnGeneration.store(generation,std::memory_order_release);
+}
+
+bool TsfCandidates::onWindowTimer(const UINT_PTR timer) noexcept
+{
+    if(!m_watchdogTimer||timer!=m_watchdogTimer) return false;
+    const auto now=GetTickCount64();
+    const auto last=m_drawnGeneration.load(std::memory_order_acquire)==m_generation
+        ?m_drawnTick.load(std::memory_order_relaxed):m_hiddenSince;
+    // The render thread can publish a tick just after our clock sample.
+    if(now>=last&&now-last>=500U) {
+        log::info("TSF_FALLBACK reason=candidate frame unavailable; returning native UI ownership.");
+        resetOnWindowThread();
+    }
+    return true;
 }
 
 void TsfCandidates::enableOnWindowThread(bool enabled,HWND window) noexcept
@@ -144,6 +177,13 @@ ImeCandidates TsfCandidates::snapshot() noexcept
     return result;
 }
 
+void TsfCandidates::candidateReadFailed(const DWORD id) noexcept
+{
+    if(id!=m_activeId&&id!=m_hiddenId) return;
+    log::info("TSF_FALLBACK reason=candidate read failed; restoring native UI.");
+    resetOnWindowThread();
+}
+
 bool TsfCandidates::read(DWORD id) noexcept
 {
     if (!m_elements || !m_enabled || m_transitioning) return false;
@@ -158,13 +198,13 @@ bool TsfCandidates::read(DWORD id) noexcept
     const HRESULT elementHr=m_elements->GetUIElement(id, &element);
     std::snprintf(diagnostic,sizeof(diagnostic),"TSF_GET_ELEMENT hr=0x%08lX",static_cast<unsigned long>(elementHr));
     log::info(diagnostic);
-    if (FAILED(elementHr)||!element) return false;
+    if (FAILED(elementHr)||!element) {candidateReadFailed(id);return false;}
     CandidateListElement* list = nullptr;
     HRESULT hr = element->QueryInterface(kCandidateListId,
                                          reinterpret_cast<void**>(&list));
     std::snprintf(diagnostic,sizeof(diagnostic),"TSF_QI hr=0x%08lX",static_cast<unsigned long>(hr));
     log::info(diagnostic);
-    if (FAILED(hr)||!list) {element->Release();return false;}
+    if (FAILED(hr)||!list) {element->Release();candidateReadFailed(id);return false;}
     ImeCandidates next{};
     UINT total = 0, selection = 0, page = 0, pages = 0;
     hr = list->GetCount(&total);
@@ -172,7 +212,9 @@ bool TsfCandidates::read(DWORD id) noexcept
     log::info(diagnostic);
     if (SUCCEEDED(hr)) hr = list->GetSelection(&selection);
     if(FAILED(hr)||generation!=m_generation||!m_enabled) {
-        list->Release();element->Release();return false;
+        list->Release();element->Release();
+        if(generation==m_generation) candidateReadFailed(id);
+        return false;
     }
     if(total==0U) selection=0U;
     else selection=std::min(selection,total-1U);
@@ -204,16 +246,20 @@ bool TsfCandidates::read(DWORD id) noexcept
     }
     next.selected = selection >= start ? selection - start : 0U;
     next.active = next.count > 0U;
+    next.generation = generation;
     list->Release();
     if(generation!=m_generation||!m_enabled||m_transitioning) {
         element->Release();return false;
     }
-    // Keep the native candidate UI visible as a fail-open second channel.
-    // Hiding it here races the render thread: a successful TSF read does not
-    // prove that the fullscreen overlay has presented even one candidate
-    // frame. Previously this could leave both channels invisible.
-    if(m_hiddenId!=TF_INVALID_COOKIE) restoreHiddenOnWindowThread();
-    element->Release();
+    // Begin requests UI-less updates. Keep that ownership only while actual
+    // candidate frames are submitted; the HWND watchdog restores native UI
+    // if rendering stalls, is minimized, or never receives this snapshot.
+    if(!next.active&&m_hiddenId==id) restoreHiddenOnWindowThread();
+    if(next.active&&m_hiddenId==id) {
+        ITfUIElement* previous=m_hiddenElement;
+        m_hiddenElement=element;
+        if(previous)previous->Release();
+    } else element->Release();
     if(generation!=m_generation||!m_enabled||m_transitioning) return false;
     m_activeId = id;
     AcquireSRWLockExclusive(&m_lock);
@@ -226,16 +272,38 @@ HRESULT TsfCandidates::BeginUIElement(DWORD id, BOOL* show)
     char diagnostic[128]{};
     std::snprintf(diagnostic,sizeof(diagnostic),"TSF_BEGIN id=%lu transitioning=%d",static_cast<unsigned long>(id),m_transitioning?1:0);
     log::info(diagnostic);
-    m_transitioning=false; // A live TIP callback supersedes deferred settle.
     if (!show) return E_POINTER;
     *show=TRUE;
-    if(!m_enabled) return S_OK;
-    // Begin is deliberately bookkeeping-only. Calling back into the TIP while it
-    // is constructing the element can re-enter TSF and corrupt its COM stack.
+    if(!m_enabled||m_restoringNative) return S_OK;
+    m_transitioning=false; // A live TIP callback supersedes deferred settle.
+    // TRUE permits the TIP to omit UpdateUIElement entirely (Microsoft Pinyin
+    // does so, and also leaves IMM candidates empty). Negotiate FALSE only for
+    // candidate interfaces we support. Contents are read later in Update.
+    ITfUIElement* element=nullptr;
+    if(!m_elements||FAILED(m_elements->GetUIElement(id,&element))||!element)
+        return S_OK;
+    CandidateListElement* list=nullptr;
+    const HRESULT hr=element->QueryInterface(kCandidateListId,
+        reinterpret_cast<void**>(&list));
+    if(FAILED(hr)||!list) {element->Release();return S_OK;}
+    list->Release();
+    ++m_generation;
+    restoreHiddenOnWindowThread();
     m_activeId = id;
     AcquireSRWLockExclusive(&m_lock);
     m_snapshot = {};
     ReleaseSRWLockExclusive(&m_lock);
+    m_hiddenElement=element;
+    m_hiddenId=id;
+    m_hiddenSince=GetTickCount64();
+    m_watchdogTimer=SetTimer(m_window,reinterpret_cast<UINT_PTR>(this),100,nullptr);
+    if(!m_watchdogTimer) {
+        m_hiddenElement=nullptr;m_hiddenId=TF_INVALID_COOKIE;
+        element->Release();
+        return S_OK;
+    }
+    *show=FALSE;
+    log::info("TSF_HANDOFF candidate UI updates requested; presentation watchdog armed.");
     return S_OK;
 }
 HRESULT TsfCandidates::UpdateUIElement(DWORD id)
@@ -243,9 +311,10 @@ HRESULT TsfCandidates::UpdateUIElement(DWORD id)
     char diagnostic[128]{};
     std::snprintf(diagnostic,sizeof(diagnostic),"TSF_UPDATE id=%lu transitioningBefore=%d",static_cast<unsigned long>(id),m_transitioning?1:0);
     log::info(diagnostic);
+    if(m_restoringNative) return S_OK;
     m_transitioning=false;
-    // The TIP guarantees this ID is live only during its Update callback.
-    // read() guards against re-entry and generation changes.
+    // Read synchronously in the live callback, guarded against re-entry and
+    // generation changes. No delayed message dereferences an old element ID.
     if(m_enabled) (void)read(id);
     return S_OK;
 }
@@ -254,13 +323,14 @@ HRESULT TsfCandidates::EndUIElement(DWORD id)
     char diagnostic[80]{};
     std::snprintf(diagnostic,sizeof(diagnostic),"TSF_END id=%lu",static_cast<unsigned long>(id));
     log::info(diagnostic);
-    if(id==m_hiddenId) restoreHiddenOnWindowThread();
     if (id == m_activeId) {
+        ++m_generation;
         m_activeId = TF_INVALID_COOKIE;
         AcquireSRWLockExclusive(&m_lock);
         m_snapshot = {};
         ReleaseSRWLockExclusive(&m_lock);
     }
+    if(id==m_hiddenId) restoreHiddenOnWindowThread();
     return S_OK;
 }
 }
