@@ -98,9 +98,21 @@ McOverlayImeLiveTests 是显式运行的真实 Windows TIP 测试，激活已安
 
 ## v56.2 IME 候选协商与渲染回退
 
+### 故障原因与提醒（2026-10-06）
+
+旧实现始终返回 `*show=TRUE`，允许输入法自行显示候选窗口；按
+[TSF 协商契约](https://learn.microsoft.com/en-us/windows/win32/tsf/uiless-mode-overview)，
+此时输入法可以不发送 `UpdateUIElement`。本机微软拼音确实未发送候选更新，
+IMM 备用通道的候选列表也为空，因此虽然有拼音组合串，overlay 仍拿不到候选词。
+修复要点是对支持的候选接口返回 `FALSE`，请求输入法持续提供候选更新。
+
+排查时同时检查候选更新、候选数量和实际显示；组合串非空不能证明候选通路正常，
+单张窗口截图也可能漏掉系统候选窗。用户于 2026-10-06 确认 IME 模块工作正常。
+
+### 当前处理与验证
+
 `TsfCandidates::BeginUIElement` 只探测候选接口，不读取尚未完成的候选内容。
 支持的 candidate element 返回 `*show=FALSE` 请求 UI-less Update；未知 UI 返回 TRUE。
-微软拼音在 TRUE 时可以不发 Update，且 IMM 候选为空，这是 v54 实测失败的原因。
 内容继续在 live Update 同步读取，保留 COM ABI、窗口线程、重入与 generation 检查。
 
 `ImeCandidates::generation` 随候选生命周期变化；renderer 仅在实际生成候选绘制命令并
