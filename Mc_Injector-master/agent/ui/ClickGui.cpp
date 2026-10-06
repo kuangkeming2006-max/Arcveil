@@ -530,7 +530,9 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
         const float spotlightEase = guiEase;
         // Drive geometry directly from the spring, including its overshoot.
         // A second eased/sine motion would rebound a fraction of a beat later.
-        const float spotlightScale = 0.96F + 0.04F * m_clickGuiProgress;
+        // Opening gathers inward from 126%; closing scatters outward again.
+        // Keep the original spring-driven trajectory and its small overshoot.
+        const float spotlightScale = 1.26F - 0.26F * m_clickGuiProgress;
         const ImVec2 guiCenter(m_clickGuiX + guiWidth * 0.5F,
                                m_clickGuiY + guiHeight * 0.5F);
         // Layout always uses the final rectangle. Once ImGui has generated the

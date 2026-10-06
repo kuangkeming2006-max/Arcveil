@@ -77,7 +77,7 @@ ApplicationWindow {
                                                    || (activeTargetPid === 0 ? "" : "PID " + activeTargetPid))
     readonly property var setupNavigationItems: [
         { "icon": "⌕", "label": "Scanner", "description": "Discover Java processes", "route": "scanner" },
-        { "icon": "i", "label": "About", "description": "Arcveil · v56.2", "route": "about" },
+        { "icon": "i", "label": "About", "description": "Arcveil · v56.3", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Discovery preferences", "route": "settings" }
     ]
     // Process-specific information architecture. Hypixel is intentionally a
