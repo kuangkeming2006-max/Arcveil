@@ -82,3 +82,15 @@ symbol-invalidated affects only its row. snapshot-update is observation, not a
 UI retry trigger. QML renders the status and allows resume while service busy.
 MappingProgressTests, DynamicMappingServiceTests and the 40-phase UI smoke cover
 these boundaries; no QML matching business logic or Agent IPC is introduced.
+
+## v56.4 action semantics
+
+NavigationRail and SessionDashboardPage expose cancelAttachRequested separately
+from clearSelectionRequested/detachRequested. Clear Selection only resets browsing;
+Cancel Attach calls OverlayManager.cancelAttach during Mapping/Agent loading;
+Detach calls the normal Agent detach flow when Active. Scanner selection changes
+preserve the active/pending session route. MappingProgressWindow closing still only
+hides the window. Pause Automatic Matching / Resume Automatic Matching control
+future watch/retry, preserving the owner and accepted results; incomplete mapping
+shows "Attach waiting for mapping; resume to continue" and never authorizes injection.
+Mapping Console consumes transaction/cache/reference/transport JSONL reasons.

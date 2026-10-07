@@ -1,6 +1,7 @@
 #include "Bytecode.h"
 #include <algorithm>
 #include <set>
+#include <memory>
 namespace mcoverlay::mapping {
 namespace {
 std::vector<unsigned char> unhex(std::string_view text){
@@ -48,10 +49,10 @@ struct Pool {
 std::string descriptorShape(std::string_view desc){
     std::string out;for(std::size_t i=0;i<desc.size();++i){if(desc[i]=='L'){auto end=desc.find(';',i);if(end==std::string_view::npos)throw std::runtime_error("malformed descriptor");auto name=desc.substr(i,end-i+1);out+=name.starts_with("Ljava/")||name.starts_with("Ljavax/")?std::string(name):"L*;";i=end;}else out+=desc[i];}return out;
 }
-CodeShape normalizeBytecode(const Json& klass,const Json& method){
+static CodeShape normalizeWithPool(const Json& method,const Pool& pool){
     CodeShape shape;const auto bytes=unhex(method.at("bytecode").string());
     if(bytes.empty()){shape.fingerprint="no-code";return shape;}
-    Pool pool(klass);Reader r{bytes};Json::Array tokens;std::map<int,int> offsets;std::vector<std::pair<std::size_t,int>> branches;
+    Reader r{bytes};Json::Array tokens;std::map<int,int> offsets;std::vector<std::pair<std::size_t,int>> branches;
     while(r.pos<bytes.size()){
         const int start=int(r.pos);offsets[start]=int(tokens.size());unsigned op=r.u1();Json token=Json::Object{{"op",int(op)}};
         if(op==0x12||op==0x13||op==0x14||(op>=0xb2&&op<=0xb9)||op==0xba||op==0xbb||op==0xbd||op==0xc0||op==0xc1||op==0xc5){
@@ -78,5 +79,21 @@ CodeShape normalizeBytecode(const Json& klass,const Json& method){
     for(const auto&[i,target]:branches){if(!offsets.contains(target))throw std::runtime_error("invalid branch boundary");tokens[i]["target"]=offsets.at(target);}
     for(auto&t:tokens)if(t.contains("targets"))for(auto&target:t["targets"].array()){if(!offsets.contains(target.integer()))throw std::runtime_error("invalid switch boundary");target=offsets.at(target.integer());}
     shape.fingerprint=sha256(Json(tokens).dump());return shape;
+}
+CodeShape normalizeBytecode(const Json &klass, const Json &method) {
+    if (method.at("bytecode").string().empty()) return {"no-code", {}, true};
+    return normalizeWithPool(method, Pool(klass));
+}
+std::vector<CodeShape> normalizeClassBytecode(const Json &klass) {
+    std::vector<CodeShape> result;
+    std::unique_ptr<Pool> pool;
+    for (const auto &method : klass.at("methods").array()) {
+        if (method.at("bytecode").string().empty()) result.push_back({"no-code", {}, true});
+        else {
+            if (!pool) pool = std::make_unique<Pool>(klass);
+            result.push_back(normalizeWithPool(method, *pool));
+        }
+    }
+    return result;
 }
 }

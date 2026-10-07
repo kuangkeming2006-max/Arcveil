@@ -12,7 +12,7 @@ if($DisableAttach){$javaArgs=@('-XX:+DisableAttachMechanism')+$javaArgs}
 $target=Start-Process -FilePath "$Jdk/bin/java.exe" -ArgumentList $javaArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput "$fixture/target.log" -RedirectStandardError "$fixture/target-error.log"
 try {
     Start-Sleep -Milliseconds 900
-    $captureArgs=@('inspect','--pid',$target.Id,'--java',"$Jdk/bin/java.exe",'--helper',"$Build/attach-helper/McOverlayAttachHelper.jar",'--probe',"$Build/MappingProbe-v3.dll",'--native-loader',"$Build/McOverlayNativeLoader.exe",'--out',"$fixture/snapshot.json")
+    $captureArgs=@('inspect','--pid',$target.Id,'--java',"$Jdk/bin/java.exe",'--helper',"$Build/attach-helper/McOverlayAttachHelper.jar",'--probe',"$Build/MappingProbe-v8.dll",'--native-loader',"$Build/McOverlayNativeLoader.exe",'--out',"$fixture/snapshot.json")
     if($Lite){$captureArgs=$captureArgs[0..3]+$captureArgs[6..($captureArgs.Count-1)];$captureArgs+='--lite'}
     if($Detail){
         $pack=Get-Content -Raw "$Build/mappings/default-v1.json" | ConvertFrom-Json

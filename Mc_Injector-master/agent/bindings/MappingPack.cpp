@@ -17,7 +17,7 @@ std::string bounded(const Json& j,std::size_t maximum=512) {
     auto s=j.string();if(s.size()>maximum||s.find('\0')!=std::string::npos)throw std::runtime_error("mapping string limit/NUL");return s;
 }
 bool identifier(std::string_view s){return !s.empty()&&s.size()<=64&&std::all_of(s.begin(),s.end(),[](unsigned char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='.'||c=='_'||c=='-';});}
-ClientFamily family(const Json& j) {const auto& s=j.string();if(s=="Vanilla")return ClientFamily::Vanilla;if(s=="Forge")return ClientFamily::Forge;if(s=="Lunar")return ClientFamily::Lunar;throw std::runtime_error("unknown mapping family");}
+ClientFamily family(const Json& j) {const auto& s=j.string();if(s=="Vanilla")return ClientFamily::Vanilla;if(s=="Forge")return ClientFamily::Forge;if(s=="Lunar")return ClientFamily::Lunar;if(s=="Badlion")return ClientFamily::Badlion;throw std::runtime_error("unknown mapping family");}
 std::vector<DetectionPattern> detection(const Json& j) {
     if(j.array().size()>24)throw std::runtime_error("detection capacity");
     std::vector<DetectionPattern> result;

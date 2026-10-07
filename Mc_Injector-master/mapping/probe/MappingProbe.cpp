@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <mutex>
+#include <set>
 #include <memory>
 #include <thread>
 #include <cctype>
@@ -61,6 +62,7 @@ struct Capture {
     Json *stats = nullptr;
     SnapshotWriter *stream = nullptr;
     const Json *selection = nullptr;
+    const Json *liteScope = nullptr;
     ~Capture() {
         for (auto loader : loaders)
             env->DeleteLocalRef(loader);
@@ -184,21 +186,29 @@ struct Capture {
                     jobject loader = nullptr;
                     if (ti->GetClassLoader(classes.data[i], &loader) == JVMTI_ERROR_NONE &&
                         loader) {
-                        jclass type = env->GetObjectClass(loader);
-                        auto load = type ? env->GetMethodID(type, "loadClass",
-                                                            "(Ljava/lang/String;)Ljava/lang/Class;")
-                                         : nullptr;
+                        jclass type = env->FindClass("java/lang/Class");
+                        auto load = type ? env->GetStaticMethodID(type, "forName",
+                            "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
                         if (env->ExceptionCheck())
                             env->ExceptionClear();
                         if (load)
                             for (const auto &binary : request.at("classes").array()) {
                                 jstring text = env->NewStringUTF(binary.string().c_str());
                                 if (text) {
-                                    auto loaded = env->CallObjectMethod(loader, load, text);
+                                    auto loaded = env->CallStaticObjectMethod(type, load, text, JNI_FALSE, loader);
                                     if (env->ExceptionCheck())
                                         env->ExceptionClear();
-                                    if (loaded)
+                                    if (loaded) {
+                                        // Reflection links metadata without running the target's
+                                        // initializer; loadClass/forName(false) may leave it unprepared.
+                                        auto members = env->GetMethodID(type, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
+                                        if (members && !env->ExceptionCheck()) {
+                                            auto methods = env->CallObjectMethod(loaded, members);
+                                            if (methods) env->DeleteLocalRef(methods);
+                                        }
+                                        if (env->ExceptionCheck()) env->ExceptionClear();
                                         env->DeleteLocalRef(loaded);
+                                    }
                                     env->DeleteLocalRef(text);
                                 }
                                 if (env->ExceptionCheck())
@@ -228,14 +238,44 @@ struct Capture {
         if (count > 100000)
             throw SnapshotLimit("JVMTI inventory", "loaded-class-count", count, 100000);
         std::size_t captured = 0;
+        std::set<std::string> liteNames, observed;
+        Json::Array evidence;
+        if (liteScope) for (const auto &name : liteScope->at("liteClasses").array()) {
+            auto signature = name.string(); std::replace(signature.begin(), signature.end(), '.', '/');
+            liteNames.insert("L" + signature + ";");
+        }
+        // Resolve scope hierarchy before metadata capture; unrelated classes remain signature-only.
+        if (liteScope) for (int i = 0; i < count; ++i) if (liteNames.contains(signature(ti, classes.data[i]))) {
+            jint status = 0;
+            require(ti->GetClassStatus(classes.data[i], &status), "scope class status");
+            if (!(status & JVMTI_CLASS_STATUS_PREPARED)) continue;
+            jclass base = env->GetSuperclass(classes.data[i]);
+            while (base) { liteNames.insert(signature(ti, base)); auto next = env->GetSuperclass(base); env->DeleteLocalRef(base); base = next; }
+            jint n = 0; Buffer<jclass> interfaces{ti};
+            require(ti->GetImplementedInterfaces(classes.data[i], &n, &interfaces.data), "scope interfaces");
+            for (int j = 0; j < n; ++j) { liteNames.insert(signature(ti, interfaces.data[j])); env->DeleteLocalRef(interfaces.data[j]); }
+        }
         std::map<std::string, std::vector<const Json *>> wanted;
         if (selection)
             for (const auto &item : selection->at("classes").array())
                 wanted[item.at("name").string()].push_back(&item);
         for (int i = 0; i < count; ++i) {
             const auto name = signature(ti, classes.data[i]);
-            if (name.empty() || name.front() != 'L' || !loaderId(classes.data[i]))
-                continue;
+            if (name.empty() || name.front() != 'L') continue;
+            bool marker = false;
+            if (liteScope) {
+                for (const auto &hint : liteScope->at("classHints").array())
+                    if ((hint.at("prefix").boolean() ? name.starts_with(hint.at("value").string()) : name == hint.at("value").string()) &&
+                        observed.insert(hint.at("family").string()).second) {
+                        evidence.push_back(Json::Object{{"family",hint.at("family")}, {"confidence",hint.at("confidence")}});
+                        marker = true;
+                    }
+                if (!liteNames.contains(name) && !marker && captured) continue;
+            }
+            // Scope filters precede loader registration. Unrelated loaded classes
+            // must not introduce unrequested loaders into a selected snapshot.
+            if (selection && !wanted.contains(name)) continue;
+            if (!loaderId(classes.data[i])) continue;
             if (selection) {
                 auto matches = wanted.find(name);
                 if (matches == wanted.end())
@@ -302,7 +342,7 @@ struct Capture {
                              {"instance", double(static_cast<unsigned int>(identity))}});
             env->DeleteLocalRef(type);
         }
-        return Json::Object{{"loaders", loaderInfo}};
+        return Json::Object{{"loaders", loaderInfo}, {"classEvidence", evidence}};
     }
 };
 std::string decode(const char *options) {
@@ -447,7 +487,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                                                             : "full"}});
         Json snapshot;
         {
-            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr};
+            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr};
             if (request.contains("warmup")) {
                 progress(path, "authored-class-warmup");
                 capture.warmup(request.at("warmup"));
@@ -455,7 +495,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
             progress(path, detail ? "selected-class-detail" : "class-index");
             snapshot = capture.run();
         }
-        Json::Array evidence;
+        Json::Array evidence = snapshot.at("classEvidence").array();
+        snapshot.object().erase("classEvidence");
         if (request.contains("detection"))
             for (const auto *property : {"java.home", "java.class.path", "sun.java.command"}) {
                 Buffer<char> hint{ti};

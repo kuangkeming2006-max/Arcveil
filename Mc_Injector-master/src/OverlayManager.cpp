@@ -36,11 +36,23 @@ constexpr int kDetachTimeoutMilliseconds = 2500;
 OverlayManager::OverlayManager(QObject *parent)
     : QObject(parent)
 {
-    connect(&m_mappingService,&MappingService::ready,this,[this](const QString& pack,const QString& digest){
-        if(m_state==State::Validating&&m_targetPid!=0)launchVerifiedAgent(pack,digest);
+    connect(&m_mappingService, &MappingService::readyForTransaction, this,
+            [this](const QString &id, const QString &pack, const QString &digest) {
+        if (m_transaction && m_transaction->valid && id == transactionId() &&
+            m_transaction->state == AttachTransaction::State::MappingVerified &&
+            m_state == State::Validating && m_targetPid == m_transaction->pid)
+            launchVerifiedAgent(pack, digest);
     });
-    connect(&m_mappingService,&MappingService::failed,this,[this](const QString& reason){
-        if(m_state==State::Validating)fail(QStringLiteral("MAPPING_VALIDATION_FAILED"),reason);
+    connect(&m_mappingService, &MappingService::failedForTransaction, this,
+            [this](const QString &id, const QString &reason) {
+        if (m_transaction && id == transactionId() && m_state == State::Validating)
+            fail(QStringLiteral("MAPPING_VALIDATION_FAILED"), reason);
+    });
+    connect(&m_mappingService, &MappingService::changed, this, [this] {
+        if (m_state == State::Validating) {
+            setStatusMessage(m_mappingService.status());
+            emit stateChanged();
+        }
     });
     loadFeatureSettings();
     {
@@ -161,7 +173,18 @@ bool OverlayManager::busy() const noexcept
 
 bool OverlayManager::attachToProcess(quint32 pid)
 {
-    emit mappingAttachRequested(pid);
+    ++m_attachRequestGeneration;
+    if (m_pendingTransaction) m_pendingTransaction->invalidate();
+    auto transaction = std::make_shared<AttachTransaction>();
+    transaction->pid = pid;
+    transaction->processStart = MappingService::processStartFor(pid);
+    transaction->state = AttachTransaction::State::Selected;
+    return startAttachTransaction(std::move(transaction));
+}
+
+bool OverlayManager::startAttachTransaction(std::shared_ptr<AttachTransaction> transaction)
+{
+    const auto pid = transaction->pid;
     if (pid == 0) {
         fail(QStringLiteral("INVALID_PID"),
              QStringLiteral("Select a Java process before loading the native agent."));
@@ -174,6 +197,7 @@ bool OverlayManager::attachToProcess(quint32 pid)
     // while an earlier helper is still emitting its terminal signals.
     if (m_state == State::Detaching) {
         m_pendingAttachPid = pid;
+        m_pendingTransaction = transaction;
         setStatusMessage(QStringLiteral("Finishing the previous detach before attaching to PID %1...")
                              .arg(pid));
         return true;
@@ -182,11 +206,15 @@ bool OverlayManager::attachToProcess(quint32 pid)
         || m_server.isListening()
         || m_attachProcess.state() != QProcess::NotRunning) {
         m_pendingAttachPid = pid;
+        m_pendingTransaction = transaction;
         beginDetach();
         return true;
     }
     (void) closeSessionTransport();
     m_pendingAttachPid = 0;
+    m_pendingTransaction.reset();
+    m_transaction = transaction;
+    emit mappingAttachRequested(pid);
 
     clearError();
     setRenderer({});
@@ -247,12 +275,17 @@ bool OverlayManager::attachToProcess(quint32 pid)
     m_agentDllPath=agentDll;m_mappingJava=java;m_mappingHelper=attachHelper;
     setStatusMessage(QStringLiteral("Validating runtime mappings..."));
     m_targetMonitor.start();
-    m_mappingService.prepare(pid,java.executable,attachHelper,java.modular,java.toolsJar);
+    m_mappingService.prepare(pid,java.executable,attachHelper,java.modular,java.toolsJar,m_transaction);
     return true;
 }
 
 void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& digest)
 {
+    if (!m_transaction || !m_transaction->valid ||
+        m_transaction->state != AttachTransaction::State::MappingVerified ||
+        MappingService::processStartFor(m_targetPid) != m_transaction->processStart) return;
+    m_transaction->state = AttachTransaction::State::LoadingAgent;
+    m_agentTransactionId = transactionId();
     if(!targetProcessIsRunning(m_targetPid)){fail(QStringLiteral("PROCESS_EXITED"),QStringLiteral("Target exited during mapping validation."));return;}
     const auto pid=m_targetPid;const auto agentDll=m_agentDllPath;const auto java=m_mappingJava;const auto attachHelper=m_mappingHelper;
     setState(State::StartingIpc);
@@ -289,6 +322,11 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
     setState(State::LaunchingAttachHelper);
     setStatusMessage(QStringLiteral("Loading the JNI/JVMTI agent into %1...")
                          .arg(m_targetTitle));
+    if (m_mappingService.selectedTransport() == "NativeLoader") {
+        (void) startNativeLoaderFallback();
+        m_targetMonitor.start();
+        return;
+    }
     m_attachProcess.setProgram(java.executable);
     m_attachProcess.setArguments(arguments);
     m_attachProcess.start();
@@ -298,10 +336,23 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
     return;
 }
 
+void OverlayManager::cancelAttach()
+{
+    ++m_attachRequestGeneration;
+    if (m_pendingTransaction) m_pendingTransaction->invalidate();
+    if (m_state == State::Active) return;
+    m_pendingAttachPid = 0;
+    m_pendingTransaction.reset();
+    beginDetach();
+}
+
 void OverlayManager::detach()
 {
+    ++m_attachRequestGeneration;
+    if (m_pendingTransaction) m_pendingTransaction->invalidate();
     // An explicit user detach cancels a previously queued process switch.
     m_pendingAttachPid = 0;
+    m_pendingTransaction.reset();
     beginDetach();
 }
 
@@ -317,6 +368,12 @@ void OverlayManager::beginDetach()
         return;
     }
 
+    if (m_transaction) {
+        m_transaction->state = AttachTransaction::State::Cancelling;
+        m_transaction->invalidate();
+        if (!m_mappingService.busy()) m_mappingService.transactionEvent("TRANSACTION_CANCEL", "Detach / process switch");
+    }
+    m_mappingService.cancel();
     m_attachTimeout.stop();
     m_targetMonitor.stop();
     m_detachTransportComplete = false;
@@ -371,6 +428,7 @@ void OverlayManager::finalizeDetachedState()
 
     m_detachTransportComplete = false;
     clearError();
+    if (m_transaction) m_transaction->state = AttachTransaction::State::Detached;
     setState(State::Detached);
     setStatusMessage(m_detachTimedOut
         ? QStringLiteral("Native overlay detached after the agent response timed out")
@@ -386,10 +444,12 @@ void OverlayManager::startPendingAttach()
         return;
     }
 
-    const quint32 pid = std::exchange(m_pendingAttachPid, 0U);
-    QTimer::singleShot(0, this, [this, pid] {
-        if (!m_destroying && m_state == State::Detached)
-            (void) attachToProcess(pid);
+    (void) std::exchange(m_pendingAttachPid, 0U);
+    const auto pending = std::exchange(m_pendingTransaction, {});
+    const auto requestGeneration = m_attachRequestGeneration;
+    QTimer::singleShot(0, this, [this, pending, requestGeneration] {
+        if (!m_destroying && requestGeneration == m_attachRequestGeneration && m_state == State::Detached && pending && pending->valid)
+            (void) startAttachTransaction(pending);
     });
 }
 
@@ -430,6 +490,8 @@ void OverlayManager::handleAgentDisconnected()
 void OverlayManager::handleAttachFinished(int exitCode,
                                           QProcess::ExitStatus exitStatus)
 {
+    if (m_state != State::Detaching &&
+        (!m_transaction || !m_transaction->valid || m_agentTransactionId != transactionId())) return;
     m_helperStandardOutput += m_attachProcess.readAllStandardOutput();
     m_helperStandardError += m_attachProcess.readAllStandardError();
 
@@ -507,6 +569,7 @@ void OverlayManager::handleAttachError(QProcess::ProcessError error)
         || m_state == State::Detaching || m_state == State::Error) {
         return;
     }
+    if (!m_transaction || !m_transaction->valid || m_agentTransactionId != transactionId()) return;
     fail(m_loaderKind == LoaderKind::NativeLoadLibrary
              ? QStringLiteral("NATIVE_LOADER_PROCESS_ERROR")
              : QStringLiteral("ATTACH_PROCESS_ERROR"),
@@ -515,7 +578,8 @@ void OverlayManager::handleAttachError(QProcess::ProcessError error)
 
 void OverlayManager::monitorTarget()
 {
-    if (m_targetPid != 0 && !targetProcessIsRunning(m_targetPid)) {
+    if (m_targetPid != 0 && (!targetProcessIsRunning(m_targetPid) ||
+        (m_transaction && !m_transaction->processStart.isEmpty() && MappingService::processStartFor(m_targetPid) != m_transaction->processStart))) {
         const quint32 exitedPid = m_targetPid;
         m_pendingAttachPid = 0;
         m_detachTimedOut = false;
@@ -543,6 +607,7 @@ bool OverlayManager::closeSessionTransport()
     m_authenticated = false;
     m_loaderKind = LoaderKind::None;
     m_agentReadBuffer.clear();
+    m_agentReadScheduled = false;
 
     if (m_agentSocket) {
         disconnect(m_agentSocket, nullptr, this, nullptr);
@@ -572,6 +637,10 @@ void OverlayManager::setState(State state)
     const bool wasAttached = attached();
     const bool wasBusy = busy();
     m_state = state;
+    if (m_transaction && state == State::Active && m_transaction->valid) {
+        m_transaction->state = AttachTransaction::State::Active;
+        m_mappingService.transactionEvent("TRANSACTION_COMMIT", "Agent authenticated and renderer active");
+    }
     emit stateChanged();
     if (wasAttached != attached())
         emit attachedChanged();
@@ -615,6 +684,7 @@ void OverlayManager::setErrorState(const QString &code, const QString &detail)
 
 void OverlayManager::fail(const QString &code, const QString &detail)
 {
+    if (m_transaction) { m_transaction->state = AttachTransaction::State::Failed; m_transaction->invalidate(); }
     (void) closeSessionTransport();
     setRenderer({});
     resetGameState();

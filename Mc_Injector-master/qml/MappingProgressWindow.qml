@@ -31,7 +31,7 @@ ApplicationWindow {
                 Label { text: "运行时映射 · 每一个结果都有来源"; color: host.secondaryTextColor }
             }
             Item { Layout.fillWidth: true }
-            Label { text: "ARCVEIL  /  v55.9"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
+            Label { text: "ARCVEIL  /  v56.4"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
         }
         RowLayout {
             Layout.fillWidth: true; spacing: 10
@@ -212,8 +212,8 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true; spacing: 12
             Label { Layout.fillWidth: true; text: MappingProgress.status; textFormat: Text.PlainText; color: host.secondaryTextColor; wrapMode: Text.Wrap; font.pixelSize: 12 }
-            Button { objectName: "mappingStopMatching"; text: "停止匹配"; enabled: MappingProgress.matchingEnabled; onClicked: MappingProgress.stopMatching() }
-            Button { text: "继续匹配"; visible: !MappingProgress.matchingEnabled && !MappingProgress.successful; enabled: MappingService.busy; onClicked: MappingProgress.resumeMatching() }
+            Button { objectName: "mappingStopMatching"; text: "Pause Automatic Matching"; enabled: MappingProgress.matchingEnabled; onClicked: MappingProgress.stopMatching() }
+            Button { text: "Resume Automatic Matching"; visible: !MappingProgress.matchingEnabled && !MappingProgress.successful; enabled: MappingService.busy; onClicked: MappingProgress.resumeMatching() }
             Button { text: "关闭窗口"; onClicked: window.close() }
         }
         Label { text: "关闭窗口不会停止后台任务。停止匹配会暂停后续 snapshot watch / retry，也不会分离 Agent。"; color: host.secondaryTextColor; font.pixelSize: 11 }

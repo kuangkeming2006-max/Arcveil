@@ -49,17 +49,20 @@ void OverlayManager::acceptAgentConnection()
         m_agentSocket = candidate;
         candidate->setReadBufferSize(kMaximumAgentMessageBytes + 1);
         m_agentReadBuffer.clear();
-        connect(candidate, &QLocalSocket::readyRead,
-                this, &OverlayManager::readAgentMessages);
-        connect(candidate, &QLocalSocket::disconnected,
-                this, &OverlayManager::handleAgentDisconnected);
+        const auto id = transactionId();
+        connect(candidate, &QLocalSocket::readyRead, this, [this, candidate, id] {
+            if (m_agentSocket == candidate && transactionId() == id) readAgentMessages();
+        });
+        connect(candidate, &QLocalSocket::disconnected, this, [this, candidate, id] {
+            if (m_agentSocket == candidate && transactionId() == id) handleAgentDisconnected();
+        });
         readAgentMessages();
     }
 }
 
 void OverlayManager::readAgentMessages()
 {
-    if (!m_agentSocket)
+    if (!m_agentSocket || !m_transaction)
         return;
 
     QLocalSocket *const source = m_agentSocket;
@@ -115,7 +118,10 @@ void OverlayManager::readAgentMessages()
         (source->bytesAvailable() > 0 || m_agentReadBuffer.contains('\n')) &&
         !m_agentReadScheduled) {
         m_agentReadScheduled = true;
-        QTimer::singleShot(1, this, [this] {
+        const auto id = transactionId();
+        QPointer<QLocalSocket> pendingSource(source);
+        QTimer::singleShot(1, this, [this, id, pendingSource] {
+            if (transactionId() != id || m_agentSocket != pendingSource) return;
             m_agentReadScheduled = false;
             readAgentMessages();
         });

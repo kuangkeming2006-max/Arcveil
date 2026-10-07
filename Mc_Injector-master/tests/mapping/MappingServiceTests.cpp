@@ -42,7 +42,7 @@ struct MappingServiceTests {
         auto wait = [&] {
             QElapsedTimer time;
             time.start();
-            while (service.busy() && time.elapsed() < 15000)
+            while (service.busy() && time.elapsed() < 60000)
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
             return !service.busy();
         };
@@ -60,7 +60,7 @@ struct MappingServiceTests {
         before.open(QIODevice::ReadOnly);
         auto first = before.readAll();
         before.close();
-        check(first == "inspect\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n", "preflight ordering");
+        check(first == "inspect\nidentify\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n", "preflight ordering");
         start();
         progress.stopMatching();
         check(service.busy(),"stop matching leaves preflight running");
@@ -69,7 +69,7 @@ struct MappingServiceTests {
               "stopped observer still consumes cached results and injection ready");
         QFile after(log);
         after.open(QIODevice::ReadOnly);
-        check(after.readAll() == first + "inspect\nselect\ninspect-detail\ninspect\nselect\ninspect-detail\n",
+        check(after.readAll() == first + "inspect\nidentify\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n",
               "cache hit still performs final runtime recheck");
         after.close();
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "changed");

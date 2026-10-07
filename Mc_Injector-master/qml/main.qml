@@ -77,7 +77,7 @@ ApplicationWindow {
                                                    || (activeTargetPid === 0 ? "" : "PID " + activeTargetPid))
     readonly property var setupNavigationItems: [
         { "icon": "⌕", "label": "Scanner", "description": "Discover Java processes", "route": "scanner" },
-        { "icon": "i", "label": "About", "description": "Arcveil · v56.2", "route": "about" },
+        { "icon": "i", "label": "About", "description": "Arcveil · v56.4", "route": "about" },
         { "icon": "⚙", "label": "Settings", "description": "Discovery preferences", "route": "settings" }
     ]
     // Process-specific information architecture. Hypixel is intentionally a
@@ -270,8 +270,6 @@ ApplicationWindow {
     }
 
     function clearScannerSelection() {
-        if (app.injectionInProgress)
-            OverlayManager.detach()
         pendingProcess = ({})
         ProcessScanner.selectProcess(0)
         ProcessScanner.refreshOnce()
@@ -281,7 +279,7 @@ ApplicationWindow {
         target: ProcessScanner
 
         function onSelectedPidChanged() {
-            if (!app.hasSelectedProcess)
+            if (!app.hasSelectedProcess && !app.sessionAvailable && !OverlayManager.busy)
                 app.activeRoute = "scanner"
         }
 
@@ -363,6 +361,7 @@ ApplicationWindow {
         onBrowseRequested: app.browseProcesses()
         onReturnRequested: app.returnToSession()
         onClearSelectionRequested: app.clearScannerSelection()
+        onCancelAttachRequested: OverlayManager.cancelAttach()
         onPaneWidthRequested: function(paneWidth) { app.requestedNavigationPaneWidth = paneWidth }
         onPaneWidthCommitted: AppSettings.navigationPaneWidth = app.requestedNavigationPaneWidth
     }
@@ -419,6 +418,7 @@ ApplicationWindow {
                 onBrowseRequested: app.browseProcesses()
                 onAttachRequested: function(pid) { OverlayManager.attachToProcess(pid) }
                 onDetachRequested: OverlayManager.detach()
+                onCancelAttachRequested: OverlayManager.cancelAttach()
             }
 
             // Hypixel official API -------------------------------------------

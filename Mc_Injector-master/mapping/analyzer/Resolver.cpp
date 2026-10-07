@@ -1,4 +1,5 @@
 #include "Resolver.h"
+#include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <algorithm>
 #include <set>
@@ -11,21 +12,25 @@ std::string render(const std::string& expression,const Json& symbols){std::strin
 std::vector<std::string> values(const Json& value){try{return {value.string()};}catch(const std::bad_variant_access&){std::vector<std::string> out;for(const auto&v:value.array())out.push_back(v.string());return out;}}
 void contractCheck(const Json& contracts,const Json& symbols){if(contracts.at("contractVersion").integer()!=1||contracts.at("symbols").object().size()!=symbols.object().size())throw std::runtime_error("logical contract/schema mismatch");for(const auto&[key,v]:symbols.object())(void)contracts.at("symbols").at(key);}
 struct Method {const Json* json=nullptr;CodeShape code;};
-struct Class {const Json* json=nullptr;std::vector<Method> methods;std::string structure;bool supported=true;};
+struct Class {const Json* json=nullptr;std::vector<Method> methods;std::string structure, metadataStructure;bool supported=true;};
 struct Model {
     Json snapshot;std::vector<Class> classes;
     mutable std::map<const Json*,std::vector<std::string>> usageIndex;mutable bool usagesReady=false;
     std::map<std::string,std::vector<const Class*>> nameIndex;
     explicit Model(const Json& input,bool code=false):snapshot(inspectSnapshot(input)){
         for(const auto& c:snapshot.at("classes").array()){
-            Class klass;klass.json=&c;Json::Array fs,ms;
+            Class klass;klass.json=&c;Json::Array fs,ms,metadataMethods;
             for(const auto& f:c.at("fields").array())fs.emplace_back(std::to_string(f.at("modifiers").integer()&0xd8)+descriptorShape(f.at("descriptor").string()));
+            const auto codes = code ? normalizeClassBytecode(c) : std::vector<CodeShape>{};
+            std::size_t methodIndex = 0;
             for(const auto& m:c.at("methods").array()){
-                Method method{&m,{}};if(code)method.code=normalizeBytecode(c,m);klass.supported &= method.code.supported;
+                Method method{&m,{}};if(code)method.code=codes[methodIndex++];klass.supported &= method.code.supported;
+                metadataMethods.emplace_back(std::to_string(m.at("modifiers").integer()&0x5f8)+descriptorShape(m.at("descriptor").string())+":");
                 ms.emplace_back(std::to_string(m.at("modifiers").integer()&0x5f8)+descriptorShape(m.at("descriptor").string())+":"+(code?(method.code.supported?method.code.fingerprint:"unsupported"):""));klass.methods.push_back(std::move(method));
             }
-            auto order=[](const Json&a,const Json&b){return a.string()<b.string();};std::sort(fs.begin(),fs.end(),order);std::sort(ms.begin(),ms.end(),order);
+            auto order=[](const Json&a,const Json&b){return a.string()<b.string();};std::sort(fs.begin(),fs.end(),order);std::sort(ms.begin(),ms.end(),order);std::sort(metadataMethods.begin(),metadataMethods.end(),order);
             Json::Array interfaces;for(const auto&i:c.at("interfaces").array())interfaces.emplace_back(descriptorShape(i.at("name").string()));std::sort(interfaces.begin(),interfaces.end(),order);
+            klass.metadataStructure=sha256(Json(Json::Object{{"fields",fs},{"methods",metadataMethods},{"modifiers",c.at("modifiers").integer()&0x7610},{"super",descriptorShape(c.at("super").at("name").string())},{"interfaces",interfaces}}).dump());
             klass.structure=sha256(Json(Json::Object{{"fields",fs},{"methods",ms},{"modifiers",c.at("modifiers").integer()&0x7610},{"super",descriptorShape(c.at("super").at("name").string())},{"interfaces",interfaces}}).dump());classes.push_back(std::move(klass));
         }
         for(const auto&c:classes)nameIndex[c.json->at("name").string()].push_back(&c);
@@ -84,6 +89,30 @@ Json stableClass(Json klass,const Json& snapshot) {
     for(auto& item:klass["interfaces"].array()) item["loaderKey"]=stableLoader(snapshot,item.at("loaderKey").string());
     return klass;
 }
+std::set<std::string> requiredClasses(const Json &contracts, const Json &symbols) {
+    std::set<std::string> result{"minecraftName"};
+    const auto add = [&](const Json &spec, const std::string &key) {
+        if (spec.at("kind").string() == "class") result.insert(key);
+        if (spec.contains("owner")) result.insert(spec.at("owner").string());
+        if (spec.contains("descriptor")) {
+            const auto text = spec.at("descriptor").string();
+            for (std::size_t i = 0; (i = text.find('{', i)) != std::string::npos;) {
+                const auto end = text.find('}', i); if (end == std::string::npos) break;
+                const auto value = symbols.at(text.substr(i + 1, end - i - 1)).string();
+                for (const auto &[name, candidate] : contracts.at("symbols").object())
+                    if (candidate.at("kind").string() == "class" && sig(symbols.at(name).string()) == value) result.insert(name);
+                i = end + 1;
+            }
+        }
+    };
+    for (const auto &[key, spec] : contracts.at("symbols").object()) if (spec.at("required").boolean()) add(spec, key);
+    for (const auto &group : contracts.at("requiredAlternatives").array())
+        for (const auto &key : group.array()) add(contracts.at("symbols").at(key.string()), key.string());
+    for (const auto &ctor : contracts.at("constructors").array()) if (ctor.at("required").boolean()) {
+        auto spec = ctor; spec["kind"] = "method"; add(spec, "");
+    }
+    return result;
+}
 Json symbolEvent(const std::string& key,const Json& value,bool ok,const std::string& reason,double confidence=1.0){return Json::Object{{"event","symbol"},{"symbol",key},{"mapping",value},{"confidence",ok?confidence:0.0},{"accepted",ok},{"evidence",Json::Array{reason}},{"reason",ok?"":reason}};}
 Json dictionaryValidation(const Json& dictionary,const Model& model,const Json& contracts,const Events& events){
     const auto& symbols=dictionary.at("symbols");contractCheck(contracts,symbols);
@@ -112,21 +141,40 @@ Json dictionaryValidation(const Json& dictionary,const Model& model,const Json& 
     }
     return Json::Object{{"valid",valid},{"dictionary",dictionary.at("id")},{"loaderKey",loader},{"symbols",results}};
 }
+Json retargetPack(Json pack, const std::string &family) {
+    if (family == "Unknown") return pack;
+    for (auto &p : pack["providers"].array()) {
+        p["family"] = family;
+        for (auto &d : p["dictionaries"].array()) {
+            d["family"] = family;
+            if (family == "Badlion") d["detection"] = Json::Array{
+                Json::Object{{"match", 1}, {"value", "Lnet/badlion/"}, {"confidence", 250}},
+                Json::Object{{"match", 1}, {"value", "Lcom/badlion/"}, {"confidence", 250}},
+                Json::Object{{"match", 2}, {"value", "badlion"}, {"confidence", 250}}};
+        }
+    }
+    return pack;
+}
 Json selectedPack(const Json& pack,const Json& provider,const Json& dictionary){auto result=pack;auto p=provider;p["dictionaries"]=Json::Array{dictionary};result["providers"]=Json::Array{p};return result;}
 std::string detectedFamily(const Json& pack,const Model& model){
     bindings::ClientEnvironment environment;
     const auto parsed=bindings::parseMappingPack(pack);
     if(model.snapshot.contains("launchEvidence"))for(const auto& evidence:model.snapshot.at("launchEvidence").array())for(const auto&p:parsed.providers)if(evidence.at("family").string()==bindings::clientFamilyName(p.family))environment.addEvidence(p.family,static_cast<std::uint16_t>(evidence.at("confidence").integer()));
     for(const auto&p:parsed.providers)for(const auto&d:p.dictionaries)for(const auto&pattern:d.detection)for(const auto&c:model.classes){const auto&name=c.json->at("name").string();if((pattern.match==bindings::DetectionMatch::ExactClassSignature&&name==pattern.value)||(pattern.match==bindings::DetectionMatch::ClassSignaturePrefix&&name.starts_with(pattern.value)))environment.addEvidence(d.family,pattern.confidence);}
+    if (model.snapshot.contains("launchEvidence")) for (const auto &e : model.snapshot.at("launchEvidence").array())
+        if (e.at("family").string() == "Badlion") environment.addEvidence(bindings::ClientFamily::Badlion, e.at("confidence").integer());
+    for (const auto &c : model.classes) if (c.json->at("name").string().starts_with("Lnet/badlion/") ||
+        c.json->at("name").string().starts_with("Lcom/badlion/")) environment.addEvidence(bindings::ClientFamily::Badlion, 250);
     return bindings::clientFamilyName(environment.family());
 }
 }
 Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *reference,
-                            const Json &contracts, const Events &events, bool allowEmpty) {
+                            const Json &contracts, const Events &events, bool allowEmpty, bool validationOnly, const Json *state) {
     (void)bindings::parseMappingPack(pack);
     Model live(lite);
     if (!lite.contains("detailLevel") || lite.at("detailLevel").string() != "lite")
         throw std::runtime_error("candidate selection requires lite index");
+    (void)state;
     std::set<const Class *> selected;
     std::map<const Class *, std::string> reasons;
     // Authored exact symbols are scope requests, never automatically accepted mappings.
@@ -137,8 +185,9 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
             const auto *anchor = live.find(sig(symbols.at("minecraftName").string()));
             if (!anchor)
                 continue;
+            const auto required = requiredClasses(contracts, symbols);
             for (const auto &[key, spec] : contracts.at("symbols").object())
-                if (spec.at("kind").string() == "class") {
+                if (spec.at("kind").string() == "class" && (!validationOnly || required.contains(key))) {
                     if (const auto *c = live.find(sig(symbols.at(key).string()),
                                                   anchor->json->at("loaderKey").string())) {
                         selected.insert(c);
@@ -146,7 +195,7 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
                     }
                 }
         }
-    if (reference) {
+    if (reference && !validationOnly) {
         Model old(*reference);
         std::map<std::string, std::vector<const Class *>> shapes;
         for (const auto &c : live.classes)
@@ -213,16 +262,151 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
                                                ? lite.at("launchEvidence")
                                                : Json(Json::Array{})}};
 }
+Json partitionDetailReuse(Json selection, const Json &lite, const Json &prior) {
+    if (lite.at("pid") != prior.at("pid") || lite.at("processStart") != prior.at("processStart"))
+        throw std::runtime_error("detail reuse cannot cross transaction process identity");
+    Json::Array capture, reused;
+    for (const auto &item : selection.at("classes").array()) {
+        const Json *current = nullptr, *saved = nullptr;
+        for (const auto &c : lite.at("classes").array())
+            if (c.at("name") == item.at("name") && c.at("loaderKey") == item.at("loaderKey")) current = &c;
+        if (current) for (const auto &c : prior.at("classes").array())
+            if (c.at("name") == current->at("name") &&
+                stableClass(classMetadata(c), prior) == stableClass(classMetadata(*current), lite)) saved = &c;
+        if (saved) reused.push_back(item); else capture.push_back(item);
+    }
+    selection["classes"] = capture; selection["reuseClasses"] = reused;
+    return selection;
+}
+Json mergeDetailReuse(Json detail, const Json &selection, const Json &prior) {
+    if (detail.at("pid") != prior.at("pid") || detail.at("processStart") != prior.at("processStart"))
+        throw std::runtime_error("detail reuse crossed process identity");
+    // Only metadata-checked, same-instance detail captured in this transaction is reusable.
+    std::map<std::string, std::string> rebound;
+    for (const auto &old : prior.at("loaderInstances").array())
+        for (const auto &now : selection.at("loaderBindings").array())
+            if (old.at("type") == now.at("type") && old.at("instance") == now.at("instance"))
+                rebound[old.at("loaderKey").string()] = now.at("loaderKey").string();
+    rebound["bootstrap"] = "bootstrap";
+    for (const auto &item : selection.at("reuseClasses").array()) {
+        bool found = false;
+        for (const auto &old : prior.at("classes").array()) {
+            const auto key = old.at("loaderKey").string();
+            if (old.at("name") != item.at("name") || !rebound.contains(key) || rebound.at(key) != item.at("loaderKey").string()) continue;
+            auto klass = old;
+            const auto rebind = [&](Json &ref) {
+                const auto loader = ref.at("loaderKey").string();
+                if (!rebound.contains(loader)) throw RuntimeChanged("reuse defining loader disappeared");
+                ref["loaderKey"] = rebound.at(loader);
+            };
+            rebind(klass); rebind(klass["super"]);
+            for (auto &i : klass["interfaces"].array()) rebind(i);
+            if (sha256(classMetadata(klass).dump()) != item.at("metadataDigest").string())
+                throw RuntimeChanged("reuse class metadata changed");
+            detail["classes"].array().push_back(klass); found = true; break;
+        }
+        if (!found) throw RuntimeChanged("reuse class identity unavailable");
+    }
+    detail["loaderInstances"] = selection.at("loaderBindings");
+    detail["captureScope"] = selection;
+    return refreshSnapshotFingerprint(std::move(detail));
+}
+Json requiredClassNames(const Json &contracts, const Json &symbols) {
+    Json::Array names;
+    for (const auto &key : requiredClasses(contracts, symbols))
+        if (contracts.at("symbols").at(key).at("kind").string() == "class" && !symbols.at(key).string().empty())
+            names.push_back(symbols.at(key));
+    return names;
+}
+Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts) {
+    Model model(snapshot);
+    const auto family = detectedFamily(pack, model);
+    std::set<const Class *> selected;
+    bool complete = false;
+    for (const auto &provider : pack.at("providers").array())
+        for (const auto &dict : provider.at("dictionaries").array()) {
+            if (family != "Unknown" && dict.at("family").string() != family) continue;
+            const auto &symbols = dict.at("symbols");
+            contractCheck(contracts, symbols);
+            const auto *anchor = model.find(sig(symbols.at("minecraftName").string()));
+            if (!anchor) continue;
+            bool ready = true;
+            const auto required = requiredClasses(contracts, symbols);
+            for (const auto &[key, spec] : contracts.at("symbols").object())
+                if (spec.at("kind").string() == "class" && required.contains(key) && !symbols.at(key).string().empty()) {
+                    const auto *c = model.find(sig(symbols.at(key).string()), anchor->json->at("loaderKey").string());
+                    if (c) selected.insert(c); else if (spec.at("required").boolean()) ready = false;
+                }
+            complete |= ready;
+        }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        const auto current = selected;
+        for (const auto *c : current) {
+            const auto add = [&](const Json &ref) {
+                if (const auto *base = model.related(ref)) changed |= selected.insert(base).second;
+            };
+            add(c->json->at("super"));
+            for (const auto &i : c->json->at("interfaces").array()) add(i);
+        }
+    }
+    const auto stable = [&](Json klass) {
+        const auto loader = [&](const Json &key) -> Json {
+            if (snapshot.contains("loaderInstances"))
+                for (const auto &item : snapshot.at("loaderInstances").array())
+                    if (item.at("loaderKey") == key) return item.at("type");
+            return key.string() == "bootstrap" ? Json("bootstrap") : Json("defining-loader");
+        };
+        klass["loaderKey"] = loader(klass.at("loaderKey"));
+        klass["super"]["loaderKey"] = loader(klass.at("super").at("loaderKey"));
+        for (auto &item : klass["interfaces"].array()) item["loaderKey"] = loader(item.at("loaderKey"));
+        return classMetadata(klass);
+    };
+    Json::Array metadata, detail;
+    const bool lite = snapshot.contains("detailLevel") && snapshot.at("detailLevel").string() == "lite";
+    for (const auto *c : selected) {
+        auto klass = stable(*c->json);
+        metadata.push_back(klass);
+        if (!lite) {
+            Json::Array methods;
+            const auto codes = normalizeClassBytecode(*c->json);
+            std::size_t methodIndex = 0;
+            for (const auto &method : c->json->at("methods").array()) {
+                const auto &code = codes[methodIndex++];
+                methods.push_back(Json::Object{{"name", method.at("name")},
+                    {"descriptor", method.at("descriptor")}, {"code", code.supported ? code.fingerprint :
+                        sha256(method.at("bytecode").string() + c->json->at("constantPool").string())},
+                    {"supported", code.supported}});
+            }
+            std::sort(methods.begin(), methods.end(), [](const Json &a, const Json &b) { return a.dump() < b.dump(); });
+            klass["normalizedMethods"] = methods;
+            detail.push_back(klass);
+        }
+    }
+    auto sort = [](Json::Array &items) { std::sort(items.begin(), items.end(), [](const Json &a, const Json &b) { return a.dump() < b.dump(); }); };
+    sort(metadata); sort(detail);
+    const auto version = pack.at("gameVersion");
+    const auto digest = [&](const Json::Array &classes, const char *domain) {
+        return sha256(Json(Json::Object{{"identityVersion", 1}, {"domain", domain},
+            {"family", family}, {"minecraftVersion", version}, {"contracts", sha256(contracts.dump())},
+            {"analyzerRevision", 5}, {"schemaVersion", pack.at("schemaVersion")}, {"classes", classes}}).dump());
+    };
+    return Json::Object{{"family", family}, {"minecraftVersion", version},
+        {"metadataIdentity", complete ? digest(metadata, "metadata") : ""},
+        {"mappingIdentity", complete && !lite ? digest(detail, "installed-structure") : ""},
+        {"identityComplete", complete}, {"identityClasses", double(selected.size())}};
+}
 Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
     if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");
     (void)bindings::parseMappingPack(pack);Model model(snapshot);Json::Array attempts;
     const auto family=detectedFamily(pack,model);auto providers=pack.at("providers").array();std::stable_sort(providers.begin(),providers.end(),[](const Json&a,const Json&b){return a.at("priority").integer()>b.at("priority").integer();});
     for(const auto&p:providers)for(const auto&d:p.at("dictionaries").array()){
-        if(family!="Unknown"&&d.at("family").string()!=family)continue;
+        if(family!="Unknown"&&d.at("family").string()!=family && !(family=="Badlion" && (d.at("family").string()=="Vanilla" || d.at("family").string()=="Forge")))continue;
         auto result=dictionaryValidation(d,model,contracts,{});attempts.push_back(result);
         if(result.at("valid").boolean()){
             if(events)for(const auto&e:result.at("symbols").array())events(e);
-            result["injectionReady"]=true;result["level"]="live-members";result["fingerprint"]=model.snapshot.at("fingerprint");result["pack"]=selectedPack(pack,p,d);result["packDigest"]=sha256(result.at("pack").dump());return result;
+            result["injectionReady"]=true;result["level"]="live-members";result["fingerprint"]=model.snapshot.at("fingerprint");result["pack"]=retargetPack(selectedPack(pack,p,d),family);result["packDigest"]=sha256(result.at("pack").dump());return result;
         }
     }
     return Json::Object{{"valid",false},{"injectionReady",false},{"level","live-members"},{"reason","no family-compatible dictionary passed required live bindings"},{"attempts",attempts},{"fingerprint",model.snapshot.at("fingerprint")}};
@@ -306,7 +490,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             }
             return sha256(Json(Json::Object{{"mapping",value},{"evidence",evidence}}).dump());
         };
-        Json::Object accepted;Json::Array unresolved;
+        Json::Object accepted;Json::Array unresolved;Json::Object unresolvedReasons;
         if(stateBound) for(const auto&[key,saved]:state->at("accepted").object()) symbols[key]=saved.at("mapping");
         const auto retainedValidation=stateBound?dictionaryValidation(dict,live,contracts,{}):Json();
         std::map<std::string,bool> retainedValid;
@@ -360,7 +544,18 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             if(ok)symbols[key]=value;else complete=false;
             auto e=symbolEvent(key,ok?value:Json(nullptr),ok,reason,0.99);e["threshold"]=0.98;e["margin"]=ok?1.0:0.0;e["nameWeight"]=0.0;if(ok && spec.contains("owner") && baseline){const auto* owner=baseline->find(sig(original.at("symbols").at(spec.at("owner").string()).string()));if(owner && classes.contains(owner))e["runtimeOwner"]=binary(classes.at(owner)->json->at("name").string());}if(incremental) {
                 if(ok) {e["bindingProof"]=proof(key,value);e["provisional"]=true;accepted[key]=e;}
-                else unresolved.emplace_back(key);
+                else {
+                    unresolved.emplace_back(key);
+                    bool missing = !baseline;
+                    if (baseline) {
+                        const auto ownerKey = kind == "class" ? key : (spec.contains("owner") ? spec.at("owner").string() : "minecraftName");
+                        const auto *old = baseline->find(sig(original.at("symbols").at(ownerKey).string()));
+                        if (!old) missing = true;
+                        else missing = std::none_of(live.classes.begin(), live.classes.end(),
+                            [&](const Class &c) { return c.metadataStructure == old->metadataStructure; });
+                    }
+                    unresolvedReasons[key] = missing ? "missing-runtime-class" : "stable-ambiguity";
+                }
             }
             results.push_back(e);if(events){events(e);events(Json::Object{{"event","progress"},{"phase","symbols"},{"completed",int(results.size())},{"total",int(original.at("symbols").object().size())}});}
         }
@@ -383,13 +578,13 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             const int score=requiredMatched*10000+int(accepted.size());
             if(score>bestScore) {
                 bestScore=score;
-                auto draft=selectedPack(pack,p,dict);draft["packVersion"]=pack.at("packVersion").integer()+1;
+                auto draft=retargetPack(selectedPack(pack,p,dict), detectedFamily(pack,live));draft["packVersion"]=pack.at("packVersion").integer()+1;
                 best=Json::Object{{"candidateVersion",1},{"stateVersion",1},{"complete",requiredComplete},
                     {"requiredComplete",requiredComplete},{"fingerprint",live.snapshot.at("fingerprint")},
                     {"packDigest",sha256(pack.dump())},{"contractDigest",sha256(contracts.dump())},
                     {"pid",target.at("pid")},{"processStart",target.at("processStart")},
                     {"referenceFingerprint",baseline?baseline->snapshot.at("fingerprint"):Json("")},
-                    {"dictionary",original.at("id")},{"accepted",accepted},{"unresolved",unresolved},
+                    {"dictionary",original.at("id")},{"accepted",accepted},{"unresolved",unresolved},{"unresolvedReasons",unresolvedReasons},
                     {"symbols",results},{"pack",draft}};
             }
             continue;

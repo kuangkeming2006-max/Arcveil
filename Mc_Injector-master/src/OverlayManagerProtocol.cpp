@@ -43,7 +43,11 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         return;
 
     const QByteArray type = fields.first();
+    if (m_transaction && !m_transaction->valid && type != QByteArrayLiteral("DETACH_COMPLETE")) return;
     if (type == QByteArrayLiteral("HELLO")) {
+        if (!m_transaction || !m_transaction->valid || m_agentTransactionId != transactionId() ||
+            MappingService::processStartFor(m_targetPid) != m_transaction->processStart) return;
+        if (m_authenticated) return;
         bool pidValid = false;
         const quint32 reportedPid = fields.value(2).toUInt(&pidValid);
         const QByteArray expectedToken = m_pipeToken.toUtf8();

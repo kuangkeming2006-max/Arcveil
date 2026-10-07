@@ -83,3 +83,11 @@ unhealthy. No setter or post-freeze registration capability was introduced.
 - movement 与 sprint 接管需要实际 Silent Lock 和 control adaptation；MovementIntentResolver 输出原版八方向及输入自带的每轴减速，物理 tick 仍由消费者提交。
 - Smart Hotbar 的 consumed-key callback 现在可以直接改选中 hotbar slot，不调用 syncCurrentPlayItem/windowClick；原版 controller 在正常路径同步手持物品。主背包交换仍排队到 input PRE，并保留动作释放、neutral/resume movement packet 边界。
 - 手动切槽会使旧槽位的自动补货请求失效。onItemUse 仍只观察与排队。
+
+## v56.4 family boundary
+
+MappingProvider/MappingPack add an explicit Badlion family. A live validated base
+Minecraft dictionary may be retargeted to detected Badlion before export; this does
+not grant confidence from a family string. Cache references are family scoped in
+mapping-pipeline, and Lunar is never a strong reference solely through lastVerified.
+Agent registry publication/freeze and Gameplay BindingCache remain unchanged.

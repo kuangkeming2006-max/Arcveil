@@ -62,6 +62,7 @@ signals:
     void scanProgressChanged();
 
 private:
+    friend struct ControllerResponsivenessTests;
     struct ProcessInfo {
         quint32 pid = 0;
         QString executableName;

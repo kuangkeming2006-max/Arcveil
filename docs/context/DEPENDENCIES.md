@@ -165,3 +165,18 @@ and normal injection authorization still begin only at MappingService.ready().
 ### v54 callback 行为边界补充
 
 jvm-hooks 的 hotbar consumed-key callback → game-bindings：可在该按键阶段本地选择 hotbar currentItem，包同步由原版 controller 负责；背包 windowClick 仍留在 input PRE。callback 签名、Java bridge 和 IPC 均未改动。
+
+## Attach transaction/cache v56.4 (current)
+
+OverlayManager -> shared AttachTransaction -> MappingService -> capture/resolve/live
+validation/cache; typed readyForTransaction UUID returns loading authority to the
+same owner. QML selection has no edge to Agent session ownership. Cancel Attach ->
+OverlayManager.cancelAttach invalidates preflight/loading; Active Detach -> existing
+Agent DETACH IPC. MappingProgressWindow close only changes presentation visibility.
+
+Cache candidate/reference selection is family/version/identity scoped. Analyzer
+required metadata identity supplies cheap candidate detection; current selected live
+validation + installed mapping identity + final runtime/PID check authorize reuse.
+Cache v2 immutable objects publish through an atomic index pointer; old runtime
+fingerprints are retained as diagnostic receipts, not reusable keys. Probe-v8 uses
+scoped lite/detail and remembered transport; no registry mutation or new Agent IPC.

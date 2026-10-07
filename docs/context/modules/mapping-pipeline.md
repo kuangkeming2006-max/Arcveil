@@ -209,3 +209,56 @@ Tests: DynamicMappingServiceTests (100-symbol external subprocess through produc
 service), Test-Incremental.py (real Analyzer), MappingServiceTests,
 MappingProgressTests, ControllerUiSmoke and existing capture/agent regressions.
 Evidence and limitations: P/tests/mapping/V55_9_VALIDATION.md.
+
+## v56.4 reusable cache and transaction (current)
+
+Start at P/src/AttachTransaction.h, MappingService.h, mapping/cache/MappingCache.h,
+and mapping/analyzer/Resolver.h. Shared Attach ownership covers capture, resolve,
+validation and loading; typed ready carries the UUID. Cancellation invalidates the
+owner/generation, stops timers and kills the Analyzer process tree through a Windows
+job object. Old generations cannot emit ready or publish cache.
+
+Cache v2 keys verified objects by mappingIdentity (required class/hierarchy metadata,
+installed normalized method structure, family, Minecraft version, schema/contracts
+and analyzer revision 5). PID/processStart, unrelated classes, enumeration order,
+loader instance and captureScope.liteFingerprint are excluded. runtimeFingerprint
+retains current class/loader continuity evidence for the transaction's final check;
+normalized snapshot v2 excludes captureScope and launch hint duplication. Legacy v1
+snapshots are verified under their original digest before normalization upgrade.
+Legacy verified entries can be same-family references but cannot bypass live validation.
+
+Fast path: cheap identity-lite/family detection -> verified family/version candidates
+-> metadataIdentity selection -> required-only detail + cached-pack live validation
+-> installed mappingIdentity equality -> final process/runtime recheck -> ready.
+Incomplete cold-start required classes can be loaded without initialization through
+the cached pack's anchor loader, then the required scope is checked again. Miss or
+failed live evidence enters automatic matching; an authored bootstrap is independently
+validated first when no reusable candidate exists. The known-class warmup pass remains
+scoped; broad structural inventory is only needed if authored evidence still fails.
+Reference order: exact stable identity, same family/version, same family, explicit
+Vanilla base/version, none. lastVerified is not reference authority.
+
+Watch uses 2.5--5 s backoff. Stable ambiguity pauses automatic polling; missing classes
+continue watching. Detail reuse partitions unchanged classes by metadata and the
+same PID/start/loader instance, captures changed/new affected classes, then merges
+and rechecks the selected scope. The final pass never reuses captured detail.
+MappingProbe-v8.dll is the resident protocol boundary; Standard Attach unsupported
+is remembered for PID/processStart, selecting NativeLoader on later captures/loading.
+
+Console events include TRANSACTION_BEGIN/CANCEL/COMMIT, CACHE_LOOKUP (cacheKey,
+mappingIdentity, hit/reason), CACHE_PROMOTE, REFERENCE_SELECTION (both families and
+identities/reason) and CAPTURE_TRANSPORT_SELECTED. COMMIT means Agent renderer Active;
+MappingVerified alone cannot claim an injected active session.
+
+Tests: TransactionCacheTests executes the real Analyzer/Resolver/validator against
+full-schema fixtures with only capture transport substituted, covering A--H/J.
+ControllerResponsivenessTests covers old ready suppression, process switch and Active
+selection independence. LiveMappingSmoke runs two real attach/detach cycles with a
+persistent cache and asserts second AUTO_RESOLVE count == 0. Evidence and limits:
+P/tests/mapping/V56_4_VALIDATION.md.
+
+Fast candidate/known-pack discovery hashes pack/proof only, avoiding synchronous
+reads of every historical snapshot. Full source snapshot integrity is checked only
+for the chosen structural reference (trying the next ranked reference on corruption).
+Current live validation remains mandatory for every candidate. runtimeFingerprint is
+also exposed explicitly as a Qt property and JSONL diagnostic alias.

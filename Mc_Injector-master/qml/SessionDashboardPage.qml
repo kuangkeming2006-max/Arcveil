@@ -9,6 +9,7 @@ Item {
     signal browseRequested()
     signal attachRequested(int pid)
     signal detachRequested()
+    signal cancelAttachRequested()
     id: sessionPage
     ColumnLayout {
         anchors.fill: parent
@@ -262,14 +263,14 @@ Item {
 
                     MaterialButton {
                         Layout.alignment: Qt.AlignLeft
-                        text: "Detach overlay"
+                        text: OverlayManager.rendererActive ? "Detach" : "Cancel Attach"
                         iconText: "×"
                         filled: false
                         foregroundColor: "#BA1A1A"
                         outlineColor: "#BA1A1A"
                         enabled: OverlayManager.attached
                         visible: OverlayManager.attached
-                        onClicked: sessionPage.detachRequested()
+                        onClicked: { if (OverlayManager.rendererActive) sessionPage.detachRequested(); else sessionPage.cancelAttachRequested() }
                     }
                 }
             }

@@ -4,8 +4,11 @@
 using namespace mapping_cache;
 
 void MappingService::stopMatching() {
+    if (!m_busy || !current()) return;
     m_watchEnabled = false;
     m_watchTimer.stop();
+    m_transaction->state = AttachTransaction::State::MappingPaused;
+    m_status = "Attach waiting for mapping; resume to continue";
     // In-flight capture/resolve/final validation owns its current generation.
     // Stopping watch neither cancels that job nor changes OverlayManager's state.
     event({{"event", "snapshot-watch"},
@@ -14,29 +17,46 @@ void MappingService::stopMatching() {
     emit changed();
 }
 void MappingService::resumeMatching() {
-    if (!m_busy || m_watchEnabled)
+    if (!m_busy || !current() || m_watchEnabled)
         return;
+    const auto generation = m_generation;
     m_watchEnabled = true;
+    m_stableAmbiguity = false;
+    m_transaction->state = AttachTransaction::State::MappingResolving;
+    m_pendingChange = true;
     event({{"event", "snapshot-watch"}, {"state", "running"}});
+    if (generation != m_generation || !current()) return;
     emit changed();
+    if (generation != m_generation || !current()) return;
     if (!m_process) {
+        disconnect(&m_watchTimer, nullptr, this, nullptr);
+        connect(&m_watchTimer, &QTimer::timeout, this, [this, generation] {
+            if (generation == m_generation && current()) watchLite();
+        });
         m_watchTimer.start(m_watchInterval);
     }
 }
 void MappingService::scheduleRetry(const QString &reason, bool unchanged) {
-    if (!m_busy)
+    if (!m_busy || !current())
         return;
+    const auto generation = m_generation;
     m_status =
-        m_watchEnabled ? "Waiting for runtime change" : "Matching paused; current attach retained";
+        m_watchEnabled ? "Attach waiting for runtime classes" : "Attach waiting for mapping; resume to continue";
     event({{"event", "waiting-for-runtime-change"},
            {"reason", reason},
            {"unresolved", QJsonArray::fromStringList(m_unresolved)},
            {"matched", m_provisional.size()},
            {"paused", !m_watchEnabled}});
-    if (m_watchEnabled) {
+    if (generation != m_generation || !current()) return;
+    if (m_watchEnabled && !m_stableAmbiguity) {
         event({{"event", "retry-scheduled"},
                {"delayMs", m_watchInterval},
                {"generation", double(m_snapshotGeneration)}});
+        if (generation != m_generation || !current()) return;
+        disconnect(&m_watchTimer, nullptr, this, nullptr);
+        connect(&m_watchTimer, &QTimer::timeout, this, [this, generation] {
+            if (generation == m_generation && current()) watchLite();
+        });
         m_watchTimer.start(m_watchInterval);
         if (unchanged)
             m_watchInterval = qMin(m_maxWatchInterval, m_watchInterval * 2);
@@ -54,7 +74,7 @@ void MappingService::watchLite() {
            {"state", "running"},
            {"detailLevel", "lite"},
            {"intervalMs", m_watchInterval}});
-    captureLite(CapturePhase::Watch);
+    captureLite(m_family.isEmpty() ? CapturePhase::Initial : CapturePhase::Watch);
 }
 bool MappingService::captureFailed(int code) {
     if (!code) {
@@ -85,9 +105,7 @@ void MappingService::captureLite(CapturePhase phase) {
     ++m_captureSerial;
     m_litePath = m_run + QString("/index-%1.jsonl").arg(m_captureSerial);
     if (phase == CapturePhase::Initial) {
-        m_reference = Cache(m_root).reference(m_contractDigest);
-        m_scopePack = m_reference.valid() ? m_reference.pack : m_defaultPack;
-        progressReference(m_reference);
+        m_scopePack = m_defaultPack;
         event({{"event", "step"},
                {"index", 1},
                {"state", "running"},
@@ -104,8 +122,13 @@ void MappingService::captureLite(CapturePhase phase) {
         "--java",  m_java,    "--helper",        m_helper,
         "--probe", m_probe,   "--native-loader", m_tools + "/McOverlayNativeLoader.exe",
         "--out",   m_litePath};
-    if (phase == CapturePhase::Initial)
-        args << "--pack" << m_defaultPack << "--contracts" << m_contracts;
+    {
+        args << "--pack" << (phase == CapturePhase::CacheWarmup ? m_hit.pack : m_defaultPack) << "--contracts" << m_contracts;
+        if (phase == CapturePhase::CacheWarmup) args << "--required-only";
+        else if (phase != CapturePhase::Initial || (!m_fullLite && !m_authoredWarmup)) args << "--detect-only";
+        if (!m_fullLite) args << "--identity-lite" << "--identity-packs" << m_identityPacksFile;
+    }
+    if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular)
         args << "--tools-jar" << m_toolsJar;
     launch(args, [this, phase](int code) {
@@ -122,7 +145,7 @@ void MappingService::captureLite(CapturePhase phase) {
             return;
         }
         if (phase == CapturePhase::Watch) {
-            const auto reference = Cache(m_root).reference(m_contractDigest);
+            const auto reference = Cache(m_root).reference(m_contractDigest, m_family, m_minecraftVersion, m_mappingIdentity);
             if (reference.revision != m_reference.revision && reference.valid()) {
                 m_reference = reference;
                 m_scopePack = reference.pack;
@@ -145,18 +168,22 @@ void MappingService::captureLite(CapturePhase phase) {
             }
         }
         m_observedLite = fingerprint;
-        selectDetail(phase);
+        if (phase == CapturePhase::Initial) identifyTarget();
+        else selectDetail(phase == CapturePhase::CacheWarmup ? CapturePhase::Initial : phase);
     });
 }
 void MappingService::selectDetail(CapturePhase phase) {
     m_selectionPath = m_run + QString("/selection-%1.json").arg(m_captureSerial);
     // Preserve authored-pack bootstrap across client families. The reference pack
     // describes source names; it must not hide classes available in the target pack.
-    const auto selectionPack = m_dynamic ? m_scopePack : m_defaultPack;
+    const auto selectionPack = m_cachePath ? m_hit.pack : (m_dynamic ? m_scopePack : m_defaultPack);
     QStringList args = {"select",   "--allow-empty", "--pack",    selectionPack, "--snapshot",
                         m_litePath, "--contracts",   m_contracts, "--out",       m_selectionPath};
-    if (m_reference.valid())
+    if (m_cachePath) args << "--validation-scope";
+    else if (m_reference.valid())
         args << "--reference" << m_reference.snapshot;
+    if (phase == CapturePhase::Watch && m_dynamic && !m_snapshot.isEmpty())
+        args << "--reuse-snapshot" << m_snapshot;
     launch(args, [this, phase](int code) {
         if (code) {
             fail("Analyzer cannot select detail scope: " +
@@ -164,6 +191,26 @@ void MappingService::selectDetail(CapturePhase phase) {
             return;
         }
         const auto selection = readObject(m_selectionPath);
+        if (m_cachePath && phase == CapturePhase::Initial) {
+            const auto detected = selection.value("identity").toObject().value("metadataIdentity").toString();
+            if (detected.isEmpty() || detected != m_hit.metadataIdentity) {
+                if (!selection.value("identity").toObject().value("identityComplete").toBool(true) && !m_candidateWarmed) {
+                    m_candidateWarmed = true;
+                    captureLite(CapturePhase::CacheWarmup);
+                    return;
+                }
+                event({{"event", "CACHE_LOOKUP"}, {"hit", false}, {"cacheKey", m_hit.mappingIdentity},
+                       {"mappingIdentity", m_hit.mappingIdentity}, {"reason", "required-class-metadata-changed"}});
+                ++m_candidateIndex;
+                m_candidateWarmed = false;
+                selectCacheCandidate();
+                return;
+            }
+            event({{"event", "CACHE_LOOKUP"}, {"hit", true}, {"cacheKey", m_hit.mappingIdentity},
+                   {"mappingIdentity", m_hit.mappingIdentity}, {"reason", "stable-metadata-candidate; live-validation-required"}});
+            m_status = "Cache HIT -> Live validation";
+            emit changed();
+        }
         m_nextRelevant = selection.value("relevantFingerprint").toString();
         if (m_nextRelevant.isEmpty()) {
             fail("Selection omitted relevant fingerprint");
@@ -178,7 +225,7 @@ void MappingService::selectDetail(CapturePhase phase) {
             scheduleRetry("No relevant class/metadata change", true);
             return;
         }
-        if (selection.value("classes").toArray().isEmpty()) {
+        if (selection.value("classes").toArray().isEmpty() && selection.value("reuseClasses").toArray().isEmpty()) {
             m_relevantFingerprint = m_nextRelevant;
             m_pendingChange = false;
             scheduleRetry("No detail candidates yet", true);
@@ -191,7 +238,7 @@ void MappingService::selectDetail(CapturePhase phase) {
                    {"relevantChanged", true}});
             const auto operation = m_generation, serial = m_captureSerial;
             QTimer::singleShot(m_debounceMs, this, [this, operation, serial] {
-                if (operation != m_generation || serial != m_captureSerial || !m_busy)
+                if (operation != m_generation || serial != m_captureSerial || !m_busy || !current())
                     return;
                 if (m_watchEnabled)
                     captureDetail(CapturePhase::Watch);
@@ -220,8 +267,11 @@ void MappingService::captureDetail(CapturePhase phase) {
                         m_selectionPath,
                         "--out",
                         output};
+    if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular)
         args << "--tools-jar" << m_toolsJar;
+    if (phase == CapturePhase::Watch && m_dynamic && !m_snapshot.isEmpty())
+        args << "--reuse-snapshot" << m_snapshot;
     launch(args, [this, phase, output](int code) {
         if (captureFailed(code))
             return;
@@ -253,6 +303,7 @@ void MappingService::captureDetail(CapturePhase phase) {
             event({{"event", "snapshot-changed"},
                    {"reason", "final-fingerprint-drift"},
                    {"generation", double(m_snapshotGeneration)}});
+            if (m_cachePath) { fallbackFromCache("final-runtime-fingerprint-drift"); return; }
             m_hit = {};
             m_validation = {};
             if (!m_watchEnabled) {
@@ -278,17 +329,60 @@ void MappingService::captureDetail(CapturePhase phase) {
         }
     });
 }
+void MappingService::identifyTarget() {
+    launch({"identify", "--pack", m_defaultPack, "--snapshot", m_litePath,
+            "--contracts", m_contracts, "--out", m_run + "/identity.json"}, [this](int code) {
+        if (code) { fail("Cannot identify target family"); return; }
+        const auto identity = readObject(m_run + "/identity.json");
+        m_family = identity.value("family").toString();
+        m_minecraftVersion = identity.value("minecraftVersion").toString();
+        m_candidates = m_forceAutomatic ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
+        m_candidateIndex = 0;
+        selectCacheCandidate();
+    });
+}
+void MappingService::selectCacheCandidate() {
+    if (!m_busy || !current()) return;
+    if (m_candidateIndex < m_candidates.size()) {
+        m_hit = m_candidates.at(m_candidateIndex);
+        m_cachePath = true;
+        m_reference = m_hit;
+        m_reference.referenceReason = "verified-family-cache-candidate";
+        event({{"event", "REFERENCE_SELECTION"}, {"sourceFamily", m_hit.family},
+               {"targetFamily", m_family}, {"sourceMappingIdentity", m_hit.mappingIdentity},
+               {"targetMappingIdentity", m_hit.mappingIdentity}, {"reason", "same-family-cache-candidate; awaiting-live-validation"}});
+        progressReference(m_reference);
+        selectDetail(CapturePhase::Initial);
+        return;
+    }
+    m_hit = {}; m_cachePath = false;
+    event({{"event", "CACHE_LOOKUP"}, {"hit", false}, {"cacheKey", m_mappingIdentity},
+           {"mappingIdentity", m_mappingIdentity}, {"targetFamily", m_family},
+           {"reason", m_candidates.isEmpty() ? "no-verified-family-candidate" : "no-compatible-stable-metadata"}});
+    m_reference = Cache(m_root).reference(m_contractDigest, m_family, m_minecraftVersion, m_mappingIdentity);
+    event({{"event", "REFERENCE_SELECTION"}, {"sourceFamily", m_reference.family},
+           {"targetFamily", m_family}, {"sourceMappingIdentity", m_reference.mappingIdentity},
+           {"targetMappingIdentity", m_mappingIdentity},
+           {"reason", m_reference.valid() ? m_reference.referenceReason : "no-family-compatible-reference"}});
+    m_scopePack = m_reference.valid() ? m_reference.pack : m_defaultPack;
+    progressReference(m_reference);
+    selectDetail(CapturePhase::Initial);
+}
+void MappingService::fallbackFromCache(const QString &reason) {
+    event({{"event", "CACHE_LOOKUP"}, {"hit", false}, {"cacheKey", m_hit.mappingIdentity},
+           {"mappingIdentity", m_hit.mappingIdentity}, {"reason", reason}});
+    m_mappingIdentity.clear(); // Cached identity failed live evidence; target identity is unknown.
+    m_candidateIndex = m_candidates.size();
+    m_forceAutomatic = true;
+    m_hit = {}; m_cachePath = false; m_validation = {};
+    // Recapture the structural candidate scope; cached validation scope is too narrow
+    // to supply incoming-reference evidence to automatic matching.
+    m_fullLite = true;
+    captureLite(CapturePhase::Initial);
+}
 void MappingService::choosePack() {
-    m_hit = Cache(m_root).lookup(m_fingerprint, m_contractDigest);
-    event({{"event", "cache"},
-           {"stage", "verified"},
-           {"hit", m_hit.valid()},
-           {"fingerprint", m_fingerprint}});
-    if (m_hit.valid()) {
-        m_pack = m_hit.pack;
-        inspect(true);
-    } else
-        validate(m_defaultPack, false);
+    if (m_forceAutomatic && !m_cachePath) resolve();
+    else validate(m_cachePath ? m_hit.pack : m_defaultPack, false);
 }
 void MappingService::validate(const QString &pack, bool automatic) {
     m_status = "Full live mapping validation";
@@ -328,6 +422,9 @@ void MappingService::validate(const QString &pack, bool automatic) {
                }
                if (code || !m_validation.value("injectionReady").toBool() || !rejected.isEmpty()) {
                    if (!automatic) {
+                       if (m_cachePath) { fallbackFromCache("cached-pack-live-validation-failed"); return; }
+                       if (!m_authoredWarmup) { m_authoredWarmup = true; captureLite(CapturePhase::Initial); return; }
+                       if (m_reference.valid() && !m_fullLite) { m_fullLite = true; captureLite(CapturePhase::Initial); return; }
                        resolve();
                        return;
                    }
@@ -355,6 +452,13 @@ void MappingService::validate(const QString &pack, bool automatic) {
                    }
                    m_validation["symbols"] = results;
                }
+               const auto identity = m_validation.value("identity").toObject();
+               const auto stableIdentity = identity.value("mappingIdentity").toString();
+               if (m_cachePath && (stableIdentity.isEmpty() || stableIdentity != m_hit.mappingIdentity)) {
+                   fallbackFromCache("cached-installed-class-structure-changed"); return;
+               }
+               m_mappingIdentity = stableIdentity;
+               m_metadataIdentity = identity.value("metadataIdentity").toString();
                m_pack = m_run + "/validated-pack.json";
                writeObject(m_pack, m_validation.value("pack").toObject());
                Cache(m_root).candidate(m_run, m_fingerprint, "validated-awaiting-recheck");
@@ -381,8 +485,11 @@ void MappingService::invalidate(const QString &symbol, const QString &reason) {
     event({{"event", "symbol-invalidated"}, {"symbol", symbol}, {"reason", reason}});
 }
 void MappingService::resolve() {
+    if (!m_busy || !current()) return;
     m_dynamic = true;
-    m_status = "Incremental runtime matching";
+    m_transaction->state = m_watchEnabled ? AttachTransaction::State::MappingResolving : AttachTransaction::State::MappingPaused;
+    m_status = "Automatic structural resolve";
+    event({{"event", "AUTO_RESOLVE"}, {"mappingIdentity", m_mappingIdentity}});
     emit changed();
     event({{"event", "step"},
            {"index", 2},
@@ -392,8 +499,7 @@ void MappingService::resolve() {
     QStringList args = {
         "resolve",  "--incremental", "--pack",    m_scopePack, "--snapshot",
         m_snapshot, "--contracts",   m_contracts, "--out",     m_run + "/candidate.json"};
-    if (m_reference.valid())
-        args << "--reference" << m_reference.snapshot;
+    if (m_reference.valid()) args << "--reference" << m_reference.snapshot;
     if (!m_statePath.isEmpty())
         args << "--state" << m_statePath;
     if (m_snapshotGeneration > 1)
@@ -435,6 +541,17 @@ void MappingService::resolve() {
             validate(draft, true);
         } else {
             Cache(m_root).candidate(m_run, m_fingerprint, "waiting-for-runtime-change");
+            const auto reasons = candidate.value("unresolvedReasons").toObject();
+            bool missing = reasons.isEmpty();
+            for (auto it = reasons.begin(); it != reasons.end(); ++it)
+                missing |= it.value() == "missing-runtime-class";
+            if (!missing) {
+                m_stableAmbiguity = true;
+                m_watchEnabled = false;
+                m_watchTimer.stop();
+                m_transaction->state = AttachTransaction::State::MappingPaused;
+                event({{"event", "STABLE_AMBIGUITY"}, {"reason", "Stable evidence is ambiguous; automatic polling paused"}});
+            }
             scheduleRetry(
                 m_reference.valid()
                     ? "Unresolved symbols await relevant classes/evidence"

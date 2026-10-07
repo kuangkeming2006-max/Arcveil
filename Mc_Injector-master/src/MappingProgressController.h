@@ -51,6 +51,8 @@ class MappingProgressController final : public QObject {
     MappingProgressFilter m_active, m_completed, m_pending;
     QVariantList m_steps;
     QVariantMap m_reference;
+    QString m_transactionId;
+    bool m_awaitingTransaction = false;
     QString m_status, m_snapshot;
     bool m_matchingEnabled = false, m_successful = false, m_stopRequested = false;
 };

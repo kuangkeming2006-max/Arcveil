@@ -67,7 +67,7 @@ void MappingService::progressReference(const Entry &reference) {
            {"targetFingerprint", m_fingerprint},
            {"selectionReason",
             reference.valid()
-                ? "Last verified reference with matching contract digest and artifact hashes"
+                ? reference.referenceReason
                 : "No reference selected"}});
 }
 void MappingService::progressAnalyzer(const QJsonObject &input) {
@@ -113,8 +113,8 @@ void MappingService::progressVerified() {
         const auto selected = dictionary(readObject(m_hit.pack));
         const auto values = selected.value("symbols").toObject();
         auto results = m_validation.value("symbols").toArray();
-        const bool cache = results.isEmpty();
-        if (cache) {
+        const bool cache = m_cachePath;
+        if (results.isEmpty()) {
             const auto proof = readObject(QFileInfo(m_hit.pack).absolutePath() + "/proof.json");
             results = proof.value("symbols").toArray();
             if (results.isEmpty()) {

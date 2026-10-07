@@ -18,6 +18,8 @@ MappingProgressController::MappingProgressController(QObject *parent)
 }
 void MappingProgressController::begin(quint32 pid) {
     m_stopRequested = false;
+    m_transactionId.clear();
+    m_awaitingTransaction = true;
     reset(pid);
     emit openRequested();
 }
@@ -44,13 +46,17 @@ void MappingProgressController::stopMatching() {
     m_matchingEnabled = false;
     if (!m_successful)
         step(2, "degraded");
-    m_status = QStringLiteral("已停止后续匹配 / 重试；当前注入验证继续，已完成结果保留");
+    m_status = QStringLiteral("Attach waiting for mapping; resume to continue. Existing matches retained.");
     emit stopMatchingRequested();
     emit matchingStopped();
     emit changed();
 }
 void MappingProgressController::consume(const QJsonObject &e) {
     const auto kind = e.value("event").toString();
+    const auto transaction = e.value("transactionId").toString();
+    if (kind == "session-start") { m_transactionId = transaction; m_awaitingTransaction = false; }
+    else if (!transaction.isEmpty() && (m_awaitingTransaction ||
+             (!m_transactionId.isEmpty() && transaction != m_transactionId))) return;
     if (kind == "session-start") {
         reset(quint32(e.value("pid").toDouble()));
     } else if (kind == "step") {
@@ -61,6 +67,10 @@ void MappingProgressController::consume(const QJsonObject &e) {
         for (auto it = e.begin(); it != e.end(); ++it)
             if (it.key() != "event")
                 m_reference[it.key()] = it.value().toVariant();
+    } else if (kind == "CACHE_LOOKUP") {
+        m_status = e.value("hit").toBool()
+            ? QStringLiteral("Cache HIT → Live validation")
+            : QStringLiteral("Cache MISS · %1").arg(e.value("reason").toString());
     } else if (kind == "snapshot-update") {
         const auto fingerprint = e.value("fingerprint").toString();
         if (!fingerprint.isEmpty() && fingerprint != m_snapshot) {
@@ -73,14 +83,14 @@ void MappingProgressController::consume(const QJsonObject &e) {
         m_matchingEnabled = e.value("state") != "paused";
         if (!m_matchingEnabled)
             m_status =
-                QStringLiteral("已停止 snapshot watch / retry；当前 attach 状态与已完成结果保留");
+                QStringLiteral("Attach waiting for mapping; resume to continue. Existing matches retained.");
     } else if (kind == "waiting-for-runtime-change") {
         m_matchingEnabled = !e.value("paused").toBool();
         m_status =
             m_matchingEnabled
                 ? QStringLiteral("等待运行时变化 · %1 个 unresolved · 已完成项为 provisional")
                       .arg(e.value("unresolved").toArray().size())
-                : QStringLiteral("匹配已暂停；可继续匹配，当前 attach 状态保留");
+                : QStringLiteral("Attach waiting for mapping; resume to continue");
     } else if (kind == "failure" || kind == "cancelled") {
         m_successful = false;
         m_matchingEnabled = false;
@@ -92,7 +102,7 @@ void MappingProgressController::consume(const QJsonObject &e) {
     } else if (kind == "complete" && e.value("scope") == "mapping") {
         if (m_symbols.requiredComplete()) {
             const auto source = e.value("source").toString();
-            m_status = source == "verified-cache" ? QStringLiteral("反混淆成功 · 来自已验证 Cache")
+            m_status = source == "verified-cache" ? QStringLiteral("Cache HIT → Live validation → Ready")
                        : source == "automatic"
                            ? QStringLiteral("反混淆成功 · 自动解析及最终验证通过")
                            : QStringLiteral("反混淆成功 · mapping pack 运行时验证通过");

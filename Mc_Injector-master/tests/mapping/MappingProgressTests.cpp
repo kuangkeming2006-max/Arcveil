@@ -135,6 +135,14 @@ int main(int argc, char **argv) {
     wait();
     check(c.completedCount() == 0 && c.pendingCount() == 1,
           "invalidated migration timer cannot resurrect a binding");
+    c.consume({{"event", "session-start"}, {"transactionId", "A"}});
+    c.begin(1002);
+    const auto startingStatus = c.status();
+    c.consume({{"event", "cancelled"}, {"transactionId", "A"}});
+    check(c.status() == startingStatus, "new Attach presentation rejects prior cancellation before session-start");
+    c.consume({{"event", "session-start"}, {"transactionId", "B"}});
+    c.consume({{"event", "symbol-queued"}, {"transactionId", "A"}, {"symbol", "old"}, {"required", true}});
+    check(c.pendingCount() == 0, "old transaction cannot change new session symbol UI");
     std::printf("MappingProgress: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

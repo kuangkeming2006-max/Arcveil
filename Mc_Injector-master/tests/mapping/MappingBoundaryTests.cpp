@@ -76,6 +76,24 @@ int main(int argc, char **argv) {
         check(cache.lookup("fingerprint", "contract").revision == a.revision,
               "failed promotion retains verified");
     }
+    Cache policy(dir.path() + "/policy");
+    const auto same = policy.promote(pack, snapshot, "fingerprint", "contract", proof,
+        "lunar-8", "metadata-8", "Lunar", "1.8.9");
+    const auto distant = policy.promote(pack, snapshot, "fingerprint", "contract", proof,
+        "lunar-20", "metadata-20", "Lunar", "1.20.1");
+    policy.promote(pack, snapshot, "fingerprint", "contract", proof,
+        "badlion", "metadata-b", "Badlion", "1.8.9");
+    check(policy.reference("contract", "Lunar", "1.20.1", "lunar-8").revision == same.revision,
+          "exact stable identity outranks version and unrelated lastVerified");
+    check(policy.reference("contract", "Lunar", "1.7.10").revision == same.revision,
+          "same-family nearest Minecraft reference outranks newest distant version");
+    check(!policy.reference("contract", "Forge", "1.8.9").valid(), "no cross-family lastVerified reference");
+    QFile history(same.snapshot); history.open(QIODevice::WriteOnly | QIODevice::Append);
+    history.write("corrupt historical snapshot"); history.close();
+    check(policy.candidates("Lunar", "1.8.9", "contract").size() == 1,
+          "live-validation candidate discovery does not read historical snapshots");
+    check(policy.reference("contract", "Lunar", "1.8.9").revision == distant.revision,
+          "structural reference checks source integrity and falls through corruption");
     QLockFile lock(dir.path() + "/cache/cache.lock");
     lock.lock();
     try {
