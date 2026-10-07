@@ -98,6 +98,8 @@ public:
     [[nodiscard]] bool consumeGuiScaleChange(int& index) noexcept;
     void setGuiTypography(ui::GuiTypography value) noexcept;
     [[nodiscard]] bool consumeGuiTypographyChange(ui::GuiTypography& value) noexcept;
+    void setGuiElementScale(int percent) noexcept;
+    [[nodiscard]] bool consumeGuiElementScaleChange(int& percent) noexcept;
     [[nodiscard]] bool consumeBedRescanRequest() noexcept;
     void setGameScreenOpen(bool open) noexcept;
 

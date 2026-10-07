@@ -272,8 +272,8 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             aimMaximumDistance < std::max(1, aimMinimumDistance) ||
             aimMaximumDistance > 128 ||
             aimFovDegrees < 1 || aimFovDegrees > 360 ||
-            clickGuiWidthPercent < 80 || clickGuiWidthPercent > 150 ||
-            clickGuiHeightPercent < 80 || clickGuiHeightPercent > 150 ||
+            clickGuiWidthPercent < 40 || clickGuiWidthPercent > 150 ||
+            clickGuiHeightPercent < 40 || clickGuiHeightPercent > 150 ||
             clickGuiOpacity < 35 || clickGuiOpacity > 100 ||
             textGuiColor > 0xFFFFFFU || textGuiX < -1 || textGuiX > 1000 ||
             textGuiY < -1 || textGuiY > 1000 ||
@@ -508,6 +508,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         }
         m_guiScaleIndex.store(index, std::memory_order_release);
         (void)m_ipc->sendLine(std::string("GUI_SCALE_APPLIED ") + std::to_string(index));
+        return true;
+    }
+    if(command=="GUI_ELEMENT_SCALE") {
+        int percent=0;
+        std::string trailing;
+        if (!(stream>>percent) || (stream>>trailing) || !ui::validGuiElementScale(percent)) {
+            (void)m_ipc->sendLine("ERROR BAD_GUI_ELEMENT_SCALE expected-percent-60-150");
+            return true;
+        }
+        m_guiElementScale.store(percent,std::memory_order_release);
+        (void)m_ipc->sendLine(std::string("GUI_ELEMENT_SCALE_APPLIED ")+std::to_string(percent));
         return true;
     }
     if(command=="GUI_TYPOGRAPHY") {

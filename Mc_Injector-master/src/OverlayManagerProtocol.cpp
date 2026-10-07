@@ -1,5 +1,6 @@
 #include "OverlayManager.h"
 #include "../agent/ui/GuiTypography.h"
+#include "../agent/ui/GuiLayout.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -354,8 +355,8 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             aimMaximumDistance < std::max(1, aimMinimumDistance) ||
             aimMaximumDistance > 128 || !aimFovOk || aimFovDegrees < 1 ||
             aimFovDegrees > 360 || !clickGuiWidthOk ||
-            clickGuiWidthPercent < 80 || clickGuiWidthPercent > 150 ||
-            !clickGuiHeightOk || clickGuiHeightPercent < 80 ||
+            clickGuiWidthPercent < 40 || clickGuiWidthPercent > 150 ||
+            !clickGuiHeightOk || clickGuiHeightPercent < 40 ||
             clickGuiHeightPercent > 150 || !clickGuiOpacityOk ||
             clickGuiOpacity < 35 || clickGuiOpacity > 100 ||
             !extraBitsOk || !textGuiAlignmentOk ||
@@ -560,6 +561,14 @@ void OverlayManager::processAgentLine(const QByteArray &line)
             m_guiScaleIndex = index;
             storeFeatureSettings();
             emit guiScaleIndexChanged();
+        }
+    } else if(type==QByteArrayLiteral("GUI_ELEMENT_SCALE_CHANGED")) {
+        bool valid=false;
+        const int percent=fields.value(1).toInt(&valid);
+        if(fields.size()==2 && valid && mcoverlay::ui::validGuiElementScale(percent) &&
+            percent!=m_guiElementScale) {
+            m_guiElementScale=percent;
+            storeFeatureSettings();emit guiElementScaleChanged();
         }
     } else if(type==QByteArrayLiteral("GUI_TYPOGRAPHY_CHANGED")) {
         bool validSize=false,validWeight=false;
@@ -789,6 +798,7 @@ void OverlayManager::sendStateSnapshot()
     sendBindSnapshot();
     sendGuiScaleSnapshot();
     sendGuiTypographySnapshot();
+    sendGuiElementScaleSnapshot();
     sendMediaSettings();
 }
 
@@ -874,8 +884,8 @@ void OverlayManager::sendFeatureSnapshot()
                       + QByteArray::number(std::clamp(m_aimMaximumDistance,
                             std::max(1, m_aimMinimumDistance), 128)) + ' '
                       + QByteArray::number(std::clamp(m_aimFovDegrees, 1, 360)) + ' '
-                      + QByteArray::number(std::clamp(m_clickGuiWidthPercent, 80, 150)) + ' '
-                      + QByteArray::number(std::clamp(m_clickGuiHeightPercent, 80, 150)) + ' '
+                      + QByteArray::number(std::clamp(m_clickGuiWidthPercent, 40, 150)) + ' '
+                      + QByteArray::number(std::clamp(m_clickGuiHeightPercent, 40, 150)) + ' '
                       + QByteArray::number(std::clamp(m_clickGuiOpacity, 35, 100)) + ' '
                       + QByteArray::number(m_featureExtraBits) + ' '
                       + QByteArray::number(std::clamp(m_textGuiAlignment, 0, 2)) + ' '
@@ -912,6 +922,13 @@ void OverlayManager::sendGuiScaleSnapshot()
     if (!m_authenticated) return;
     writeAgentCommand(QByteArrayLiteral("GUI_SCALE ")
                       + QByteArray::number(std::clamp(m_guiScaleIndex, 0, 3)) + '\n');
+}
+
+void OverlayManager::sendGuiElementScaleSnapshot()
+{
+    if(!m_authenticated) return;
+    writeAgentCommand(QByteArrayLiteral("GUI_ELEMENT_SCALE ")+
+        QByteArray::number(mcoverlay::ui::normalizeGuiElementScale(m_guiElementScale))+'\n');
 }
 
 void OverlayManager::sendGuiTypographySnapshot()

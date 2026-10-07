@@ -30,6 +30,11 @@ queueTelemetry 的发布采用非阻塞尝试获取锁；样本可以被后续�
 发布 revision mailbox。telemetryMain 发送 GUI_TYPOGRAPHY_CHANGED，成功发送后才推进
 sent revision。字号/字重一起发布，避免跨线程混用两次编辑的值。
 
+GUI_ELEMENT_SCALE 的单个整数经 GuiLayout.h 校验为 60–150%，拒绝额外字段。
+帧线程调用 setGuiElementScale，并将 consumeGuiElementScaleChange 发布到独立 atomic /
+revision mailbox；telemetryMain 发送 GUI_ELEMENT_SCALE_CHANGED，成功后推进 sent revision。
+GUI_ELEMENT_SCALE_APPLIED 确认收到的设置。FEATURE_STATE 的窗口宽高字段支持 40–150%。
+
 ## 调用流
 
 启动：jvm 导出 → AgentRuntime.start → workerMain → OpenGlHook.install → resolver/scanner/telemetry 启动 → IPC handshake。

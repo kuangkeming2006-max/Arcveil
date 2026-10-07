@@ -1,6 +1,8 @@
 #include "overlay_renderer.h"
 #include "UiColors.h"
 #include "FeatureNavigation.h"
+#include "ui/NavigationLabel.h"
+#include "ui/AnimatedWidgets.h"
 #include "tsf_candidates.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -201,6 +203,12 @@ struct OverlayRendererTestAccess {
         r.m_clickGuiProgress=r.m_clickGuiVelocity=0;
     }
     static float openingProgress(OverlayRenderer& r) {return r.m_clickGuiProgress;}
+    static void layout(OverlayRenderer& r,int width,int height,int elements) {
+        r.m_features.clickGuiWidthPercent=width;
+        r.m_features.clickGuiHeightPercent=height;
+        r.setGuiElementScale(elements);
+    }
+    static float hudScale(OverlayRenderer& r) {return r.m_animatedGuiScale;}
     static void imePreview(OverlayRenderer& r) {
         r.m_features.fullscreenImeFixEnabled = true;
         r.m_imePositionEditing = true;
@@ -227,6 +235,15 @@ struct OverlayRendererTestAccess {
         check(!r.consumeGuiTypographyChange(changed),"typography edit is consumed once");
         r.setGuiTypography({18,600});
         check(r.m_guiDesign.typography==ui::GuiTypography{},"controller edit applies after consume");
+        r.setGuiElementScale(100);
+        r.m_guiDesign.elementScale=125;r.m_guiDesign.elementScaleDirty=true;
+        r.setGuiElementScale(60);
+        check(r.m_guiDesign.elementScale==125,"pending element edit survives an old snapshot");
+        int percent=0;
+        check(r.consumeGuiElementScaleChange(percent) && percent==125,
+            "element edit is published independently of typography");
+        check(!r.consumeGuiElementScaleChange(percent),"element edit is consumed once");
+        r.setGuiElementScale(100);
     }
     static void freeLookPreview(OverlayRenderer& r) {
         r.m_features.freeLookEnabled=true;
@@ -457,6 +474,61 @@ struct OverlayRendererTestAccess {
         r.m_blacklistAddVelocity = 0.0F;
     }
 };
+}
+
+template<class Check>
+static void verifyComboInteraction(ImFontAtlas* fonts,Check check)
+{
+    auto* original=ImGui::GetCurrentContext();
+    auto* fixture=ImGui::CreateContext(fonts);
+    ImGui::SetCurrentContext(fixture);
+    auto& io=ImGui::GetIO();
+    io.IniFilename=nullptr;io.DisplaySize={800,600};io.DeltaTime=1.F/60.F;
+    io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
+    io.BackendFlags|=ImGuiBackendFlags_RendererHasTextures;
+    mcoverlay::ui::ClickGuiDesignState design;
+    constexpr const char* items[]{"Normal slot","Sword","Blocks"};
+    int selected=0;
+    const auto draw=[&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({40,40},ImGuiCond_Always);
+        ImGui::SetNextWindowSize({420,340},ImGuiCond_Always);
+        ImGui::Begin("Combo fixture",nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoTitleBar);
+        mcoverlay::ui::configureGuiDrawList(ImGui::GetWindowDrawList());
+        mcoverlay::ui::widgets::begin(design,1);
+        ImGui::SetCursorScreenPos({60,70});ImGui::SetNextItemWidth(280);
+        mcoverlay::ui::widgets::Combo("##mode",&selected,items,3);
+        ImGui::End();ImGui::Render();
+        check(fixture->ColorStack.empty() && fixture->StyleVarStack.empty() &&
+            fixture->CurrentWindowStack.empty(),"combo interaction balances all window/style stacks");
+    };
+    const auto click=[&](float x,float y) {
+        io.AddMousePosEvent(x,y);draw();
+        io.AddMouseButtonEvent(0,true);draw();
+        io.AddMouseButtonEvent(0,false);draw();draw();
+    };
+    const auto key=[&](ImGuiKey value) {
+        io.AddKeyEvent(value,true);draw();
+        io.AddKeyEvent(value,false);draw();draw();
+    };
+    draw();draw();click(90,82);
+    check(fixture->OpenPopupStack.Size==1,"styled combo opens on a mouse click");
+    if(!fixture->OpenPopupStack.empty() && fixture->OpenPopupStack[0].Window) {
+        auto* popup=fixture->OpenPopupStack[0].Window;
+        const float y=popup->Pos.y+popup->WindowPadding.y+
+            ImGui::GetFontSize()+18+ImGui::GetStyle().ItemSpacing.y+12;
+        click(popup->Pos.x+25,y);
+        check(selected==1 && fixture->OpenPopupStack.empty(),
+            "styled combo selects a mouse row and closes its popup");
+    }
+    click(90,82);key(ImGuiKey_DownArrow);key(ImGuiKey_Enter);
+    check(selected==2 && fixture->OpenPopupStack.empty(),
+        "styled combo retains keyboard navigation and Enter selection");
+    click(90,82);key(ImGuiKey_Escape);
+    check(selected==2 && fixture->OpenPopupStack.empty(),"Escape dismisses a combo without changing its value");
+    click(90,82);click(700,500);
+    check(selected==2 && fixture->OpenPopupStack.empty(),"outside click dismisses a combo without changing its value");
+    ImGui::DestroyContext(fixture);ImGui::SetCurrentContext(original);
 }
 
 int main(int argc, char** argv)
@@ -698,6 +770,26 @@ int main(int argc, char** argv)
     check(mcoverlay::OverlayRendererTestAccess::hiddenThemeLoadsWithoutTransition(*renderer),
         "first-open light theme is initialized before the first visible frame");
     mcoverlay::OverlayRendererTestAccess::typographyMailbox(*renderer,check);
+    // Exercise real glyph meshes at fractional positions. Each glyph must
+    // translate by the same amount, retaining spacing and flow colors.
+    frame(true);
+    verifyComboInteraction(ImGui::GetIO().Fonts,check);
+    for(bool enabled:{false,true}) {
+        ImDrawList first(ImGui::GetDrawListSharedData()),second(ImGui::GetDrawListSharedData());
+        first._ResetForNewFrame();second._ResetForNewFrame();
+        first.PushClipRect({0,0},{1600,1200});second.PushClipRect({0,0},{1600,1200});
+        auto* font=ImGui::GetFont();
+        const ImVec4 base(.6F,.6F,.7F,1),flow(1,1,1,1);
+        mcoverlay::ui::drawNavigationLabel(&first,font,18,{30.2F,30.4F},"Smart Hotbar",base,flow,enabled,false,1.2);
+        mcoverlay::ui::drawNavigationLabel(&second,font,18,{30.57F,30.56F},"Smart Hotbar",base,flow,enabled,false,1.2);
+        bool rigid=first.VtxBuffer.Size>0 && first.VtxBuffer.Size==second.VtxBuffer.Size;
+        for(int i=0;rigid && i<first.VtxBuffer.Size;++i) {
+            const auto& a=first.VtxBuffer[i];const auto& b=second.VtxBuffer[i];
+            rigid=std::abs(b.pos.x-a.pos.x-.37F)<.001F &&
+                std::abs(b.pos.y-a.pos.y-.16F)<.001F && a.col==b.col;
+        }
+        check(rigid,"hover moves the whole label without per-letter snapping or spacing changes");
+    }
     const auto surfaceLuminance=[]() {
         std::array<unsigned char,4> pixel{};
         glReadBuffer(GL_BACK);
@@ -715,10 +807,21 @@ int main(int argc, char** argv)
             frame(true);
             if(!light) noDarkFlash=noDarkFlash&&surfaceLuminance()>=settled-2;
             if(transition==9) saveFrame(light?"opening-v49-light.png":"opening-v49-dark.png");
+            if(!light && (transition==2 || transition==5 || transition==13)) {
+                char name[64];std::snprintf(name,sizeof(name),"gui-opening-%02d.png",transition);saveFrame(name);
+            }
         }
         check(noDarkFlash,"opening material never darkens below its settled surface");
         check(mcoverlay::OverlayRendererTestAccess::openingProgress(*renderer)>.98F,
             "opening regression actually traverses the complete presentation animation");
+        for(int transition=0;transition<45;++transition) {
+            Sleep(16);frame(false);
+            if(!light && (transition==2 || transition==5 || transition==13)) {
+                char name[64];std::snprintf(name,sizeof(name),"gui-closing-%02d.png",transition);saveFrame(name);
+            }
+        }
+        check(mcoverlay::OverlayRendererTestAccess::openingProgress(*renderer)<.02F,
+            "closing settles fully with the navigation rail hidden");
     }
     for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<26;++page) {
         mcoverlay::OverlayRendererTestAccess::prepare(*renderer,page,size,theme!=0);
@@ -742,6 +845,46 @@ int main(int argc, char** argv)
         if(page==24&&size==0) saveFrame(theme?"sprint-v50-light.png":"sprint-v50-dark.png");
         if(page==25&&size==0) saveFrame(theme?"shield-v50-light.png":"shield-v50-dark.png");
     }
+    ImVec2 referenceSize{};
+    float previousContentHeight=0;
+    for(int elements:{60,100,150}) {
+        mcoverlay::OverlayRendererTestAccess::prepare(*renderer,13,0,false);
+        mcoverlay::OverlayRendererTestAccess::layout(*renderer,100,100,elements);
+        const float hudScale=mcoverlay::OverlayRendererTestAccess::hudScale(*renderer);
+        frame(true);frame(true);
+        auto* root=ImGui::FindWindowByName("##McOverlayClickGui");
+        ImGuiWindow* rail=nullptr;
+        for(auto* entry:ImGui::GetCurrentContext()->Windows)
+            if(entry->Active && std::strstr(entry->Name,"##navigationScroll")) rail=entry;
+        if(elements==60) referenceSize=root->Size;
+        check(root && std::abs(root->Size.x-referenceSize.x)<1 && std::abs(root->Size.y-referenceSize.y)<1,
+            "element size leaves the GUI window dimensions unchanged");
+        check(rail && rail->ContentSize.y>previousContentHeight,
+            "element size changes actual navigation content density");
+        if(rail) previousContentHeight=rail->ContentSize.y;
+        check(mcoverlay::OverlayRendererTestAccess::hudScale(*renderer)==hudScale,
+            "element size leaves the shared HUD scale unchanged");
+        char name[64];std::snprintf(name,sizeof(name),"interface-elements-%d.png",elements);saveFrame(name);
+    }
+    for(bool light:{false,true}) for(int page:{0,8,13,23,25}) for(int elements:{60,100,150}) {
+        mcoverlay::OverlayRendererTestAccess::prepare(*renderer,page,0,light);
+        mcoverlay::OverlayRendererTestAccess::layout(*renderer,40,40,elements);
+        frame(true);frame(true);
+        auto* root=ImGui::FindWindowByName("##McOverlayClickGui");
+        check(root && std::abs(root->Size.x-442.F)<2 && std::abs(root->Size.y-312.F)<2,
+            "40 percent width and height reach the requested dimensions");
+        for(auto* child:ImGui::GetCurrentContext()->Windows) {
+            if(!child->Active || child->RootWindow!=root || child==root) continue;
+            check(child->Size.x>0 && child->Size.y>0 && child->InnerRect.GetWidth()>0 &&
+                child->InnerRect.GetHeight()>0,"small GUI retains usable child viewports");
+            check((child->DrawList->Flags&ImDrawListFlags_AntiAliasedLinesUseTex)==0,
+                "GUI borders avoid scaling the baked line-AA texture");
+        }
+        if(elements==100) {
+            char name[64];std::snprintf(name,sizeof(name),"compact-%d-%s.png",page,light?"light":"dark");saveFrame(name);
+        }
+    }
+    mcoverlay::OverlayRendererTestAccess::layout(*renderer,100,80,100);
     mcoverlay::OverlayRendererTestAccess::shieldPolicy(*renderer,check);
     mcoverlay::OverlayRendererTestAccess::prepare(*renderer,8,0,false);
     mcoverlay::OverlayRendererTestAccess::aimMode(*renderer,false);

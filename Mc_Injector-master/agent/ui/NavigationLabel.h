@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../FeatureNavigation.h"
+#include "GuiDrawPolicy.h"
 #include <imgui.h>
 #include <algorithm>
 #include <limits>
@@ -46,9 +47,13 @@ inline float drawNavigationLabel(ImDrawList* drawList, ImFont* font,
     };
     const char* const begin = label.data();
     const char* const end = begin + label.size();
+    // Every glyph retains its fractional origin during hover translation.
+    const auto previousFlags=drawList->Flags;
+    drawList->Flags |= ImDrawListFlags_TextNoPixelSnap;
     constexpr float unlimitedWidth = std::numeric_limits<float>::max();
     if (!enabled || reducedMotion) {
         drawList->AddText(font, fontSize, position, encodeColor(baseColor), begin, end);
+        drawList->Flags=previousFlags;
         return font->CalcTextSizeA(fontSize, unlimitedWidth, 0.0F, begin, end).x;
     }
 
@@ -74,6 +79,7 @@ inline float drawNavigationLabel(ImDrawList* drawList, ImFont* font,
             characterBegin, characterEnd).x;
         offset = next;
     }
+    drawList->Flags=previousFlags;
     return position.x - originX;
 }
 

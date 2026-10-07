@@ -179,6 +179,7 @@ void AgentRuntime::telemetryMain() noexcept
     std::uint32_t sentBindChangedRevision = 0U;
     std::uint32_t sentGuiScaleChangedRevision = 0U;
     std::uint32_t sentGuiTypographyChangedRevision=0U;
+    std::uint32_t sentGuiElementScaleChangedRevision=0U;
     std::uint32_t sentMediaSettingsChangedRevision = 0U;
     std::uint32_t sentMediaActionRevision = 0U;
     std::uint64_t sentHypixelQueryRevision = 0U;
@@ -407,6 +408,14 @@ void AgentRuntime::telemetryMain() noexcept
             }
         }
 
+        const auto elementScaleRevision=m_guiElementScaleChangedRevision.load(std::memory_order_acquire);
+        if(elementScaleRevision!=sentGuiElementScaleChangedRevision) {
+            const int percent=m_guiElementScaleChanged.load(std::memory_order_acquire);
+            FixedLine<64U> line;
+            if(line.append("GUI_ELEMENT_SCALE_CHANGED ") && line.appendInteger(percent) &&
+                m_ipc->sendLine(line.view()))
+                sentGuiElementScaleChangedRevision=elementScaleRevision;
+        }
         const auto typographyRevision=m_guiTypographyChangedRevision.load(std::memory_order_acquire);
         if(typographyRevision!=sentGuiTypographyChangedRevision) {
             const auto value=ui::unpackTypography(m_guiTypographyChanged.load(std::memory_order_acquire));
@@ -685,6 +694,15 @@ void AgentRuntime::queueGuiScaleChanged(const int index) noexcept
     m_guiScaleChangedIndex.store(bounded, std::memory_order_relaxed);
     m_guiScaleChangedRevision.fetch_add(1U, std::memory_order_release);
     if (m_telemetryEvent != nullptr) ::SetEvent(m_telemetryEvent);
+}
+
+void AgentRuntime::queueGuiElementScaleChanged(int percent) noexcept
+{
+    percent=ui::normalizeGuiElementScale(percent);
+    m_guiElementScale.store(percent,std::memory_order_release);
+    m_guiElementScaleChanged.store(percent,std::memory_order_relaxed);
+    m_guiElementScaleChangedRevision.fetch_add(1U,std::memory_order_release);
+    if(m_telemetryEvent!=nullptr) ::SetEvent(m_telemetryEvent);
 }
 
 void AgentRuntime::queueGuiTypographyChanged(ui::GuiTypography value) noexcept

@@ -430,6 +430,7 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     if (m_visible.load(std::memory_order_acquire)) {
         m_renderer->setGuiScaleIndex(m_guiScaleIndex.load(std::memory_order_acquire));
         m_renderer->setGuiTypography(ui::unpackTypography(m_guiTypography.load(std::memory_order_acquire)));
+        m_renderer->setGuiElementScale(m_guiElementScale.load(std::memory_order_acquire));
         m_renderer->setFeatureSettings(activeFeatures);
         ::AcquireSRWLockShared(&m_hypixelLock);
         const HypixelOverlaySnapshot hypixel = m_hypixelSnapshot;
@@ -484,6 +485,9 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         ui::GuiTypography changedTypography;
         if(m_renderer->consumeGuiTypographyChange(changedTypography))
             queueGuiTypographyChanged(changedTypography);
+        int changedElementScale=100;
+        if(m_renderer->consumeGuiElementScaleChange(changedElementScale))
+            queueGuiElementScaleChanged(changedElementScale);
         MediaOverlaySettings changedMediaSettings{};
         if (m_renderer->consumeMediaSettings(changedMediaSettings)) {
             ::AcquireSRWLockExclusive(&m_mediaLock);
