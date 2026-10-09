@@ -60,7 +60,7 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         }
 
         m_authenticated = true;
-        m_attachTimeout.stop();
+        m_attachTimeout.start();
         m_nativeFallbackGrace.stop();
         setState(State::WaitingForOpenGL);
         setStatusMessage(QStringLiteral("Native DLL loaded; waiting for Minecraft's first OpenGL frame..."));
@@ -75,11 +75,37 @@ void OverlayManager::processAgentLine(const QByteArray &line)
     if (type == QByteArrayLiteral("HOOK_READY")) {
         setRenderer(QString::fromUtf8(fields.value(1)));
         setStatusMessage(QStringLiteral("OpenGL presentation hook installed; waiting for a render context..."));
+    } else if (type == QByteArrayLiteral("BINDING_READY")) {
+        if (m_runtimeBindingsReady) return;
+        bool msOk = false, tiOk = false, jniOk = false;
+        const auto milliseconds = fields.value(1).toULongLong(&msOk);
+        const auto tiCalls = fields.value(2).toULongLong(&tiOk);
+        const auto jniCalls = fields.value(3).toULongLong(&jniOk);
+        if (fields.size() != 4 || !msOk || !tiOk || !jniOk || milliseconds > 120000 || tiCalls == 0 || jniCalls == 0 ||
+            !m_transaction || !m_transaction->valid || m_agentTransactionId != transactionId() ||
+            MappingService::processStartFor(m_targetPid) != m_transaction->processStart) {
+            fail(QStringLiteral("RUNTIME_BINDING_RECEIPT_INVALID"), QStringLiteral("Invalid exact JNI binding receipt.")); return;
+        }
+        m_runtimeBindingsReady = true;
+        m_attachTimeout.stop();
+        const auto owner = m_transaction;
+        m_mappingService.agentReady(qint64(milliseconds), qint64(tiCalls), qint64(jniCalls));
+        if (owner != m_transaction || !owner->valid || m_agentTransactionId != owner->transactionId) return;
+        if (m_rendererReportedReady) {
+            setState(State::Active);
+            if (owner == m_transaction && owner->valid && m_state == State::Active)
+                setStatusMessage(QStringLiteral("Native %1 overlay is active inside Minecraft").arg(m_renderer));
+        }
     } else if (type == QByteArrayLiteral("RENDERER_READY")) {
         setRenderer(QString::fromUtf8(fields.value(1)));
-        setState(State::Active);
-        setStatusMessage(QStringLiteral("Native %1 overlay is active inside Minecraft")
-                             .arg(m_renderer.isEmpty() ? QStringLiteral("OpenGL") : m_renderer));
+        m_rendererReportedReady = true;
+        if (m_runtimeBindingsReady) {
+            const auto owner = m_transaction;
+            setState(State::Active);
+            if (owner == m_transaction && owner && owner->valid && m_state == State::Active)
+                setStatusMessage(QStringLiteral("Native %1 overlay is active inside Minecraft")
+                    .arg(m_renderer.isEmpty() ? QStringLiteral("OpenGL") : m_renderer));
+        }
     } else if (type == QByteArrayLiteral("STATE_CHANGED")) {
         if (fields.size() != 3
             || (fields.at(1) != QByteArrayLiteral("0")

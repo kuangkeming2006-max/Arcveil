@@ -631,6 +631,7 @@ private:
     QStringList m_configNames;
     QString m_activeConfig;
     bool m_authenticated = false;
+    bool m_runtimeBindingsReady = false, m_rendererReportedReady = false;
     bool m_closingTransport = false;
     bool m_nativeFallbackAttempted = false;
     bool m_detachTransportComplete = false;

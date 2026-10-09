@@ -63,5 +63,11 @@ hook 安装失败也有专门管道错误上报路径，不能因提取 worker �
 只有跨线程清理或 callback 时序问题才读对应实现。
 AgentRuntime.h 当前直接包含 overlay_renderer.h，传递引入 binding/transform 大量声明；这不表示所有传递内容都需加载。
 
+v56.5: bindingRequired=1 options must include mapping/hash and a complete hex-encoded
+mappingAnchor/mappingLoaderType plus unsigned mappingLoaderInstance. Resolver publishes
+its result, elapsed milliseconds and JVMTI/JNI counters before a release-store;
+telemetry acquire-loads it and sends BINDING_READY or ERROR RUNTIME_BINDING_FAILED.
+Renderer initialization can run concurrently; it cannot authorize mapping success.
+
 已有验证为 Attach、NativeLoader、OpenGL/JVM smoke（含 split threads），以及相邻 renderer/controller 测试。
 没有独立全面的 runtime command codec 测试，协议版本/feature round-trip 是后续验证缺口。2026-09-26 构建、Attach、NativeLoader（含驻留重附加）、OpenGL unified/split smoke 均通过。

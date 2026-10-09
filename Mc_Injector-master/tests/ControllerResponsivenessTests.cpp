@@ -10,6 +10,32 @@
 
 struct ControllerResponsivenessTests {
     static bool run() {
+        // Renderer readiness alone must never authorize a verified mapping.
+        {
+            OverlayManager guarded;
+            auto owner = std::make_shared<AttachTransaction>();
+            owner->pid = quint32(QCoreApplication::applicationPid());
+            owner->processStart = MappingService::processStartFor(owner->pid);
+            owner->state = AttachTransaction::State::LoadingAgent;
+            guarded.m_transaction = owner; guarded.m_targetPid = owner->pid;
+            guarded.m_agentTransactionId = owner->transactionId;
+            guarded.m_authenticated = true;
+            guarded.setState(OverlayManager::State::WaitingForAgent);
+            guarded.processAgentLine("RENDERER_READY OpenGL");
+            if (guarded.state() == OverlayManager::State::Active || guarded.statusMessage().contains("is active")) {
+                std::puts("FAIL renderer authorized an unbound mapping"); return false;
+            }
+            guarded.processAgentLine("BINDING_READY 15 120 300");
+            if (guarded.state() != OverlayManager::State::Active) {
+                std::puts("FAIL exact binding plus renderer did not become Active"); return false;
+            }
+            guarded.m_runtimeBindingsReady = false;
+            guarded.setState(OverlayManager::State::WaitingForAgent);
+            guarded.processAgentLine("BINDING_READY 0 0 0");
+            if (guarded.state() != OverlayManager::State::Error) {
+                std::puts("FAIL malformed binding receipt accepted"); return false;
+            }
+        }
         OverlayManager manager;
         manager.m_transaction = std::make_shared<AttachTransaction>();
         const QByteArray attachDisabled =

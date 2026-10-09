@@ -90,6 +90,8 @@ OverlayManager::OverlayManager(QObject *parent)
         if (!m_authenticated) {
             fail(QStringLiteral("AGENT_HANDSHAKE_TIMEOUT"),
                  QStringLiteral("No authenticated native-agent connection arrived within 15 seconds."));
+        } else if (!m_runtimeBindingsReady) {
+            fail(QStringLiteral("RUNTIME_BINDING_TIMEOUT"), QStringLiteral("The Agent did not confirm exact JNI bindings within 15 seconds."));
         }
     });
 
@@ -214,6 +216,8 @@ bool OverlayManager::startAttachTransaction(std::shared_ptr<AttachTransaction> t
     m_pendingAttachPid = 0;
     m_pendingTransaction.reset();
     m_transaction = transaction;
+    m_transaction->elapsed.start();
+    m_runtimeBindingsReady = false; m_rendererReportedReady = false;
     emit mappingAttachRequested(pid);
 
     clearError();
@@ -284,11 +288,15 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
     if (!m_transaction || !m_transaction->valid ||
         m_transaction->state != AttachTransaction::State::MappingVerified ||
         MappingService::processStartFor(m_targetPid) != m_transaction->processStart) return;
+    const auto owner = m_transaction;
+    const auto ownsLaunch = [&] { return owner == m_transaction && owner->valid &&
+        owner->pid == m_targetPid && MappingService::processStartFor(m_targetPid) == owner->processStart; };
     m_transaction->state = AttachTransaction::State::LoadingAgent;
     m_agentTransactionId = transactionId();
     if(!targetProcessIsRunning(m_targetPid)){fail(QStringLiteral("PROCESS_EXITED"),QStringLiteral("Target exited during mapping validation."));return;}
     const auto pid=m_targetPid;const auto agentDll=m_agentDllPath;const auto java=m_mappingJava;const auto attachHelper=m_mappingHelper;
     setState(State::StartingIpc);
+    if (!ownsLaunch()) return;
     m_pipeToken = QUuid::createUuid().toString(QUuid::WithoutBraces)
                       .remove(QLatin1Char('-'));
     const QString serverName = QStringLiteral("McOverlay-%1-%2")
@@ -299,8 +307,15 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
         return;
     }
 
-    const QString options = QStringLiteral("pipe=%1;token=%2;protocol=1;mapping=%3;mappingHash=%4")
-                                .arg(m_server.fullServerName(), m_pipeToken, QString::fromLatin1(pack.toUtf8().toHex()), digest);
+    const auto binding = m_mappingService.runtimeBinding();
+    if (binding.value("anchor").toString().isEmpty() || binding.value("type").toString().isEmpty() || !binding.contains("instance")) {
+        fail(QStringLiteral("MAPPING_LOADER_MISSING"), QStringLiteral("Verified defining-loader identity is missing.")); return;
+    }
+    const QString options = QStringLiteral("pipe=%1;token=%2;protocol=1;mapping=%3;mappingHash=%4;bindingRequired=1;mappingAnchor=%5;mappingLoaderType=%6;mappingLoaderInstance=%7")
+        .arg(m_server.fullServerName(), m_pipeToken, QString::fromLatin1(pack.toUtf8().toHex()), digest,
+             QString::fromLatin1(binding.value("anchor").toString().toUtf8().toHex()),
+             QString::fromLatin1(binding.value("type").toString().toUtf8().toHex()),
+             QString::number(quint32(binding.value("instance").toDouble())));
     m_agentDllPath = agentDll;
     m_agentOptions = options;
     QStringList arguments;
@@ -322,6 +337,7 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
     setState(State::LaunchingAttachHelper);
     setStatusMessage(QStringLiteral("Loading the JNI/JVMTI agent into %1...")
                          .arg(m_targetTitle));
+    if (!ownsLaunch()) return;
     if (m_mappingService.selectedTransport() == "NativeLoader") {
         (void) startNativeLoaderFallback();
         m_targetMonitor.start();
@@ -329,6 +345,8 @@ void OverlayManager::launchVerifiedAgent(const QString& pack,const QString& dige
     }
     m_attachProcess.setProgram(java.executable);
     m_attachProcess.setArguments(arguments);
+    m_mappingService.loaderStarted("StandardAttach");
+    if (!ownsLaunch()) return;
     m_attachProcess.start();
     setState(State::WaitingForAgent);
     m_attachTimeout.start();
@@ -494,6 +512,10 @@ void OverlayManager::handleAttachFinished(int exitCode,
         (!m_transaction || !m_transaction->valid || m_agentTransactionId != transactionId())) return;
     m_helperStandardOutput += m_attachProcess.readAllStandardOutput();
     m_helperStandardError += m_attachProcess.readAllStandardError();
+    const auto owner = m_transaction;
+    m_mappingService.loaderFinished();
+    if (owner != m_transaction || (m_state != State::Detaching &&
+        (!owner || !owner->valid || m_agentTransactionId != owner->transactionId))) return;
 
     if (m_state == State::Detaching) {
         if (m_detachTransportComplete)
@@ -639,7 +661,7 @@ void OverlayManager::setState(State state)
     m_state = state;
     if (m_transaction && state == State::Active && m_transaction->valid) {
         m_transaction->state = AttachTransaction::State::Active;
-        m_mappingService.transactionEvent("TRANSACTION_COMMIT", "Agent authenticated and renderer active");
+        m_mappingService.transactionEvent("TRANSACTION_COMMIT", "Agent authenticated, exact JNI bindings verified and renderer active");
     }
     emit stateChanged();
     if (wasAttached != attached())

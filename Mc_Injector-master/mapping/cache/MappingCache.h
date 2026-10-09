@@ -11,12 +11,14 @@ struct Entry {
     QString revision, fingerprint, pack, snapshot, digest, contractDigest;
     QString mappingIdentity, metadataIdentity, family, minecraftVersion, referenceReason;
     quint64 promotionSerial = 0;
+    QString bindingIdentity;
     bool valid() const { return !revision.isEmpty(); }
 };
 class Cache final {
   public:
     explicit Cache(QString root) : m_root(std::move(root)) {}
     QStringList knownPacks(const QString &contractDigest) const;
+    Entry preferred(const QString &contractDigest) const;
     Entry lookup(const QString &fingerprint, const QString &contractDigest) const;
     QList<Entry> candidates(const QString &family, const QString &minecraftVersion,
                             const QString &contractDigest) const;

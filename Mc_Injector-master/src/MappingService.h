@@ -39,6 +39,11 @@ class MappingService final : public QObject {
     QString transactionId() const { return m_transaction ? m_transaction->transactionId : QString{}; }
     QString selectedTransport() const { return m_transport; }
     void transactionEvent(const QString &type, const QString &reason = {});
+    void performance(const QString &stage, qint64 milliseconds);
+    void loaderStarted(const QString &transport);
+    void loaderFinished();
+    void agentReady(qint64 milliseconds, qint64 jvmtiCalls, qint64 jniCalls);
+    QJsonObject runtimeBinding() const { return m_runtimeBinding; }
     Q_INVOKABLE void cancel();
     Q_INVOKABLE bool rollback();
   signals:
@@ -69,6 +74,7 @@ class MappingService final : public QObject {
     void inspect(bool finalCheck);
     void identifyTarget();
     void selectCacheCandidate();
+    void checkCached(const mapping_cache::Entry &entry);
     void fallbackFromCache(const QString &reason);
     bool current() const;
     void choosePack();
@@ -110,6 +116,9 @@ class MappingService final : public QObject {
     int m_candidateIndex = 0;
     bool m_cachePath = false, m_candidateWarmed = false, m_stableAmbiguity = false, m_fullLite = false, m_authoredWarmup = false, m_forceAutomatic = false;
     QString m_identityPacksFile;
+    bool m_finalCheck = false;
+    bool m_upgradeCacheProof = false;
+    QJsonObject m_runtimeBinding;
     QString m_family, m_minecraftVersion, m_mappingIdentity, m_metadataIdentity, m_transport;
     QHash<QString, QString> m_transports; // pid + processStart; never reused for a recycled PID.
 

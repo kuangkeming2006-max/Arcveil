@@ -29,7 +29,7 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
-    m_probe = m_tools + "/MappingProbe-v8.dll";
+    m_probe = m_tools + "/MappingProbe-v13.dll";
     m_contracts = m_tools + "/contracts-v1.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
     m_watchTimer.setSingleShot(true);
@@ -41,10 +41,69 @@ bool MappingService::current() const {
            m_transaction->processStart == m_start;
 }
 void MappingService::transactionEvent(const QString &type, const QString &reason) {
+    const auto generation = m_generation;
+    const auto owner = m_transaction;
+    if (type == "TRANSACTION_COMMIT" && m_transaction && m_transaction->elapsed.isValid()) {
+        if (m_transaction->agentElapsed.isValid())
+            performance("agent active", m_transaction->agentElapsed.elapsed());
+        if (owner != m_transaction || generation != m_generation || !current()) return;
+        event({{"event", "ATTACH_PERFORMANCE"}, {"cacheHit", m_transaction->cacheHit},
+               {"autoResolveCalls", m_transaction->autoResolveCalls},
+               {"detailCaptureCalls", m_transaction->detailCaptureCalls},
+               {"totalAttachMs", double(m_transaction->elapsed.elapsed())},
+               {"stageMs", m_transaction->stageMs},
+               {"analyzerProcesses", m_transaction->analyzerProcesses},
+               {"helperProcesses", m_transaction->helperProcesses},
+               {"subprocesses", m_transaction->analyzerProcesses + m_transaction->helperProcesses},
+               {"jvmtiCalls", double(m_transaction->jvmtiCalls)},
+               {"jniCalls", double(m_transaction->jniCalls)},
+               {"capturedBytes", double(m_transaction->capturedBytes)},
+               {"bytecodeBytes", double(m_transaction->bytecodeBytes)},
+               {"constantPoolBytes", double(m_transaction->constantPoolBytes)}});
+        if (owner != m_transaction || generation != m_generation || !current()) return;
+    }
     event({{"event", type}, {"reason", reason},
            {"state", m_transaction ? m_transaction->stateName() : QString("Idle")}});
 }
+void MappingService::performance(const QString &stage, qint64 milliseconds) {
+    if (!current()) return;
+    m_transaction->stageMs[stage] = m_transaction->stageMs.value(stage).toDouble() + double(milliseconds);
+    event({{"event", "STAGE_PERFORMANCE"}, {"stage", stage}, {"durationMs", double(milliseconds)}});
+}
+void MappingService::loaderStarted(const QString &transport) {
+    if (!current()) return;
+    ++m_transaction->helperProcesses;
+    m_transaction->loaderElapsed.start();
+    if (!m_transaction->agentElapsed.isValid()) m_transaction->agentElapsed.start();
+    event({{"event", "AGENT_LOADER_START"}, {"transport", transport}});
+}
+void MappingService::loaderFinished() {
+    if (current() && m_transaction->loaderElapsed.isValid()) {
+        performance("native loader", m_transaction->loaderElapsed.elapsed());
+        m_transaction->loaderElapsed.invalidate();
+    }
+}
+void MappingService::agentReady(qint64 milliseconds, qint64 jvmtiCalls, qint64 jniCalls) {
+    if (!current()) return;
+    const auto generation = m_generation;
+    m_transaction->jvmtiCalls += jvmtiCalls; m_transaction->jniCalls += jniCalls;
+    performance("jni binding", milliseconds);
+    if (generation == m_generation && current() && m_transaction->agentElapsed.isValid())
+        performance("agent ready", m_transaction->agentElapsed.elapsed());
+}
 void MappingService::event(QJsonObject value) {
+    if (current()) {
+        const auto kind = value.value("event").toString();
+        if (kind == "CACHE_LOOKUP" && value.value("hit").toBool()) m_transaction->cacheHit = true;
+        if (kind == "AUTO_RESOLVE") ++m_transaction->autoResolveCalls;
+        if (kind == "CAPTURE_HELPER") ++m_transaction->helperProcesses;
+        if (kind == "SNAPSHOT_STATS") {
+            m_transaction->jvmtiCalls += qint64(value.value("jvmtiCalls").toDouble());
+            m_transaction->capturedBytes += qint64(value.value("totalBytes").toDouble());
+            m_transaction->bytecodeBytes += qint64(value.value("jvmtiBytecodeBytes").toDouble());
+            m_transaction->constantPoolBytes += qint64(value.value("jvmtiConstantPoolBytes").toDouble());
+        }
+    }
     if (value.contains("fingerprint")) value["runtimeFingerprint"] = value.value("fingerprint");
     value["transactionId"] = transactionId();
     value["generation"] = double(m_generation);
@@ -127,7 +186,11 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_pid = pid;
     m_transaction = transaction ? std::move(transaction) : std::make_shared<AttachTransaction>();
     m_transaction->pid = pid;
+    if (!m_transaction->elapsed.isValid()) m_transaction->elapsed.start();
     m_transaction->state = AttachTransaction::State::MappingFastPath;
+    m_runtimeBinding = {};
+    m_finalCheck = false;
+    m_upgradeCacheProof = false;
     m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_forceAutomatic = false;
     m_stableAmbiguity = false;
     m_candidates.clear();
@@ -175,16 +238,21 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
         if (m_start.isEmpty() || !QFile::exists(m_analyzer) || !QDir().mkpath(m_run))
             throw std::runtime_error("mapping analyzer/runtime unavailable");
         m_contractDigest = fileDigest(m_contracts);
+        progressSchema();
+        Cache(m_root).candidate(m_run, {}, "inspecting");
+        QElapsedTimer lookupElapsed; lookupElapsed.start();
+        const auto preferred = Cache(m_root).preferred(m_contractDigest);
+        performance("cache lookup", lookupElapsed.elapsed());
+        if (!current()) return;
+        if (preferred.valid()) { checkCached(preferred); return; }
         m_identityPacksFile = m_run + "/identity-packs.json";
         writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
-        progressSchema();
         event({{"event", "step"},
                {"index", 0},
                {"state", "success"},
                {"message", QFile::exists(m_root + "/index.json")
                                ? "Local cache found; family and stable identity detection follows"
                                : "No local cache; capturing runtime fingerprint"}});
-        Cache(m_root).candidate(m_run, {}, "inspecting");
         inspect(false);
     } catch (const std::exception &e) {
         fail(QString::fromUtf8(e.what()));
@@ -192,6 +260,15 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
 }
 void MappingService::launch(QStringList arguments, std::function<void(int)> finished) {
     if (!m_busy || !current()) return;
+    ++m_transaction->analyzerProcesses;
+    const auto command = arguments.value(0);
+    if (command == "inspect-detail") ++m_transaction->detailCaptureCalls;
+    const QString stage = command == "inspect" ? (m_finalCheck ? "final check lite capture" : "lite capture")
+        : command == "inspect-detail" ? (m_finalCheck ? "final check selected detail" : "selected detail")
+        : (command == "validate" || command == "validate-cache") ? "validation" : (command == "identify" || command == "select")
+        ? (m_finalCheck ? "final check select" : "cache lookup") : command;
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    elapsed->start();
     m_analyzerFailure = {};
     struct Output {
         QByteArray bytes;
@@ -206,7 +283,7 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
     auto output = std::make_shared<Output>();
     auto drain = std::make_shared<std::function<void()>>();
     std::weak_ptr<std::function<void()>> weakDrain = drain;
-    *drain = [this, job, generation, output, weakDrain, finished = std::move(finished)] {
+    *drain = [this, job, generation, output, weakDrain, stage, elapsed, finished = std::move(finished)] {
         if (generation != m_generation || !current() || output->done)
             return;
         output->scheduled = false;
@@ -275,6 +352,8 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
             return;
         }
         try {
+            performance(stage, elapsed->elapsed());
+            if (generation != m_generation || !current()) return;
             finished(output->code);
         } catch (const std::exception &e) {
             if (generation == m_generation && current()) fail(QString::fromUtf8(e.what()));
@@ -336,7 +415,8 @@ void MappingService::finalize() {
         throw std::runtime_error("finalize requires current live validation");
     if (m_mappingIdentity.isEmpty() || m_family.isEmpty() || m_family == "Unknown")
         throw std::runtime_error("stable mapping identity/family unavailable");
-    if (!m_hit.valid()) {
+    if (!m_hit.valid() || m_upgradeCacheProof || (m_hit.bindingIdentity.isEmpty() &&
+        !m_validation.value("identity").toObject().value("bindingIdentity").toString().isEmpty())) {
         m_hit = Cache(m_root).promote(m_pack, m_snapshot, m_fingerprint, m_contractDigest,
                                       m_validation, m_mappingIdentity, m_metadataIdentity,
                                       m_family, m_minecraftVersion);

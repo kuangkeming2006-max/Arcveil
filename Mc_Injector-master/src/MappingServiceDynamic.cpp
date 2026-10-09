@@ -97,6 +97,7 @@ bool MappingService::captureFailed(int code) {
     return true;
 }
 void MappingService::captureLite(CapturePhase phase) {
+    m_finalCheck = phase == CapturePhase::Final;
     if (!identityValid()) {
         fail("Target JVM exited or changed identity");
         return;
@@ -345,14 +346,7 @@ void MappingService::selectCacheCandidate() {
     if (!m_busy || !current()) return;
     if (m_candidateIndex < m_candidates.size()) {
         m_hit = m_candidates.at(m_candidateIndex);
-        m_cachePath = true;
-        m_reference = m_hit;
-        m_reference.referenceReason = "verified-family-cache-candidate";
-        event({{"event", "REFERENCE_SELECTION"}, {"sourceFamily", m_hit.family},
-               {"targetFamily", m_family}, {"sourceMappingIdentity", m_hit.mappingIdentity},
-               {"targetMappingIdentity", m_hit.mappingIdentity}, {"reason", "same-family-cache-candidate; awaiting-live-validation"}});
-        progressReference(m_reference);
-        selectDetail(CapturePhase::Initial);
+        checkCached(m_hit);
         return;
     }
     m_hit = {}; m_cachePath = false;
@@ -368,13 +362,90 @@ void MappingService::selectCacheCandidate() {
     progressReference(m_reference);
     selectDetail(CapturePhase::Initial);
 }
+void MappingService::checkCached(const Entry &entry) {
+    if (!m_busy || !identityValid()) return;
+    const auto generation = m_generation;
+    if (entry.bindingIdentity.isEmpty()) {
+        // PR #6 already persisted a verified full source. Derive the new compact
+        // proof offline once; repeating live detail would add no evidence.
+        auto source = Cache(m_root).lookup(entry.mappingIdentity, m_contractDigest);
+        if (!source.valid()) { fallbackFromCache("legacy-verified-source-invalid"); return; }
+        launch({"identify", "--pack", source.pack, "--snapshot", source.snapshot, "--contracts", m_contracts,
+                "--out", m_run + "/legacy-binding-proof.json"}, [this, source](int code) mutable {
+            if (code) { fallbackFromCache("legacy-binding-proof-unavailable"); return; }
+            const auto identity = readObject(m_run + "/legacy-binding-proof.json");
+            if (identity.value("mappingIdentity").toString() != source.mappingIdentity ||
+                identity.value("metadataIdentity").toString() != source.metadataIdentity) {
+                fallbackFromCache("legacy-verified-source-identity-mismatch"); return;
+            }
+            source.bindingIdentity = identity.value("bindingIdentity").toString();
+            if (source.bindingIdentity.size() != 64) { fallbackFromCache("legacy-binding-proof-incomplete"); return; }
+            m_upgradeCacheProof = true; m_snapshot = source.snapshot;
+            checkCached(source);
+        });
+        return;
+    }
+    m_hit = entry; m_reference = entry; m_cachePath = true;
+    m_family = entry.family; m_minecraftVersion = entry.minecraftVersion;
+    m_status = "Checking cached required classes and members";
+    emit changed();
+    if (generation != m_generation || !m_busy || !current()) return;
+    m_litePath = m_run + "/required-bindings.jsonl";
+    QStringList args = {"inspect", "--lite", "--binding-check", "--identity-lite", "--required-only",
+        "--pid", QString::number(m_pid), "--java", m_java, "--helper", m_helper,
+        "--probe", m_probe, "--native-loader", m_tools + "/McOverlayNativeLoader.exe",
+        "--pack", entry.pack, "--contracts", m_contracts, "--out", m_litePath};
+    if (m_transport == "NativeLoader") args << "--transport" << "native";
+    if (!m_modular) args << "--tools-jar" << m_toolsJar;
+    m_capture = {};
+    launch(args, [this, generation](int code) {
+        if (code) { fallbackFromCache("required-binding-capture-failed"); return; }
+        if (!identityValid() || m_capture.value("pid").toDouble() != m_pid ||
+            m_capture.value("processStart").toString() != m_start) { fail("Cached binding process identity mismatch"); return; }
+        m_fingerprint = m_capture.value("fingerprint").toString();
+        if (m_fingerprint.isEmpty()) { fail("Cached binding capture omitted fingerprint"); return; }
+        launch({"validate-cache", "--pack", m_hit.pack, "--snapshot", m_litePath, "--contracts", m_contracts,
+                "--binding-identity", m_hit.bindingIdentity,
+                "--out", m_run + "/validation.json"}, [this, generation](int result) {
+            if (result) { fallbackFromCache("cached-required-binding-validation-failed"); return; }
+            m_validation = readObject(m_run + "/validation.json");
+            const auto identity = m_validation.value("identity").toObject();
+            if (!m_validation.value("valid").toBool() || !m_validation.value("injectionReady").toBool() ||
+                m_validation.value("fingerprint").toString() != m_fingerprint ||
+                identity.value("family").toString() != m_hit.family ||
+                identity.value("bindingIdentity").toString() != m_hit.bindingIdentity) {
+                fallbackFromCache("cached-required-binding-receipt-mismatch"); return;
+            }
+            m_mappingIdentity = m_hit.mappingIdentity; m_metadataIdentity = m_hit.metadataIdentity;
+            m_runtimeBinding = identity.value("runtimeBinding").toObject();
+            m_pack = m_hit.pack;
+            event({{"event", "CACHE_LOOKUP"}, {"hit", true}, {"cacheKey", m_mappingIdentity},
+                   {"mappingIdentity", m_mappingIdentity}, {"reason", "required-members-and-installed-digests-verified"}});
+            if (generation != m_generation || !current()) return;
+            progressReference(m_hit);
+            if (generation != m_generation || !current()) return;
+            QElapsedTimer finalElapsed; finalElapsed.start();
+            if (!identityValid() || fileDigest(m_hit.pack, 2 * 1024 * 1024) != m_hit.digest) {
+                fail("Target or verified pack changed before Agent loading"); return;
+            }
+            performance("final check", finalElapsed.elapsed());
+            if (generation == m_generation && current()) finalize();
+        });
+    });
+}
 void MappingService::fallbackFromCache(const QString &reason) {
+    const auto generation = m_generation;
     event({{"event", "CACHE_LOOKUP"}, {"hit", false}, {"cacheKey", m_hit.mappingIdentity},
            {"mappingIdentity", m_hit.mappingIdentity}, {"reason", reason}});
+    if (generation != m_generation || !current() || !m_busy) return;
     m_mappingIdentity.clear(); // Cached identity failed live evidence; target identity is unknown.
     m_candidateIndex = m_candidates.size();
     m_forceAutomatic = true;
     m_hit = {}; m_cachePath = false; m_validation = {};
+    m_runtimeBinding = {};
+    m_upgradeCacheProof = false;
+    m_identityPacksFile = m_run + "/identity-packs.json";
+    writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
     // Recapture the structural candidate scope; cached validation scope is too narrow
     // to supply incoming-reference evidence to automatic matching.
     m_fullLite = true;
@@ -459,6 +530,9 @@ void MappingService::validate(const QString &pack, bool automatic) {
                }
                m_mappingIdentity = stableIdentity;
                m_metadataIdentity = identity.value("metadataIdentity").toString();
+               m_runtimeBinding = identity.value("runtimeBinding").toObject();
+               // Upgrade legacy verified objects atomically after the normal full
+               // validation/final recheck, so future attaches can use compact proof.
                m_pack = m_run + "/validated-pack.json";
                writeObject(m_pack, m_validation.value("pack").toObject());
                Cache(m_root).candidate(m_run, m_fingerprint, "validated-awaiting-recheck");

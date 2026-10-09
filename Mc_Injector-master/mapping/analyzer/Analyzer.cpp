@@ -38,7 +38,7 @@ static void canonicalSort(Json::Array &items) {
 }
 Json classMetadata(Json klass) {
     for (const auto *key :
-         {"constantPool", "constantPoolCount", "major", "minor", "crossReferences"})
+         {"constantPool", "constantPoolCount", "major", "minor", "crossReferences", "installedDigest", "installedProofKind"})
         klass.object().erase(key);
     for (auto &m : klass["methods"].array())
         m.object().erase("bytecode");

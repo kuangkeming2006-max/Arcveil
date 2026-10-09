@@ -69,6 +69,13 @@ ControllerResponsivenessTests 验证生产接收路径及事件循环相关行�
 没有完整的双端协议 schema/黄金样例测试覆盖所有扩展消息、编码、版本兼容及边界长度。后续拆 codec 时应补这些验证，不在本轮修改产品行为。
 
 IPC 是跨模块契约，没有一个现成独立 ipc 库囊括所有业务 codec。
+
+v56.5 startup extension: authenticated Agent sends BINDING_READY <milliseconds>
+<jvmtiCalls> <jniCalls> only after exact pinned-loader JNI binding succeeds; failure
+sends ERROR RUNTIME_BINDING_FAILED. Controller rejects malformed/zero-count receipts,
+checks current transaction/PID/start, and requires both binding and renderer readiness
+before Active. HELLO alone no longer stops the attach timeout. Legacy Agents lacking
+this receipt cannot silently activate through the current Controller.
 普通 UI/renderer 改动读本页即可；消息变更才读取两端对应分支和服务编码入口，不需要加载整个 runtime/controller 大文件。
 
 2026-09-26 导航更新：控制器接收/快照在 OverlayManagerProtocol.cpp，服务消息在 Services.cpp，读写在 Transport.cpp，公共 token helper 在 Codec.internal.cpp；Agent 接收在 AgentRuntimeControl.cpp，发送在 Telemetry.cpp，feature 编码在 Features.cpp。消息格式与字段顺序未改，生命周期 smoke 和控制器响应性测试已运行通过。

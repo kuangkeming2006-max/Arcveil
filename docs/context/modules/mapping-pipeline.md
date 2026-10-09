@@ -227,9 +227,27 @@ normalized snapshot v2 excludes captureScope and launch hint duplication. Legacy
 snapshots are verified under their original digest before normalization upgrade.
 Legacy verified entries can be same-family references but cannot bypass live validation.
 
-Fast path: cheap identity-lite/family detection -> verified family/version candidates
--> metadataIdentity selection -> required-only detail + cached-pack live validation
--> installed mappingIdentity equality -> final process/runtime recheck -> ready.
+v56.5 fast path: verified pack/proof integrity and contracts check -> one compact
+required-scope capture -> validate-cache (family, portable bindingIdentity,
+exact required members/descriptors/staticness and loader coherence) -> process/start
+and immutable pack digest recheck -> readyForTransaction. No selected-detail or second
+lite/detail final capture runs on a hit. The capture double-reads required class
+metadata and installed-content digests; directly consumed classes get content proof,
+additional hierarchy classes get complete member metadata proof. Bytecode/constant
+pool of consumed classes are hashed inside the
+JVM and are not serialized, decoded into a graph, or matched against candidates.
+bindingIdentity is portable across PID/start/loader-instance changes; runtimeBinding
+pins the newly observed anchor + defining-loader type/instance for Agent JNI lookup.
+lastVerified is only a cheap candidate hint, never authorization. Legacy PR #6 proofs
+derive portable evidence offline from their integrity-checked verified source, then
+validate the current compact capture and atomically publish a new proof. No live
+detail is needed for this one-time upgrade. Mixin annotation session UUIDs and their
+synthetic lambda nonce are normalized in proof material; exact required member names
+are still checked against the unmodified metadata and again through Agent JNI.
+The installed-pool proof keeps all entries and each instruction's index/value,
+allowing unused generated overpass constants to reorder without hiding changes to
+used constants or raw method bytes. validate-cache requests bindingOnly identity,
+avoiding construction of unused historical metadata/structure fingerprints.
 Incomplete cold-start required classes can be loaded without initialization through
 the cached pack's anchor loader, then the required scope is checked again. Miss or
 failed live evidence enters automatic matching; an authored bootstrap is independently
@@ -242,20 +260,25 @@ Watch uses 2.5--5 s backoff. Stable ambiguity pauses automatic polling; missing 
 continue watching. Detail reuse partitions unchanged classes by metadata and the
 same PID/start/loader instance, captures changed/new affected classes, then merges
 and rechecks the selected scope. The final pass never reuses captured detail.
-MappingProbe-v8.dll is the resident protocol boundary; Standard Attach unsupported
+MappingProbe-v13.dll is the resident protocol boundary; Standard Attach unsupported
 is remembered for PID/processStart, selecting NativeLoader on later captures/loading.
 
 Console events include TRANSACTION_BEGIN/CANCEL/COMMIT, CACHE_LOOKUP (cacheKey,
 mappingIdentity, hit/reason), CACHE_PROMOTE, REFERENCE_SELECTION (both families and
-identities/reason) and CAPTURE_TRANSPORT_SELECTED. COMMIT means Agent renderer Active;
+identities/reason), CAPTURE_TRANSPORT_SELECTED, STAGE_PERFORMANCE and ATTACH_PERFORMANCE.
+Totals include Analyzer/helper subprocess counts, probe/resolver JVMTI calls, resolver
+JNI calls, transported bytes and JVM-returned bytecode/constant-pool bytes (both reads).
+COMMIT requires authenticated BINDING_READY plus renderer readiness;
 MappingVerified alone cannot claim an injected active session.
 
 Tests: TransactionCacheTests executes the real Analyzer/Resolver/validator against
-full-schema fixtures with only capture transport substituted, covering A--H/J.
+full-schema fixtures with only capture transport substituted, covering A--K.
 ControllerResponsivenessTests covers old ready suppression, process switch and Active
 selection independence. LiveMappingSmoke runs two real attach/detach cycles with a
-persistent cache and asserts second AUTO_RESOLVE count == 0. Evidence and limits:
-P/tests/mapping/V56_4_VALIDATION.md.
+persistent cache; ARCVEIL_LIVE_CACHE/CYCLES/SCENARIO support independent restart runs.
+LUNAR_ACCEPTANCE includes cacheHit, autoResolveCalls, detailCaptureCalls, totalAttachMs,
+stages/counters, process identity, binding profile/state and renderer readiness.
+Evidence and limits: P/tests/mapping/V56_5_VALIDATION.md.
 
 Fast candidate/known-pack discovery hashes pack/proof only, avoiding synchronous
 reads of every historical snapshot. Full source snapshot integrity is checked only

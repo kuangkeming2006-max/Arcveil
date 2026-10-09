@@ -31,6 +31,7 @@ bool AgentRuntime::launchResolver() noexcept
     m_resolver = reinterpret_cast<HANDLE>(::_beginthreadex(
         nullptr, 0U, &AgentRuntime::resolverEntry, this, 0U, &threadId));
     if (m_resolver == nullptr) {
+        m_bindingResult.store(-1, std::memory_order_release);
         m_bindings->markResolverUnavailable();
         log::error("Could not create the asynchronous Minecraft mapping resolver.");
         return false;
@@ -46,16 +47,22 @@ unsigned __stdcall AgentRuntime::resolverEntry(void* const context) noexcept
 
 void AgentRuntime::resolverMain() noexcept
 {
+    const auto started = GetTickCount64();
     // ScopedThreadEnv uses AttachCurrentThreadAsDaemon for this CRT-created
     // native thread. Its JNIEnv is resolver-local and is never shared with the
     // Java-owned LWJGL render thread.
     jvm::ScopedThreadEnv environment(m_vm, true);
     if (!environment) {
+        m_bindingResult.store(-1, std::memory_order_release);
         m_bindings->markResolverUnavailable();
         log::error("Could not attach the mapping resolver to the JVM.");
         return;
     }
     m_bindings->runResolver(environment.get(), m_stopEvent);
+    m_bindingMs = GetTickCount64() - started;
+    m_bindingJvmtiCalls = m_bindings->bindingJvmtiCalls();
+    m_bindingJniCalls = m_bindings->bindingJniCalls();
+    m_bindingResult.store(m_bindings->bindingsReady() ? 1 : -1, std::memory_order_release);
 }
 
 void AgentRuntime::joinResolver() noexcept

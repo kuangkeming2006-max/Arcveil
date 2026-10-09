@@ -91,3 +91,10 @@ Minecraft dictionary may be retargeted to detected Badlion before export; this d
 not grant confidence from a family string. Cache references are family scoped in
 mapping-pipeline, and Lunar is never a strong reference solely through lastVerified.
 Agent registry publication/freeze and Gameplay BindingCache remain unchanged.
+
+v56.5: GameBindings accepts optional BindingLoaderIdentity (anchor signature,
+defining-loader type/instance). Production Controller always supplies the current
+compact/full validation receipt. findMinecraftClass rejects ambiguous anchors and
+requires this exact loader before existing JNI member lookups. bindingsReady() and
+resolver counters are read by the resolver worker after runResolver, then published
+through AgentRuntime's atomic result. Unpinned legacy smoke callers remain supported.

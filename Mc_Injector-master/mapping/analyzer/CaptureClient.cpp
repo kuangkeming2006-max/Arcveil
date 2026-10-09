@@ -69,6 +69,8 @@ QString targetJava(quint32 pid) {
     return QFileInfo::exists(java) ? java : QString{};
 }
 Json processRun(const QString &program, const QStringList &arguments, int timeout) {
+    QElapsedTimer elapsed;
+    elapsed.start();
     QProcess process;
     process.setProgram(program);
     process.setArguments(arguments);
@@ -81,6 +83,7 @@ Json processRun(const QString &program, const QStringList &arguments, int timeou
         process.waitForFinished(3000);
     }
     return Json::Object{
+        {"durationMs", double(elapsed.elapsed())},
         {"started", started},
         {"timedOut", started && !finished},
         {"exitCode", started ? Json(process.exitCode()) : Json(nullptr)},
@@ -106,12 +109,13 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v8.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v13.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     Json request = Json::Object{{"requestId", requestId},
                                 {"mode", options.contains("--lite") ? "lite" : "full"}};
+    if (options.contains("--binding-check")) request["bindingCheck"] = true;
     if (options.contains("--candidates"))
         request["selectionPath"] =
             QFileInfo(option("--candidates")).absoluteFilePath().toUtf8().toStdString();
@@ -205,6 +209,8 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                        attempt ? QStringList{QString::number(pid), probe, encoded} : args,
                        attempt ? 25000 : 60000);
         diagnostic["javaRuntime"] = java.toUtf8().toStdString();
+        events(Json::Object{{"event", "CAPTURE_HELPER"}, {"transport", attempt ? "NativeLoader" : "StandardAttach"},
+                            {"durationMs", diagnostic.at("durationMs")}, {"success", diagnostic.at("success")}});
         if (!attempt && diagnostic.at("exitCode") == Json(10))
             events(Json::Object{{"event", "CAPTURE_TRANSPORT_SELECTED"}, {"transport", "NativeLoader"},
                 {"pid", double(pid)}, {"reason", "standard-attach-explicitly-unsupported"}});

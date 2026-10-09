@@ -1,5 +1,7 @@
 #pragma once
 #include <QString>
+#include <QElapsedTimer>
+#include <QJsonObject>
 #include <QUuid>
 #include <memory>
 
@@ -13,6 +15,12 @@ struct AttachTransaction {
     State state = State::Idle;
     bool valid = true;
     quint64 generation = 0;
+    QElapsedTimer elapsed, loaderElapsed, agentElapsed;
+    QJsonObject stageMs;
+    int analyzerProcesses = 0, helperProcesses = 0, detailCaptureCalls = 0, autoResolveCalls = 0;
+    qint64 jvmtiCalls = 0, capturedBytes = 0, bytecodeBytes = 0, constantPoolBytes = 0;
+    bool cacheHit = false;
+    qint64 jniCalls = 0;
     void invalidate() { valid = false; ++generation; }
     QString stateName() const {
         switch (state) {

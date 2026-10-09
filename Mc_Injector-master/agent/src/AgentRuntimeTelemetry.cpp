@@ -172,6 +172,7 @@ unsigned __stdcall AgentRuntime::telemetryEntry(void* const context) noexcept
 
 void AgentRuntime::telemetryMain() noexcept
 {
+    bool bindingSent = false;
     const HANDLE events[2]{m_stopEvent, m_telemetryEvent};
     std::uint64_t sentGameStateRevision = 0U;
     std::uint32_t sentStateChangedRevision = 0U;
@@ -191,6 +192,13 @@ void AgentRuntime::telemetryMain() noexcept
         }
         if (!m_handshakeSent.load(std::memory_order_acquire)) {
             continue;
+        }
+        const auto binding = m_bindingResult.load(std::memory_order_acquire);
+        if (!bindingSent && binding != 0 && m_options.bindingRequired) {
+            const auto message = binding > 0 ? "BINDING_READY " + std::to_string(m_bindingMs) + " " +
+                std::to_string(m_bindingJvmtiCalls) + " " + std::to_string(m_bindingJniCalls)
+                : std::string("ERROR RUNTIME_BINDING_FAILED exact-JNI-binding-rejected");
+            bindingSent = m_ipc->sendLine(message);
         }
 
         // Readiness and hotkey state originate in SwapBuffers but pipe writes

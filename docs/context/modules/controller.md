@@ -124,3 +124,10 @@ Active ends only through detach (normal authenticated DETACH transaction). A new
 Attach cancels the preceding owner and queues behind bounded Agent teardown before
 starting its new owner. Transport preference is memoized by PID/processStart and
 shared from capture to Agent startup. See MAPPING_ATTACH_AUDIT.md and mapping-pipeline.
+
+v56.5: MappingService.runtimeBinding() returns the currently validated anchor and
+defining-loader type/instance. launchVerifiedAgent pins these in Agent options and
+rechecks transaction ownership/process identity after observable callbacks before
+starting either loader. HELLO authenticates transport; BINDING_READY reports successful
+exact JNI lookup and counters; Active/TRANSACTION_COMMIT requires it and RENDERER_READY.
+The attach timeout remains armed until binding succeeds. Invalid receipts fail closed.

@@ -1,9 +1,11 @@
 #include "../Json.h"
 #include "../SnapshotStream.h"
 #include "../ProbeProtocol.h"
+#include "../InstalledProof.h"
 #include <jni.h>
 #include <jvmti.h>
 #include <windows.h>
+#include <wincrypt.h>
 #include <algorithm>
 #include <mutex>
 #include <set>
@@ -14,11 +16,34 @@
 using namespace mcoverlay::mapping;
 namespace {
 std::mutex captureMutex;
+std::string installedHash(const Json &klass, bool content = true) {
+    const auto material = content ? installedClassMaterial(klass) : installedHierarchyMaterial(klass);
+    HCRYPTPROV provider = 0; HCRYPTHASH hash = 0;
+    if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
+        throw std::runtime_error("installed proof SHA256 provider unavailable");
+    struct Cleanup { HCRYPTPROV p; HCRYPTHASH &h; ~Cleanup() { if (h) CryptDestroyHash(h); CryptReleaseContext(p, 0); } } cleanup{provider, hash};
+    unsigned char digest[32]{}; DWORD size = sizeof(digest);
+    if (!CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash) ||
+        !CryptHashData(hash, reinterpret_cast<const BYTE *>(material.data()), DWORD(material.size()), 0) ||
+        !CryptGetHashParam(hash, HP_HASHVAL, digest, &size, 0) || size != sizeof(digest))
+        throw std::runtime_error("installed proof SHA256 failed");
+    std::string out; constexpr char digits[] = "0123456789abcdef";
+    for (auto b : digest) { out += digits[b >> 4]; out += digits[b & 15]; }
+    return out;
+}
+thread_local Json *callStats = nullptr;
+void countCall(const char *operation) {
+    if (!callStats) return;
+    auto &counts = (*callStats)["jvmtiCallsByOperation"];
+    counts[operation] = (counts.contains(operation) ? counts.at(operation).number() : 0) + 1;
+    (*callStats)["jvmtiCalls"] = (*callStats).at("jvmtiCalls").number() + 1;
+}
 void progress(const std::filesystem::path &output, const char *stage) {
     std::ofstream file(std::filesystem::path(output.wstring() + L".status"), std::ios::binary);
     file << Json(Json::Object{{"stage", stage}}).dump();
 }
 void require(jvmtiError result, const char *operation) {
+    countCall(operation);
     const auto reason = std::string(operation) + ": JVMTI " + std::to_string(result);
     if (result == JVMTI_ERROR_CLASS_NOT_PREPARED || result == JVMTI_ERROR_INVALID_CLASS ||
         result == JVMTI_ERROR_INVALID_METHODID || result == JVMTI_ERROR_INVALID_FIELDID)
@@ -30,8 +55,10 @@ template <class T> struct Buffer {
     jvmtiEnv *ti;
     T *data = nullptr;
     ~Buffer() {
-        if (data)
+        if (data) {
+            countCall("Deallocate");
             ti->Deallocate(reinterpret_cast<unsigned char *>(data));
+        }
     }
 };
 std::string hex(const unsigned char *data, int count, const std::string &kind) {
@@ -63,6 +90,7 @@ struct Capture {
     SnapshotWriter *stream = nullptr;
     const Json *selection = nullptr;
     const Json *liteScope = nullptr;
+    bool bindingCheck = false;
     ~Capture() {
         for (auto loader : loaders)
             env->DeleteLocalRef(loader);
@@ -111,22 +139,26 @@ struct Capture {
             if (obsolete)
                 throw RuntimeChanged("class changed during capture");
             std::string code;
-            if (!lite && !(mods & (0x100 | 0x400))) {
+            if ((!lite || bindingCheck) && !(mods & (0x100 | 0x400))) {
                 jint length = 0;
                 Buffer<unsigned char> bytes{ti};
                 require(ti->GetBytecodes(methodIds.data[i], &length, &bytes.data), "GetBytecodes");
+                (*stats)["jvmtiBytecodeBytes"] = (*stats).at("jvmtiBytecodeBytes").number() + length;
                 code = hex(bytes.data, length,
                            "method-bytecode:" + signature(ti, klass) + "." + name.data + desc.data);
             }
             Json method =
                 Json::Object{{"name", name.data}, {"descriptor", desc.data}, {"modifiers", mods}};
-            if (!lite)
+            if (!lite || bindingCheck)
                 method["bytecode"] = std::move(code);
             methods.push_back(std::move(method));
         }
         auto order = [](const Json &a, const Json &b) { return a.dump() < b.dump(); };
         std::sort(fields.begin(), fields.end(), order);
-        std::sort(methods.begin(), methods.end(), order);
+        if (bindingCheck) std::sort(methods.begin(), methods.end(), [](const Json &a, const Json &b) {
+            return a.at("name").string() + a.at("descriptor").string() < b.at("name").string() + b.at("descriptor").string();
+        });
+        else std::sort(methods.begin(), methods.end(), order);
         Buffer<jclass> interfaceIds{ti};
         require(ti->GetImplementedInterfaces(klass, &count, &interfaceIds.data),
                 "GetImplementedInterfaces");
@@ -141,8 +173,10 @@ struct Capture {
             env->DeleteLocalRef(super);
         jint cpCount = 0, cpBytes = 0, major = 0, minor = 0, mods = 0;
         Buffer<unsigned char> pool{ti};
-        if (!lite)
+        if (!lite || bindingCheck) {
             require(ti->GetConstantPool(klass, &cpCount, &cpBytes, &pool.data), "GetConstantPool");
+            (*stats)["jvmtiConstantPoolBytes"] = (*stats).at("jvmtiConstantPoolBytes").number() + cpBytes;
+        }
         if (!lite && !selection)
             require(ti->GetClassVersionNumbers(klass, &minor, &major), "GetClassVersionNumbers");
         require(ti->GetClassModifiers(klass, &mods), "GetClassModifiers");
@@ -159,10 +193,15 @@ struct Capture {
             result.object().erase("major");
             result.object().erase("minor");
         }
-        if (!lite) {
+        if (!lite || bindingCheck) {
             result["constantPoolCount"] = cpCount;
             result["constantPool"] =
                 hex(pool.data, cpBytes, "constant-pool:" + signature(ti, klass));
+        }
+        if (bindingCheck) {
+            result["installedDigest"] = installedHash(result);
+            result.object().erase("constantPool"); result.object().erase("constantPoolCount");
+            for (auto &method : result["methods"].array()) method.object().erase("bytecode");
         }
         return result;
     }
@@ -184,6 +223,7 @@ struct Capture {
             for (const auto &request : requests.array())
                 if (name == request.at("anchor").string()) {
                     jobject loader = nullptr;
+                    countCall("GetClassLoader:warmup");
                     if (ti->GetClassLoader(classes.data[i], &loader) == JVMTI_ERROR_NONE &&
                         loader) {
                         jclass type = env->FindClass("java/lang/Class");
@@ -244,6 +284,7 @@ struct Capture {
             auto signature = name.string(); std::replace(signature.begin(), signature.end(), '.', '/');
             liteNames.insert("L" + signature + ";");
         }
+        const auto contentNames = liteNames;
         // Resolve scope hierarchy before metadata capture; unrelated classes remain signature-only.
         if (liteScope) for (int i = 0; i < count; ++i) if (liteNames.contains(signature(ti, classes.data[i]))) {
             jint status = 0;
@@ -300,8 +341,18 @@ struct Capture {
             if (!(status & JVMTI_CLASS_STATUS_PREPARED))
                 continue;
             (*stats)["activeClass"] = name;
+            const bool compact = bindingCheck;
+            bindingCheck = compact && contentNames.contains(name);
             auto first = members(classes.data[i]);
             auto second = members(classes.data[i]);
+            if (compact) {
+                if (!bindingCheck) {
+                    first["installedDigest"] = installedHash(first, false);
+                    second["installedDigest"] = installedHash(second, false);
+                }
+                first["installedProofKind"] = second["installedProofKind"] = bindingCheck ? "required-content" : "hierarchy-metadata";
+            }
+            bindingCheck = compact;
             if (first != second)
                 throw RuntimeChanged("unstable transformed class: " + name);
             auto metadata = first;
@@ -406,6 +457,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
     JNIEnv *env = nullptr;
     std::filesystem::path errorPath, temporary;
     Json stats = Json::Object{
+        {"jvmtiCalls", 0}, {"jvmtiCallsByOperation", Json::Object{}},
+        {"jvmtiBytecodeBytes", 0}, {"jvmtiConstantPoolBytes", 0},
         {"loadedClassCount", 0},
         {"capturedClassCount", 0},
         {"classMetadataBytes", 0},
@@ -420,6 +473,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         {"jvmBufferLimit", 16 * 1024 * 1024},
         {"largestClass", ""},
         {"largestClassBytes", 0}};
+    callStats = &stats;
+    struct ResetStats { ~ResetStats() { callStats = nullptr; } } resetStats;
     auto failure = [&](Json detail) {
         if (!temporary.empty()) {
             std::error_code error;
@@ -470,7 +525,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                 throw std::runtime_error("empty detail selection");
         }
         const bool detail = request.contains("selectionPath");
-        if (!lite) {
+        if (!lite || request.contains("bindingCheck")) {
             jvmtiCapabilities wanted{};
             wanted.can_get_bytecodes = 1;
             wanted.can_get_constant_pool = 1;
@@ -487,7 +542,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                                                             : "full"}});
         Json snapshot;
         {
-            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr};
+            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr, request.contains("bindingCheck")};
+            stats["compactBindingCheck"] = capture.bindingCheck;
             if (request.contains("warmup")) {
                 progress(path, "authored-class-warmup");
                 capture.warmup(request.at("warmup"));
@@ -500,6 +556,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         if (request.contains("detection"))
             for (const auto *property : {"java.home", "java.class.path", "sun.java.command"}) {
                 Buffer<char> hint{ti};
+                countCall("GetSystemProperty");
                 if (ti->GetSystemProperty(property, &hint.data) != JVMTI_ERROR_NONE || !hint.data)
                     continue;
                 std::string value(hint.data);
@@ -541,6 +598,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                            created.dwLowDateTime);
         snapshot["complete"] = true;
         // The probe owns a dedicated environment and installs no hooks or callbacks.
+        countCall("DisposeEnvironment");
         ti->DisposeEnvironment();
         ti = nullptr;
         const auto footerIndex = std::size_t(stats.at("capturedClassCount").number());

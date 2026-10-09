@@ -1,4 +1,5 @@
 #include "Resolver.h"
+#include "../InstalledProof.h"
 #include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <algorithm>
@@ -318,10 +319,11 @@ Json requiredClassNames(const Json &contracts, const Json &symbols) {
             names.push_back(symbols.at(key));
     return names;
 }
-Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts) {
+Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts, bool bindingOnly) {
     Model model(snapshot);
     const auto family = detectedFamily(pack, model);
     std::set<const Class *> selected;
+    std::set<std::string> contentRequired;
     bool complete = false;
     for (const auto &provider : pack.at("providers").array())
         for (const auto &dict : provider.at("dictionaries").array()) {
@@ -335,7 +337,8 @@ Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contrac
             for (const auto &[key, spec] : contracts.at("symbols").object())
                 if (spec.at("kind").string() == "class" && required.contains(key) && !symbols.at(key).string().empty()) {
                     const auto *c = model.find(sig(symbols.at(key).string()), anchor->json->at("loaderKey").string());
-                    if (c) selected.insert(c); else if (spec.at("required").boolean()) ready = false;
+                    if (c) { selected.insert(c); contentRequired.insert(c->json->at("name").string()); }
+                    else if (spec.at("required").boolean()) ready = false;
                 }
             complete |= ready;
         }
@@ -363,12 +366,37 @@ Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contrac
         for (auto &item : klass["interfaces"].array()) item["loaderKey"] = loader(item.at("loaderKey"));
         return classMetadata(klass);
     };
-    Json::Array metadata, detail;
+    Json::Array metadata, detail, bindings;
+    std::map<std::string, Json::Array> loaderGroups;
+    for (const auto *c : selected) loaderGroups[c->json->at("loaderKey").string()].push_back(c->json->at("name"));
+    std::map<std::string, std::string> loaderRoles;
+    for (auto &[key, names] : loaderGroups) {
+        std::sort(names.begin(), names.end(), [](const Json &a, const Json &b) { return a.string() < b.string(); });
+        loaderRoles[key] = "required-loader:" + sha256(Json(names).dump());
+    }
+    const auto role = [&](const Json &key) {
+        const auto name = key.string();
+        return name == "bootstrap" ? name : loaderRoles.contains(name) ? loaderRoles.at(name) : "uncaptured:" + name;
+    };
+    bool bindingsComplete = complete;
     const bool lite = snapshot.contains("detailLevel") && snapshot.at("detailLevel").string() == "lite";
     for (const auto *c : selected) {
-        auto klass = stable(*c->json);
-        metadata.push_back(klass);
-        if (!lite) {
+        auto klass = bindingOnly ? Json() : stable(*c->json);
+        if (!bindingOnly) metadata.push_back(klass);
+        const auto &source = *c->json;
+        const bool content = contentRequired.contains(source.at("name").string());
+        const auto installed = source.contains("installedDigest") ? source.at("installedDigest").string()
+            : !lite ? sha256(content ? installedClassMaterial(source) : installedHierarchyMaterial(source)) : std::string{};
+        if (source.contains("installedDigest")) bindingsComplete &= source.contains("installedProofKind") &&
+            source.at("installedProofKind").string() == (content ? "required-content" : "hierarchy-metadata");
+        bindingsComplete &= installed.size() == 64;
+        Json::Array interfaces;
+        for (const auto &i : source.at("interfaces").array()) interfaces.push_back(Json::Object{{"name", i.at("name")}, {"loader", role(i.at("loaderKey"))}});
+        std::sort(interfaces.begin(), interfaces.end(), [](const Json &a, const Json &b) { return a.dump() < b.dump(); });
+        bindings.push_back(Json::Object{{"name", source.at("name")}, {"loader", role(source.at("loaderKey"))},
+            {"superLoader", role(source.at("super").at("loaderKey"))}, {"interfaces", interfaces},
+            {"proofKind", content ? "required-content" : "hierarchy-metadata"}, {"digest", installed}});
+        if (!lite && !bindingOnly) {
             Json::Array methods;
             const auto codes = normalizeClassBytecode(*c->json);
             std::size_t methodIndex = 0;
@@ -385,7 +413,16 @@ Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contrac
         }
     }
     auto sort = [](Json::Array &items) { std::sort(items.begin(), items.end(), [](const Json &a, const Json &b) { return a.dump() < b.dump(); }); };
-    sort(metadata); sort(detail);
+    sort(metadata); sort(detail); sort(bindings);
+    Json runtimeBinding;
+    for (const auto &p : pack.at("providers").array()) for (const auto &d : p.at("dictionaries").array()) {
+        if (d.at("family").string() != family) continue;
+        const auto *anchor = model.find(sig(d.at("symbols").at("minecraftName").string()));
+        if (!anchor) continue;
+        if (snapshot.contains("loaderInstances")) for (const auto &loader : snapshot.at("loaderInstances").array())
+            if (loader.at("loaderKey") == anchor->json->at("loaderKey"))
+                runtimeBinding = Json::Object{{"anchor", anchor->json->at("name")}, {"type", loader.at("type")}, {"instance", loader.at("instance")}};
+    }
     const auto version = pack.at("gameVersion");
     const auto digest = [&](const Json::Array &classes, const char *domain) {
         return sha256(Json(Json::Object{{"identityVersion", 1}, {"domain", domain},
@@ -393,9 +430,39 @@ Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contrac
             {"analyzerRevision", 5}, {"schemaVersion", pack.at("schemaVersion")}, {"classes", classes}}).dump());
     };
     return Json::Object{{"family", family}, {"minecraftVersion", version},
-        {"metadataIdentity", complete ? digest(metadata, "metadata") : ""},
-        {"mappingIdentity", complete && !lite ? digest(detail, "installed-structure") : ""},
+        {"metadataIdentity", complete && !bindingOnly ? digest(metadata, "metadata") : ""},
+        {"mappingIdentity", complete && !lite && !bindingOnly ? digest(detail, "installed-structure") : ""},
+        {"bindingIdentity", bindingsComplete ? digest(bindings, "installed-binding-v3") : ""},
+        {"bindingClasses", bindings},
+        {"runtimeBinding", runtimeBinding},
         {"identityComplete", complete}, {"identityClasses", double(selected.size())}};
+}
+Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
+                           const std::string &bindingIdentity,
+                           const Events &events) {
+    (void)bindings::parseMappingPack(pack);
+    const auto identity = mappingIdentity(pack, snapshot, contracts, true);
+    // bindingIdentity covers metadata/content and the defining-loader partition.
+    // Diagnostic metadataIdentity retains original session-specific method names.
+    if (bindingIdentity.empty() ||
+        identity.at("bindingIdentity").string() != bindingIdentity ||
+        !identity.at("runtimeBinding").contains("instance"))
+        return Json::Object{{"valid", false}, {"injectionReady", false}, {"reason", "cached-required-structure-or-loader-changed"}};
+    Model model(snapshot);
+    const auto family = detectedFamily(pack, model);
+    for (const auto &p : pack.at("providers").array()) for (const auto &d : p.at("dictionaries").array()) {
+        if (d.at("family").string() != family) continue;
+        auto result = dictionaryValidation(d, model, contracts, {});
+        if (!result.at("valid").boolean()) continue;
+        if (events) for (const auto &e : result.at("symbols").array()) events(e);
+        result["injectionReady"] = true;
+        result["level"] = "cached-required-members-and-installed-digests";
+        result["fingerprint"] = snapshot.at("fingerprint");
+        result["pack"] = pack;
+        result["identity"] = identity;
+        return result;
+    }
+    return Json::Object{{"valid", false}, {"injectionReady", false}, {"reason", "cached-required-member-validation-failed"}};
 }
 Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
     if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");

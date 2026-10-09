@@ -31,7 +31,7 @@ ApplicationWindow {
                 Label { text: "运行时映射 · 每一个结果都有来源"; color: host.secondaryTextColor }
             }
             Item { Layout.fillWidth: true }
-            Label { text: "ARCVEIL  /  v56.4"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
+            Label { text: "ARCVEIL  /  v56.5"; color: host.secondaryTextColor; font.letterSpacing: 1.3 }
         }
         RowLayout {
             Layout.fillWidth: true; spacing: 10

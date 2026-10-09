@@ -276,9 +276,15 @@ struct GameplaySettings final {
 // Minecraft 1.8.9-only JNI binding cache. Only jclass global references and
 // method/field IDs survive a frame. Minecraft/player/AABB object references
 // are always local to sample() and are discarded before SwapBuffers returns.
+struct BindingLoaderIdentity { std::string anchor, type; unsigned instance = 0; };
 class GameBindings final {
 public:
-    GameBindings(JavaVM* vm, jvmtiEnv* jvmti, const std::filesystem::path& mappingPack = {}, std::string_view mappingHash = {}) noexcept;
+    using LoaderIdentity = BindingLoaderIdentity;
+    GameBindings(JavaVM* vm, jvmtiEnv* jvmti, const std::filesystem::path& mappingPack = {}, std::string_view mappingHash = {}, LoaderIdentity loader = {}) noexcept;
+    [[nodiscard]] bool bindingsReady() const noexcept { return m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved; }
+    // Resolver-thread diagnostics; no bytecode/constant-pool retrieval in Agent binding.
+    [[nodiscard]] std::uint64_t bindingJvmtiCalls() const noexcept { return m_bindingJvmtiCalls; }
+    [[nodiscard]] std::uint64_t bindingJniCalls() const noexcept { return m_bindingJniCalls; }
     ~GameBindings();
 
     GameBindings(const GameBindings&) = delete;
@@ -436,6 +442,8 @@ private:
     JavaVM* m_vm = nullptr;
     jvmtiEnv* m_jvmti = nullptr;
     bindings::MappingRegistry m_mappingRegistry;
+    LoaderIdentity m_bindingLoader;
+    std::uint64_t m_bindingJvmtiCalls = 0, m_bindingJniCalls = 0;
     std::unique_ptr<BindingCache> m_cache;
 
     enum class ResolutionPhase : std::uint8_t {

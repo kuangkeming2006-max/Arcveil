@@ -62,7 +62,7 @@ AgentOptions parseAgentOptions(const char* const options)
 
     const std::string_view all(options);
     std::size_t begin = 0U;
-    bool seenMapping=false,seenHash=false;
+    bool seenMapping=false,seenHash=false,seenBinding=false,seenAnchor=false,seenLoader=false,seenInstance=false;
     while (begin < all.size()) {
         const std::size_t end = all.find(';', begin);
         const auto token = trim(all.substr(begin, end == std::string_view::npos
@@ -72,7 +72,24 @@ AgentOptions parseAgentOptions(const char* const options)
         if (separator != std::string_view::npos) {
             const auto key = trim(token.substr(0U, separator));
             const auto value = trim(token.substr(separator + 1U));
-            if (key == "mapping") {
+            if (key == "bindingRequired") {
+                if (seenBinding || value != "1") result.mappingOptionsValid = false;
+                seenBinding = true; result.bindingRequired = true;
+            } else if (key == "mappingAnchor" || key == "mappingLoaderType") {
+                auto &seen = key == "mappingAnchor" ? seenAnchor : seenLoader;
+                if (seen || value.empty() || value.size() > 8192 || value.size() % 2) result.mappingOptionsValid = false;
+                seen = true; std::string decoded;
+                for (std::size_t i = 0; i + 1 < value.size(); i += 2) {
+                    unsigned byte = 0; auto parsed = std::from_chars(value.data() + i, value.data() + i + 2, byte, 16);
+                    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + i + 2 || byte == 0) { result.mappingOptionsValid = false; break; }
+                    decoded += static_cast<char>(byte);
+                }
+                (key == "mappingAnchor" ? result.mappingAnchor : result.mappingLoaderType) = decoded;
+            } else if (key == "mappingLoaderInstance") {
+                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result.mappingLoaderInstance);
+                if (seenInstance || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) result.mappingOptionsValid = false;
+                seenInstance = true;
+            } else if (key == "mapping") {
                 if(seenMapping||value.empty()||value.size()>32768||value.size()%2)result.mappingOptionsValid=false;
                 seenMapping=true;std::string decoded;
                 for(std::size_t i=0;i+1<value.size();i+=2){unsigned byte=0;auto parsed=std::from_chars(value.data()+i,value.data()+i+2,byte,16);if(parsed.ec!=std::errc{}||parsed.ptr!=value.data()+i+2||byte==0){result.mappingOptionsValid=false;break;}decoded+=static_cast<char>(byte);}
@@ -103,6 +120,10 @@ AgentOptions parseAgentOptions(const char* const options)
         begin = end + 1U;
     }
 
+    if (seenBinding || seenAnchor || seenLoader || seenInstance) {
+        if (!result.bindingRequired || !seenAnchor || !seenLoader || !seenInstance || !seenMapping || !seenHash)
+            result.mappingOptionsValid = false;
+    }
     return result;
 }
 

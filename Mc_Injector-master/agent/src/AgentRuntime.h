@@ -158,6 +158,8 @@ private:
     std::atomic<bool> m_shutdownRequested{false};
     std::atomic<bool> m_vmUnloading{false};
     std::atomic<bool> m_rendererReadySent{false};
+    std::atomic<int> m_bindingResult{0}; // release publishes resolver diagnostics to telemetry
+    std::uint64_t m_bindingMs = 0, m_bindingJvmtiCalls = 0, m_bindingJniCalls = 0;
     std::atomic<bool> m_handshakeSent{false};
     // Set only after the owning SwapBuffers thread has shut down ImGui while
     // its original HGLRC is current. This is distinct from full runtime

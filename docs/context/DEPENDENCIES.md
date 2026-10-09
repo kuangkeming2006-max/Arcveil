@@ -180,3 +180,10 @@ validation + installed mapping identity + final runtime/PID check authorize reus
 Cache v2 immutable objects publish through an atomic index pointer; old runtime
 fingerprints are retained as diagnostic receipts, not reusable keys. Probe-v8 uses
 scoped lite/detail and remembered transport; no registry mutation or new Agent IPC.
+
+v56.5 supersedes the fast-path portion above: Cache -> portable bindingIdentity proof
+-> Probe-v10 compact required check -> Analyzer validate-cache -> MappingService
+runtimeBinding -> pinned Agent GameBindings JNI lookup -> BINDING_READY -> Controller
+Active (also requires renderer readiness). Cold/miss/drift retains full validation and
+atomic cache publication. Immutable installed-content proof never contains loader
+instance authority; each attach supplies a fresh current-process loader pin.

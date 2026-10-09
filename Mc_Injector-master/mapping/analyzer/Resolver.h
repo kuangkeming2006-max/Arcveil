@@ -7,9 +7,12 @@ Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *refe
 Json partitionDetailReuse(Json selection, const Json &lite, const Json &prior);
 Json mergeDetailReuse(Json detail, const Json &selection, const Json &prior);
 Json requiredClassNames(const Json &contracts, const Json &symbols);
-Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts);
+Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts, bool bindingOnly = false);
 Json validateRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
                      const Events &events = {});
+Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
+                           const std::string &bindingIdentity,
+                           const Events &events = {});
 Json resolveMappings(const Json &pack, const Json *reference, const Json &target,
                      const Json &contracts, const Events &events = {}, const Json *state = nullptr,
                      bool incremental = false);
