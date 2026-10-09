@@ -18,7 +18,12 @@ unlink or conceal the module.
 
 ## Current feature set
 
-Internal build: **v56.4**. The pre-connection About page shows the build number.
+Internal build: **v56.6**. The pre-connection About page shows the build number.
+Interface has an independent GUI element size (60–150%) and window width/height
+(40–150%). HUDs and other windows retain their size; compact GUI windows fit
+their controls automatically. Rounded dropdowns retain keyboard navigation.
+The in-game GUI gathers inward from 126% when opening and scatters outward when
+closing, using its existing spring trajectory.
 Fullscreen IME now requests TSF candidate updates from Microsoft Pinyin and
 restores the native candidate window if candidate rendering stops. Live Windows
 TIP tests cover native controls and game-style WGL windows on one or two threads.

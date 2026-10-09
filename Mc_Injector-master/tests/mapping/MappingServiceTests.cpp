@@ -69,8 +69,8 @@ struct MappingServiceTests {
               "stopped observer still consumes cached results and injection ready");
         QFile after(log);
         after.open(QIODevice::ReadOnly);
-        check(after.readAll() == first + "inspect\nidentify\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n",
-              "cache hit still performs final runtime recheck");
+        check(after.readAll() == first + "inspect\nvalidate-cache\n",
+              "cache hit performs compact binding validation without repeated detail");
         after.close();
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "changed");
         start();

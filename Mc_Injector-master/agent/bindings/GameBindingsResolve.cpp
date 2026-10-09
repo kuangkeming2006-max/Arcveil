@@ -23,6 +23,9 @@
 namespace mcoverlay {
 
 namespace {
+thread_local std::uint64_t *bindingJniCounter = nullptr, *bindingJvmtiCounter = nullptr;
+JNIEnv *counted(JNIEnv *env) noexcept { if (bindingJniCounter) ++*bindingJniCounter; return env; }
+jvmtiEnv *counted(jvmtiEnv *ti) noexcept { if (bindingJvmtiCounter) ++*bindingJvmtiCounter; return ti; }
 
 // GetLoadedClasses may require a HotSpot global safepoint even when it is
 // invoked from a native helper thread. By the time the controller offers a
@@ -36,8 +39,8 @@ template<typename Identifier, typename Lookup>
                                   Lookup&& lookup) noexcept
 {
     identifier = lookup();
-    if (env->ExceptionCheck() == JNI_TRUE) {
-        env->ExceptionClear();
+    if (counted(env)->ExceptionCheck() == JNI_TRUE) {
+        counted(env)->ExceptionClear();
         identifier = nullptr;
         return false;
     }
@@ -55,7 +58,7 @@ public:
         }
         while (m_count != 0U) {
             --m_count;
-            m_env->DeleteLocalRef(m_references[m_count]);
+            counted(m_env)->DeleteLocalRef(m_references[m_count]);
         }
     }
 
@@ -124,22 +127,22 @@ void GameBindings::markResolverUnavailable() noexcept
 void GameBindings::probeEnvironmentHints(
     JNIEnv* const env, bindings::ClientEnvironment& environment) noexcept
 {
-    if (env == nullptr || env->PushLocalFrame(12) < 0) {
+    if (env == nullptr || counted(env)->PushLocalFrame(12) < 0) {
         clearException(env);
         return;
     }
 
-    jclass systemClass = env->FindClass("java/lang/System");
-    if (env->ExceptionCheck() == JNI_TRUE || systemClass == nullptr) {
+    jclass systemClass = counted(env)->FindClass("java/lang/System");
+    if (counted(env)->ExceptionCheck() == JNI_TRUE || systemClass == nullptr) {
         clearException(env);
-        env->PopLocalFrame(nullptr);
+        counted(env)->PopLocalFrame(nullptr);
         return;
     }
-    jmethodID getProperty = env->GetStaticMethodID(
+    jmethodID getProperty = counted(env)->GetStaticMethodID(
         systemClass, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;");
-    if (env->ExceptionCheck() == JNI_TRUE || getProperty == nullptr) {
+    if (counted(env)->ExceptionCheck() == JNI_TRUE || getProperty == nullptr) {
         clearException(env);
-        env->PopLocalFrame(nullptr);
+        counted(env)->PopLocalFrame(nullptr);
         return;
     }
 
@@ -148,29 +151,29 @@ void GameBindings::probeEnvironmentHints(
     constexpr std::array<const char*, 3U> kProperties{
         "java.home", "java.class.path", "sun.java.command"};
     for (const char* const property : kProperties) {
-        jstring key = env->NewStringUTF(property);
-        if (env->ExceptionCheck() == JNI_TRUE || key == nullptr) {
+        jstring key = counted(env)->NewStringUTF(property);
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || key == nullptr) {
             clearException(env);
             continue;
         }
         jstring value = static_cast<jstring>(
-            env->CallStaticObjectMethod(systemClass, getProperty, key));
-        if (env->ExceptionCheck() == JNI_TRUE) {
+            counted(env)->CallStaticObjectMethod(systemClass, getProperty, key));
+        if (counted(env)->ExceptionCheck() == JNI_TRUE) {
             clearException(env);
             continue;
         }
         if (value == nullptr) continue;
 
-        const char* utf8 = env->GetStringUTFChars(value, nullptr);
-        if (env->ExceptionCheck() == JNI_TRUE || utf8 == nullptr) {
+        const char* utf8 = counted(env)->GetStringUTFChars(value, nullptr);
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || utf8 == nullptr) {
             clearException(env);
             continue;
         }
         m_mappingRegistry.observeLaunchHint(utf8, environment);
-        env->ReleaseStringUTFChars(value, utf8);
-        if (env->ExceptionCheck() == JNI_TRUE) clearException(env);
+        counted(env)->ReleaseStringUTFChars(value, utf8);
+        if (counted(env)->ExceptionCheck() == JNI_TRUE) clearException(env);
     }
-    env->PopLocalFrame(nullptr);
+    counted(env)->PopLocalFrame(nullptr);
 }
 
 jclass GameBindings::findMinecraftClass(
@@ -193,7 +196,7 @@ jclass GameBindings::findMinecraftClass(
 
     jint count = 0;
     jclass* classes = nullptr;
-    if (m_jvmti->GetLoadedClasses(&count, &classes) != JVMTI_ERROR_NONE || classes == nullptr) {
+    if (counted(m_jvmti)->GetLoadedClasses(&count, &classes) != JVMTI_ERROR_NONE || classes == nullptr) {
         return nullptr;
     }
 
@@ -210,57 +213,66 @@ jclass GameBindings::findMinecraftClass(
         // client can load compatibility/wrapper Minecraft classes first; an
         // anchor with no family-compatible dictionary is therefore not enough
         // to stop the one-time scan.
-        if (!matchedAnchor && !discoveryFailed) {
+        if ((!matchedAnchor || !m_bindingLoader.anchor.empty()) && !discoveryFailed) {
             char* candidateSignature = nullptr;
             char* genericSignature = nullptr;
-            const jvmtiError signatureResult = m_jvmti->GetClassSignature(
+            const jvmtiError signatureResult = counted(m_jvmti)->GetClassSignature(
                 classes[index], &candidateSignature, &genericSignature);
             if (signatureResult == JVMTI_ERROR_NONE && candidateSignature != nullptr) {
                 m_mappingRegistry.observeClassSignature(candidateSignature, environment);
-                if (m_mappingRegistry.isMinecraftAnchor(candidateSignature)) {
+                if (m_mappingRegistry.isMinecraftAnchor(candidateSignature) &&
+                    (m_bindingLoader.anchor.empty() || m_bindingLoader.anchor == candidateSignature)) {
                     knownAnchorSeen = true;
+                    bool loaderMatches = m_bindingLoader.anchor.empty();
 
                     // A custom defining loader is useful client evidence and
                     // costs one lookup rather than another loaded-class pass.
                     jobject loader = nullptr;
-                    if (m_jvmti->GetClassLoader(classes[index], &loader) ==
+                    if (counted(m_jvmti)->GetClassLoader(classes[index], &loader) ==
                             JVMTI_ERROR_NONE && loader != nullptr) {
-                        jclass loaderClass = env->GetObjectClass(loader);
-                        if (env->ExceptionCheck() == JNI_TRUE) {
+                        jclass loaderClass = counted(env)->GetObjectClass(loader);
+                        if (counted(env)->ExceptionCheck() == JNI_TRUE) {
                             clearException(env);
                             loaderClass = nullptr;
                         }
                         if (loaderClass != nullptr) {
                             char* loaderSignature = nullptr;
                             char* loaderGeneric = nullptr;
-                            if (m_jvmti->GetClassSignature(loaderClass, &loaderSignature,
+                            if (counted(m_jvmti)->GetClassSignature(loaderClass, &loaderSignature,
                                                            &loaderGeneric) ==
                                     JVMTI_ERROR_NONE && loaderSignature != nullptr) {
                                 m_mappingRegistry.observeClassSignature(loaderSignature,
                                                                          environment);
+                                jint identity = 0;
+                                if (!m_bindingLoader.anchor.empty() && m_bindingLoader.type == loaderSignature &&
+                                    counted(m_jvmti)->GetObjectHashCode(loader, &identity) == JVMTI_ERROR_NONE)
+                                    loaderMatches = static_cast<unsigned>(identity) == m_bindingLoader.instance;
                             }
                             if (loaderSignature != nullptr) {
-                                m_jvmti->Deallocate(
+                                counted(m_jvmti)->Deallocate(
                                     reinterpret_cast<unsigned char*>(loaderSignature));
                             }
                             if (loaderGeneric != nullptr) {
-                                m_jvmti->Deallocate(
+                                counted(m_jvmti)->Deallocate(
                                     reinterpret_cast<unsigned char*>(loaderGeneric));
                             }
-                            env->DeleteLocalRef(loaderClass);
+                            counted(env)->DeleteLocalRef(loaderClass);
                         }
-                        env->DeleteLocalRef(loader);
+                        counted(env)->DeleteLocalRef(loader);
                     }
 
-                    candidates = m_mappingRegistry.candidatesForAnchor(
-                        candidateSignature, environment);
-                    if (!candidates.empty()) {
+                    if (loaderMatches && matchedAnchor) {
+                        counted(env)->DeleteLocalRef(result); result = nullptr; candidates = {}; discoveryFailed = true;
+                    } else if (loaderMatches) {
+                        candidates = m_mappingRegistry.candidatesForAnchor(candidateSignature, environment);
+                        if (!candidates.empty()) {
                         matchedAnchor = true;
-                        result = static_cast<jclass>(env->NewLocalRef(classes[index]));
-                        if (env->ExceptionCheck() == JNI_TRUE) {
-                            env->ExceptionClear();
+                        result = static_cast<jclass>(counted(env)->NewLocalRef(classes[index]));
+                        if (counted(env)->ExceptionCheck() == JNI_TRUE) {
+                            counted(env)->ExceptionClear();
                             result = nullptr;
                             discoveryFailed = true;
+                        }
                         }
                     }
                 }
@@ -268,15 +280,15 @@ jclass GameBindings::findMinecraftClass(
             // JVMTI normally allocates outputs only on success, but releasing
             // any non-null buffer also makes unusual error paths leak-free.
             if (candidateSignature != nullptr) {
-                m_jvmti->Deallocate(reinterpret_cast<unsigned char*>(candidateSignature));
+                counted(m_jvmti)->Deallocate(reinterpret_cast<unsigned char*>(candidateSignature));
             }
             if (genericSignature != nullptr) {
-                m_jvmti->Deallocate(reinterpret_cast<unsigned char*>(genericSignature));
+                counted(m_jvmti)->Deallocate(reinterpret_cast<unsigned char*>(genericSignature));
             }
         }
-        env->DeleteLocalRef(classes[index]);
+        counted(env)->DeleteLocalRef(classes[index]);
     }
-    m_jvmti->Deallocate(reinterpret_cast<unsigned char*>(classes));
+    counted(m_jvmti)->Deallocate(reinterpret_cast<unsigned char*>(classes));
     if (knownAnchorSeen && candidates.empty()) {
         log::info(std::string("Minecraft anchor found for ") +
                   bindings::clientFamilyName(environment.family()) +
@@ -299,20 +311,20 @@ jclass GameBindings::loadWithClassLoader(JNIEnv* const env,
     // game from Forge's splash context. ClassLoader.loadClass does not run a
     // class initializer and avoids another full JVMTI table walk per class.
     jclass result = nullptr;
-    jstring name = env->NewStringUTF(binaryName);
-    if (env->ExceptionCheck() == JNI_TRUE || name == nullptr) {
+    jstring name = counted(env)->NewStringUTF(binaryName);
+    if (counted(env)->ExceptionCheck() == JNI_TRUE || name == nullptr) {
         clearException(env);
         return nullptr;
     }
-    result = static_cast<jclass>(env->CallObjectMethod(loader, loadClass, name));
-    if (env->ExceptionCheck() == JNI_TRUE) {
-        env->ExceptionClear();
+    result = static_cast<jclass>(counted(env)->CallObjectMethod(loader, loadClass, name));
+    if (counted(env)->ExceptionCheck() == JNI_TRUE) {
+        counted(env)->ExceptionClear();
         if (result != nullptr) {
-            env->DeleteLocalRef(result);
+            counted(env)->DeleteLocalRef(result);
         }
         result = nullptr;
     }
-    env->DeleteLocalRef(name);
+    counted(env)->DeleteLocalRef(name);
     return result;
 }
 
@@ -327,7 +339,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     LocalReferenceSet localReferences(env);
     jobject minecraftLoader = nullptr;
-    if (m_jvmti->GetClassLoader(minecraft, &minecraftLoader) != JVMTI_ERROR_NONE ||
+    if (counted(m_jvmti)->GetClassLoader(minecraft, &minecraftLoader) != JVMTI_ERROR_NONE ||
         minecraftLoader == nullptr) {
         clearException(env);
         return false;
@@ -336,13 +348,13 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     jclass loaderClass = nullptr;
     if (!lookupRequired(env, loaderClass,
-                        [&] { return env->FindClass("java/lang/ClassLoader"); })) {
+                        [&] { return counted(env)->FindClass("java/lang/ClassLoader"); })) {
         return false;
     }
     localReferences.add(loaderClass);
     jmethodID loadClassMethod = nullptr;
     if (!lookupRequired(env, loadClassMethod, [&] {
-            return env->GetMethodID(loaderClass, "loadClass",
+            return counted(env)->GetMethodID(loaderClass, "loadClass",
                                     "(Ljava/lang/String;)Ljava/lang/Class;");
         })) {
         return false;
@@ -530,7 +542,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         playerControllerClassLoaded && itemBlockClassLoaded &&
         enumFacingClassLoaded && vec3ClassLoaded;
 
-    if (lookupRequired(env, uuid, [&] { return env->FindClass("java/util/UUID"); })) {
+    if (lookupRequired(env, uuid, [&] { return counted(env)->FindClass("java/util/UUID"); })) {
         localReferences.add(uuid);
     }
 
@@ -563,54 +575,54 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     const bool singletonResolved = !profile.minecraftInstanceField.empty()
         ? lookupRequired(env, candidate.minecraftInstanceField, [&] {
-              return env->GetStaticFieldID(minecraft,
+              return counted(env)->GetStaticFieldID(minecraft,
                                            profile.minecraftInstanceField.c_str(),
                                            profile.minecraftSignature.c_str());
           })
         : lookupRequired(env, candidate.getMinecraft, [&] {
-              return env->GetStaticMethodID(minecraft, profile.getMinecraft.c_str(),
+              return counted(env)->GetStaticMethodID(minecraft, profile.getMinecraft.c_str(),
                                             getMinecraftSignature.c_str());
           });
     if (!singletonResolved ||
         !lookupRequired(env, candidate.playerField, [&] {
-            return env->GetFieldID(minecraft, profile.playerField.c_str(),
+            return counted(env)->GetFieldID(minecraft, profile.playerField.c_str(),
                                    profile.playerSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.getHealth, [&] {
-            return env->GetMethodID(living, profile.getHealth.c_str(), "()F");
+            return counted(env)->GetMethodID(living, profile.getHealth.c_str(), "()F");
         }) ||
         !lookupRequired(env, candidate.getMaxHealth, [&] {
-            return env->GetMethodID(living, profile.getMaxHealth.c_str(), "()F");
+            return counted(env)->GetMethodID(living, profile.getMaxHealth.c_str(), "()F");
         }) ||
         !lookupRequired(env, candidate.getEntityId, [&] {
-            return env->GetMethodID(entity, profile.getEntityId.c_str(), "()I");
+            return counted(env)->GetMethodID(entity, profile.getEntityId.c_str(), "()I");
         }) ||
         !lookupRequired(env, candidate.getBounds, [&] {
-            return env->GetMethodID(entity, profile.getBounds.c_str(),
+            return counted(env)->GetMethodID(entity, profile.getBounds.c_str(),
                                     getBoundsSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.isMainThread, [&] {
-            return env->GetMethodID(minecraft, profile.isMainThread.c_str(), "()Z");
+            return counted(env)->GetMethodID(minecraft, profile.isMainThread.c_str(), "()Z");
         }) ||
         !lookupRequired(env, candidate.isSingleplayer, [&] {
-            return env->GetMethodID(minecraft, profile.isSingleplayer.c_str(), "()Z");
+            return counted(env)->GetMethodID(minecraft, profile.isSingleplayer.c_str(), "()Z");
         }) ||
         !lookupRequired(env, candidate.worldField, [&] {
-            return env->GetFieldID(minecraft, profile.worldField.c_str(),
+            return counted(env)->GetFieldID(minecraft, profile.worldField.c_str(),
                                    profile.worldClientSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.timerField, [&] {
-            return env->GetFieldID(minecraft, profile.timerField.c_str(),
+            return counted(env)->GetFieldID(minecraft, profile.timerField.c_str(),
                                    profile.timerSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.setIngameFocus, [&] {
-            return env->GetMethodID(minecraft, profile.setIngameFocus.c_str(), "()V");
+            return counted(env)->GetMethodID(minecraft, profile.setIngameFocus.c_str(), "()V");
         }) ||
         !lookupRequired(env, candidate.setIngameNotInFocus, [&] {
-            return env->GetMethodID(minecraft, profile.setIngameNotInFocus.c_str(), "()V");
+            return counted(env)->GetMethodID(minecraft, profile.setIngameNotInFocus.c_str(), "()V");
         }) ||
         !lookupRequired(env, candidate.getRenderManager, [&] {
-            return env->GetMethodID(minecraft, profile.getRenderManager.c_str(),
+            return counted(env)->GetMethodID(minecraft, profile.getRenderManager.c_str(),
                                     getRenderManagerSignature.c_str());
         })) {
         return false;
@@ -618,12 +630,12 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     if (!profile.hurtTimeField.empty()) {
         (void)lookupRequired(env, candidate.hurtTime, [&] {
-            return env->GetFieldID(living, profile.hurtTimeField.c_str(), "I");
+            return counted(env)->GetFieldID(living, profile.hurtTimeField.c_str(), "I");
         });
     }
     for (std::size_t index = 0U; index < candidate.renderPosition.size(); ++index) {
         if (!lookupRequired(env, candidate.renderPosition[index], [&] {
-                return env->GetFieldID(renderManager,
+                return counted(env)->GetFieldID(renderManager,
                                        profile.renderPositionFields[index].c_str(), "D");
             })) {
             return false;
@@ -632,7 +644,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     for (std::size_t index = 0U; index < candidate.previousPosition.size(); ++index) {
         if (!lookupRequired(env, candidate.previousPosition[index], [&] {
-                return env->GetFieldID(entity,
+                return counted(env)->GetFieldID(entity,
                                        profile.previousPositionFields[index].c_str(), "D");
             })) {
             return false;
@@ -642,7 +654,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     std::array<jfieldID, 3U> positionFields{};
     for (std::size_t index = 0U; index < positionFields.size(); ++index) {
         if (!lookupRequired(env, positionFields[index], [&] {
-                return env->GetFieldID(entity, profile.positionFields[index].c_str(), "D");
+                return counted(env)->GetFieldID(entity, profile.positionFields[index].c_str(), "D");
             })) {
             return false;
         }
@@ -650,28 +662,28 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     const bool loadedEntitiesResolved = !profile.loadedEntitiesField.empty()
         ? lookupRequired(env, candidate.loadedEntitiesField, [&] {
-              return env->GetFieldID(world, profile.loadedEntitiesField.c_str(),
+              return counted(env)->GetFieldID(world, profile.loadedEntitiesField.c_str(),
                                      "Ljava/util/List;");
           })
         : lookupRequired(env, candidate.getLoadedEntities, [&] {
-              return env->GetMethodID(world, profile.getLoadedEntities.c_str(),
+              return counted(env)->GetMethodID(world, profile.getLoadedEntities.c_str(),
                                       "()Ljava/util/List;");
           });
     if (!loadedEntitiesResolved ||
         !lookupRequired(env, candidate.playerEntities, [&] {
-            return env->GetFieldID(world, profile.playerEntitiesField.c_str(),
+            return counted(env)->GetFieldID(world, profile.playerEntitiesField.c_str(),
                                    "Ljava/util/List;");
         }) ||
         !lookupRequired(env, candidate.getName, [&] {
-            return env->GetMethodID(entity, profile.getName.c_str(),
+            return counted(env)->GetMethodID(entity, profile.getName.c_str(),
                                     "()Ljava/lang/String;");
         }) ||
         !lookupRequired(env, candidate.getDisplayName, [&] {
-            return env->GetMethodID(entity, profile.getDisplayName.c_str(),
+            return counted(env)->GetMethodID(entity, profile.getDisplayName.c_str(),
                                     (std::string("()") + profile.chatComponentSignature).c_str());
         }) ||
         !lookupRequired(env, candidate.getFormattedText, [&] {
-            return env->GetMethodID(chatComponent, profile.getFormattedText.c_str(),
+            return counted(env)->GetMethodID(chatComponent, profile.getFormattedText.c_str(),
                                     "()Ljava/lang/String;");
         })) {
         return false;
@@ -679,24 +691,24 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     // Invisibility is auxiliary: an older external mapping dictionary may not
     // provide it, but that must not disable the otherwise safe core binding.
     if (!profile.isInvisible.empty()) {
-        candidate.isInvisible = env->GetMethodID(
+        candidate.isInvisible = counted(env)->GetMethodID(
             entity, profile.isInvisible.c_str(), "()Z");
-        if (env->ExceptionCheck() == JNI_TRUE || candidate.isInvisible == nullptr) {
-            env->ExceptionClear();
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || candidate.isInvisible == nullptr) {
+            counted(env)->ExceptionClear();
             candidate.isInvisible = nullptr;
             log::info(std::string("Invisibility capability disabled for profile: ") +
                       profile.label + " (auxiliary mapping did not resolve).");
         }
     }
     if (debugChatClassLoaded && !profile.addChatMessage.empty()) {
-        candidate.chatTextConstructor = env->GetMethodID(
+        candidate.chatTextConstructor = counted(env)->GetMethodID(
             chatText, "<init>", "(Ljava/lang/String;)V");
-        candidate.addChatMessage = env->GetMethodID(
+        candidate.addChatMessage = counted(env)->GetMethodID(
             player, profile.addChatMessage.c_str(),
             (std::string("(") + profile.chatComponentSignature + ")V").c_str());
-        if (env->ExceptionCheck() == JNI_TRUE ||
+        if (counted(env)->ExceptionCheck() == JNI_TRUE ||
             candidate.chatTextConstructor == nullptr || candidate.addChatMessage == nullptr) {
-            env->ExceptionClear();
+            counted(env)->ExceptionClear();
             candidate.chatTextConstructor = nullptr;
             candidate.addChatMessage = nullptr;
             log::info(std::string("Debug chat capability disabled for profile: ") +
@@ -704,12 +716,12 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         }
     }
     if (richChatClassLoaded && !profile.parseChatJson.empty()) {
-        candidate.parseChatJson = env->GetStaticMethodID(
+        candidate.parseChatJson = counted(env)->GetStaticMethodID(
             chatSerializer, profile.parseChatJson.c_str(),
             (std::string("(Ljava/lang/String;)") +
              profile.chatComponentSignature).c_str());
-        if (env->ExceptionCheck() == JNI_TRUE || candidate.parseChatJson == nullptr) {
-            env->ExceptionClear();
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || candidate.parseChatJson == nullptr) {
+            counted(env)->ExceptionClear();
             candidate.parseChatJson = nullptr;
             log::info(std::string("Rich local chat capability disabled for profile: ") +
                       profile.label + " (auxiliary mapping did not resolve).");
@@ -717,79 +729,79 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     }
     jclass listClass = nullptr;
     if (!lookupRequired(env, listClass,
-                        [&] { return env->FindClass("java/util/List"); })) {
+                        [&] { return counted(env)->FindClass("java/util/List"); })) {
         return false;
     }
     localReferences.add(listClass);
     jclass collectionClass = nullptr;
     if (!lookupRequired(env, collectionClass,
-                        [&] { return env->FindClass("java/util/Collection"); })) {
+                        [&] { return counted(env)->FindClass("java/util/Collection"); })) {
         return false;
     }
     localReferences.add(collectionClass);
     if (!lookupRequired(env, candidate.listSize,
-                        [&] { return env->GetMethodID(listClass, "size", "()I"); }) ||
+                        [&] { return counted(env)->GetMethodID(listClass, "size", "()I"); }) ||
         !lookupRequired(env, candidate.listGet,
-                        [&] { return env->GetMethodID(listClass, "get", "(I)Ljava/lang/Object;"); }) ||
+                        [&] { return counted(env)->GetMethodID(listClass, "get", "(I)Ljava/lang/Object;"); }) ||
         !lookupRequired(env, candidate.listToArray,
-                        [&] { return env->GetMethodID(listClass, "toArray", "()[Ljava/lang/Object;"); }) ||
+                        [&] { return counted(env)->GetMethodID(listClass, "toArray", "()[Ljava/lang/Object;"); }) ||
         !lookupRequired(env, candidate.collectionToArray,
-                        [&] { return env->GetMethodID(collectionClass, "toArray", "()[Ljava/lang/Object;"); }) ||
+                        [&] { return counted(env)->GetMethodID(collectionClass, "toArray", "()[Ljava/lang/Object;"); }) ||
         !lookupRequired(env, candidate.blockPosConstructor, [&] {
-            return env->GetMethodID(blockPos, "<init>", "(III)V");
+            return counted(env)->GetMethodID(blockPos, "<init>", "(III)V");
         }) ||
         !lookupRequired(env, candidate.getBlockState, [&] {
-            return env->GetMethodID(world, profile.getBlockState.c_str(),
+            return counted(env)->GetMethodID(world, profile.getBlockState.c_str(),
                                     getBlockStateSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.getBlock, [&] {
-            return env->GetMethodID(state, profile.getBlock.c_str(),
+            return counted(env)->GetMethodID(state, profile.getBlock.c_str(),
                                     getBlockSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.getBlockMetadata, [&] {
-            return env->GetMethodID(block, profile.getBlockMetadata.c_str(),
+            return counted(env)->GetMethodID(block, profile.getBlockMetadata.c_str(),
                                     getBlockMetadataSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.getChunkProvider, [&] {
             const std::string signature = std::string("()") +
                                           profile.chunkProviderInterfaceSignature;
-            return env->GetMethodID(world, profile.getChunkProvider.c_str(),
+            return counted(env)->GetMethodID(world, profile.getChunkProvider.c_str(),
                                     signature.c_str());
         }) ||
         !lookupRequired(env, candidate.chunkListingField, [&] {
-            return env->GetFieldID(chunkProvider, profile.chunkListingField.c_str(),
+            return counted(env)->GetFieldID(chunkProvider, profile.chunkListingField.c_str(),
                                    "Ljava/util/List;");
         }) ||
         !lookupRequired(env, candidate.chunkX, [&] {
-            return env->GetFieldID(chunk, profile.chunkCoordinateFields[0].c_str(), "I");
+            return counted(env)->GetFieldID(chunk, profile.chunkCoordinateFields[0].c_str(), "I");
         }) ||
         !lookupRequired(env, candidate.chunkZ, [&] {
-            return env->GetFieldID(chunk, profile.chunkCoordinateFields[1].c_str(), "I");
+            return counted(env)->GetFieldID(chunk, profile.chunkCoordinateFields[1].c_str(), "I");
         }) ||
         !lookupRequired(env, candidate.getStorageArrays, [&] {
-            return env->GetMethodID(chunk, profile.getStorageArrays.c_str(),
+            return counted(env)->GetMethodID(chunk, profile.getStorageArrays.c_str(),
                                     getStorageArraysSignature.c_str());
         }) ||
         !lookupRequired(env, candidate.getStorageData, [&] {
-            return env->GetMethodID(storage, profile.getStorageData.c_str(), "()[C");
+            return counted(env)->GetMethodID(storage, profile.getStorageData.c_str(), "()[C");
         }) ||
         !lookupRequired(env, candidate.activeModelView, [&] {
-            return env->GetStaticFieldID(activeRenderInfo,
+            return counted(env)->GetStaticFieldID(activeRenderInfo,
                                          profile.activeModelViewField.c_str(),
                                          "Ljava/nio/FloatBuffer;");
         }) ||
         !lookupRequired(env, candidate.activeProjection, [&] {
-            return env->GetStaticFieldID(activeRenderInfo,
+            return counted(env)->GetStaticFieldID(activeRenderInfo,
                                          profile.activeProjectionField.c_str(),
                                          "Ljava/nio/FloatBuffer;");
         }) ||
         !lookupRequired(env, candidate.activeViewport, [&] {
-            return env->GetStaticFieldID(activeRenderInfo,
+            return counted(env)->GetStaticFieldID(activeRenderInfo,
                                          profile.activeViewportField.c_str(),
                                          "Ljava/nio/IntBuffer;");
         }) ||
         !lookupRequired(env, candidate.renderPartialTicks, [&] {
-            return env->GetFieldID(timer, profile.renderPartialTicksField.c_str(), "F");
+            return counted(env)->GetFieldID(timer, profile.renderPartialTicksField.c_str(), "F");
         })) {
         return false;
     }
@@ -805,27 +817,27 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (sidebarCapability) {
         sidebarCapability =
             lookupRequired(env, candidate.getScoreboard, [&] {
-                return env->GetMethodID(world, profile.getScoreboard.c_str(),
+                return counted(env)->GetMethodID(world, profile.getScoreboard.c_str(),
                                         (std::string("()") + profile.scoreboardSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getObjectiveInDisplaySlot, [&] {
-                return env->GetMethodID(scoreboard, profile.getObjectiveInDisplaySlot.c_str(),
+                return counted(env)->GetMethodID(scoreboard, profile.getObjectiveInDisplaySlot.c_str(),
                                         getObjectiveInDisplaySlotSignature.c_str());
             }) &&
             lookupRequired(env, candidate.getPlayersTeam, [&] {
-                return env->GetMethodID(scoreboard, profile.getPlayersTeam.c_str(),
+                return counted(env)->GetMethodID(scoreboard, profile.getPlayersTeam.c_str(),
                                         getPlayersTeamSignature.c_str());
             }) &&
             lookupRequired(env, candidate.getSortedScores, [&] {
-                return env->GetMethodID(scoreboard, profile.getSortedScores.c_str(),
+                return counted(env)->GetMethodID(scoreboard, profile.getSortedScores.c_str(),
                                         getSortedScoresSignature.c_str());
             }) &&
             lookupRequired(env, candidate.getPlayerName, [&] {
-                return env->GetMethodID(score, profile.getPlayerName.c_str(),
+                return counted(env)->GetMethodID(score, profile.getPlayerName.c_str(),
                                         "()Ljava/lang/String;");
             }) &&
             lookupRequired(env, candidate.formatPlayerName, [&] {
-                return env->GetStaticMethodID(scorePlayerTeam,
+                return counted(env)->GetStaticMethodID(scorePlayerTeam,
                                               profile.formatPlayerName.c_str(),
                                               formatPlayerNameSignature.c_str());
             });
@@ -850,37 +862,37 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (armorCapability) {
         armorCapability =
             lookupRequired(env, candidate.getItem, [&] {
-                return env->GetMethodID(itemStack, profile.getItem.c_str(),
+                return counted(env)->GetMethodID(itemStack, profile.getItem.c_str(),
                                         getItemSignature.c_str());
             }) &&
             lookupRequired(env, candidate.hasColor, [&] {
-                return env->GetMethodID(itemArmor, profile.hasColor.c_str(),
+                return counted(env)->GetMethodID(itemArmor, profile.hasColor.c_str(),
                                         (std::string("(") + profile.itemStackSignature + ")Z").c_str());
             }) &&
             lookupRequired(env, candidate.getColor, [&] {
-                return env->GetMethodID(itemArmor, profile.getColor.c_str(),
+                return counted(env)->GetMethodID(itemArmor, profile.getColor.c_str(),
                                         (std::string("(") + profile.itemStackSignature + ")I").c_str());
             }) &&
             lookupRequired(env, candidate.getEnchantmentLevel, [&] {
-                return env->GetStaticMethodID(
+                return counted(env)->GetStaticMethodID(
                     enchantmentHelper, profile.getEnchantmentLevel.c_str(),
                     (std::string("(I") + profile.itemStackSignature + ")I").c_str());
             }) &&
             lookupRequired(env, candidate.getEquipmentInSlot, [&] {
-                return env->GetMethodID(
+                return counted(env)->GetMethodID(
                     living, profile.getEquipmentInSlot.c_str(),
                     (std::string("(I)") + profile.itemStackSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getIdFromItem, [&] {
-                return env->GetStaticMethodID(
+                return counted(env)->GetStaticMethodID(
                     item, profile.getIdFromItem.c_str(),
                     (std::string("(") + profile.itemSignature + ")I").c_str());
             }) &&
             lookupRequired(env, candidate.stackSize, [&] {
-                return env->GetFieldID(itemStack, profile.stackSizeField.c_str(), "I");
+                return counted(env)->GetFieldID(itemStack, profile.stackSizeField.c_str(), "I");
             }) &&
             lookupRequired(env, candidate.getItemDamage, [&] {
-                return env->GetMethodID(itemStack, profile.getItemDamage.c_str(), "()I");
+                return counted(env)->GetMethodID(itemStack, profile.getItemDamage.c_str(), "()I");
             });
     }
     if (!armorCapability) {
@@ -902,11 +914,11 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (identityCapability) {
         identityCapability =
             lookupRequired(env, candidate.getUniqueId, [&] {
-                return env->GetMethodID(entity, profile.getUniqueId.c_str(),
+                return counted(env)->GetMethodID(entity, profile.getUniqueId.c_str(),
                                         "()Ljava/util/UUID;");
             }) &&
             lookupRequired(env, candidate.uuidToString, [&] {
-                return env->GetMethodID(uuid, "toString", "()Ljava/lang/String;");
+                return counted(env)->GetMethodID(uuid, "toString", "()Ljava/lang/String;");
             });
     }
     if (!identityCapability) {
@@ -922,23 +934,23 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (skinCapability) {
         skinCapability =
             lookupRequired(env, candidate.getLocationSkin, [&] {
-                return env->GetMethodID(
+                return counted(env)->GetMethodID(
                     abstractClientPlayer, profile.getLocationSkin.c_str(),
                     (std::string("()") + profile.resourceLocationSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getTextureManager, [&] {
-                return env->GetMethodID(
+                return counted(env)->GetMethodID(
                     minecraft, profile.getTextureManager.c_str(),
                     (std::string("()") + profile.textureManagerSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getTexture, [&] {
-                return env->GetMethodID(
+                return counted(env)->GetMethodID(
                     textureManager, profile.getTexture.c_str(),
                     (std::string("(") + profile.resourceLocationSignature + ")" +
                      profile.textureObjectSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getGlTextureId, [&] {
-                return env->GetMethodID(textureObject, profile.getGlTextureId.c_str(), "()I");
+                return counted(env)->GetMethodID(textureObject, profile.getGlTextureId.c_str(), "()I");
             });
     }
     if (!skinCapability) {
@@ -962,20 +974,20 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (aimCapability) {
         aimCapability =
             lookupRequired(env, candidate.gameSettingsField, [&] {
-                return env->GetFieldID(minecraft,
+                return counted(env)->GetFieldID(minecraft,
                     profile.gameSettingsField.c_str(),
                     profile.gameSettingsSignature.c_str());
             }) &&
             lookupRequired(env, candidate.mouseSensitivity, [&] {
-                return env->GetFieldID(gameSettings,
+                return counted(env)->GetFieldID(gameSettings,
                     profile.mouseSensitivityField.c_str(), "F");
             }) &&
             lookupRequired(env, candidate.rotationYaw, [&] {
-                return env->GetFieldID(entity,
+                return counted(env)->GetFieldID(entity,
                     profile.rotationYawField.c_str(), "F");
             }) &&
             lookupRequired(env, candidate.rotationPitch, [&] {
-                return env->GetFieldID(entity,
+                return counted(env)->GetFieldID(entity,
                     profile.rotationPitchField.c_str(), "F");
             });
     }
@@ -983,11 +995,11 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     // historical-rotation mapping must never disable unrelated movement.
     if (!profile.previousRotationYawField.empty())
         (void)lookupRequired(env, candidate.previousRotationYaw, [&] {
-            return env->GetFieldID(entity, profile.previousRotationYawField.c_str(), "F");
+            return counted(env)->GetFieldID(entity, profile.previousRotationYawField.c_str(), "F");
         });
     if (!profile.previousRotationPitchField.empty())
         (void)lookupRequired(env, candidate.previousRotationPitch, [&] {
-            return env->GetFieldID(entity, profile.previousRotationPitchField.c_str(), "F");
+            return counted(env)->GetFieldID(entity, profile.previousRotationPitchField.c_str(), "F");
         });
     bool freeLookCapability=aimCapability&&entityRendererClassLoaded&&
         candidate.previousRotationYaw&&candidate.previousRotationPitch&&
@@ -997,19 +1009,19 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if(freeLookCapability) {
         freeLookCapability=
             lookupRequired(env,candidate.thirdPersonView,[&] {
-                return env->GetFieldID(gameSettings,
+                return counted(env)->GetFieldID(gameSettings,
                     profile.thirdPersonViewField.c_str(),"I");
             })&&
             lookupRequired(env,candidate.updateCameraAndRender,[&] {
-                return env->GetMethodID(entityRenderer,
+                return counted(env)->GetMethodID(entityRenderer,
                     profile.updateCameraAndRender.c_str(),"(FJ)V");
             })&&
             lookupRequired(env,candidate.orientCamera,[&] {
-                return env->GetMethodID(entityRenderer,
+                return counted(env)->GetMethodID(entityRenderer,
                     profile.orientCamera.c_str(),"(F)V");
             })&&
             lookupRequired(env,candidate.setAngles,[&] {
-                return env->GetMethodID(entity,profile.setAngles.c_str(),"(FF)V");
+                return counted(env)->GetMethodID(entity,profile.setAngles.c_str(),"(FF)V");
             });
     }
     if(!freeLookCapability) {
@@ -1024,7 +1036,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if(freeLookCapability&&renderGlobalClassLoaded&&
        !profile.setupTerrain.empty()&&!profile.setupTerrainDescriptor.empty()) {
         (void)lookupRequired(env,candidate.setupTerrain,[&] {
-            return env->GetMethodID(renderGlobal,profile.setupTerrain.c_str(),
+            return counted(env)->GetMethodID(renderGlobal,profile.setupTerrain.c_str(),
                 profile.setupTerrainDescriptor.c_str());
         });
         if(!candidate.setupTerrain)
@@ -1042,16 +1054,16 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     if (!profile.currentScreenField.empty() && !profile.guiScreenSignature.empty()) {
         (void)lookupRequired(env, candidate.currentScreen, [&] {
-            return env->GetFieldID(minecraft, profile.currentScreenField.c_str(),
+            return counted(env)->GetFieldID(minecraft, profile.currentScreenField.c_str(),
                                    profile.guiScreenSignature.c_str());
         });
     }
     (void)lookupRequired(env, candidate.aabbConstructor, [&] {
-        return env->GetMethodID(aabb, "<init>", "(DDDDDD)V");
+        return counted(env)->GetMethodID(aabb, "<init>", "(DDDDDD)V");
     });
     if (!profile.getCollidingBoundingBoxes.empty()) {
         (void)lookupRequired(env, candidate.getCollidingBoxes, [&] {
-            return env->GetMethodID(world, profile.getCollidingBoundingBoxes.c_str(),
+            return counted(env)->GetMethodID(world, profile.getCollidingBoundingBoxes.c_str(),
                 (std::string("(") + profile.entitySignature + profile.aabbSignature +
                  ")Ljava/util/List;").c_str());
         });
@@ -1062,20 +1074,20 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (safewalkCapability) {
         safewalkCapability =
             lookupRequired(env, candidate.keyBindSneakField, [&] {
-                return env->GetFieldID(gameSettings,
+                return counted(env)->GetFieldID(gameSettings,
                     profile.keyBindSneakField.c_str(),
                     profile.keyBindingSignature.c_str());
             }) &&
             lookupRequired(env, candidate.getKeyCode, [&] {
-                return env->GetMethodID(keyBinding,
+                return counted(env)->GetMethodID(keyBinding,
                     profile.getKeyCode.c_str(), "()I");
             }) &&
             lookupRequired(env, candidate.setKeyBindState, [&] {
-                return env->GetStaticMethodID(keyBinding,
+                return counted(env)->GetStaticMethodID(keyBinding,
                     profile.setKeyBindState.c_str(), "(IZ)V");
             }) &&
             lookupRequired(env, candidate.isAirBlock, [&] {
-                return env->GetMethodID(world, profile.isAirBlock.c_str(),
+                return counted(env)->GetMethodID(world, profile.isAirBlock.c_str(),
                     (std::string("(") + profile.blockPosSignature + ")Z").c_str());
             });
     }
@@ -1088,7 +1100,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                   profile.label + " (auxiliary mapping did not resolve).");
     }
     if(safewalkCapability&&!profile.keyBindSprintField.empty()) {
-        candidate.keyBindSprintField=env->GetFieldID(gameSettings,
+        candidate.keyBindSprintField=counted(env)->GetFieldID(gameSettings,
             profile.keyBindSprintField.c_str(),profile.keyBindingSignature.c_str());
         clearException(env); // Sprint is optional; never disable locomotion.
     }
@@ -1098,12 +1110,12 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (serverGuardCapability) {
         serverGuardCapability =
             lookupRequired(env, candidate.getCurrentServerData, [&] {
-                return env->GetMethodID(minecraft,
+                return counted(env)->GetMethodID(minecraft,
                     profile.getCurrentServerData.c_str(),
                     (std::string("()") + profile.serverDataSignature).c_str());
             }) &&
             lookupRequired(env, candidate.serverIp, [&] {
-                return env->GetFieldID(serverData, profile.serverIpField.c_str(),
+                return counted(env)->GetFieldID(serverData, profile.serverIpField.c_str(),
                                        "Ljava/lang/String;");
             });
     }
@@ -1122,7 +1134,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
              index < candidate.movementKeyFields.size(); ++index) {
             movementCapability = movementCapability && lookupRequired(
                 env, candidate.movementKeyFields[index], [&] {
-                    return env->GetFieldID(gameSettings,
+                    return counted(env)->GetFieldID(gameSettings,
                         profile.movementKeyFields[index].c_str(),
                         profile.keyBindingSignature.c_str());
                 });
@@ -1130,23 +1142,23 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         for (std::size_t index = 0U; index < candidate.motionFields.size(); ++index) {
             movementCapability = movementCapability && lookupRequired(
                 env, candidate.motionFields[index], [&] {
-                    return env->GetFieldID(entity,
+                    return counted(env)->GetFieldID(entity,
                         profile.motionFields[index].c_str(), "D");
                 });
         }
         movementCapability = movementCapability &&
             lookupRequired(env, candidate.onGround, [&] {
-                return env->GetFieldID(entity,
+                return counted(env)->GetFieldID(entity,
                     profile.onGroundField.c_str(), "Z");
             }) &&
             lookupRequired(env, candidate.jump, [&] {
-                return env->GetMethodID(living, profile.jump.c_str(), "()V");
+                return counted(env)->GetMethodID(living, profile.jump.c_str(), "()V");
             });
         for (std::size_t index = 0U;
              index < candidate.movementInputFields.size(); ++index) {
             movementCapability = movementCapability && lookupRequired(
                 env, candidate.movementInputFields[index], [&] {
-                    return env->GetFieldID(living,
+                    return counted(env)->GetFieldID(living,
                         profile.movementInputFields[index].c_str(), "F");
                 });
         }
@@ -1156,7 +1168,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     const bool controllerFieldAvailable = playerControllerClassLoaded &&
         !profile.playerControllerField.empty() &&
         lookupRequired(env, candidate.playerControllerField, [&] {
-            return env->GetFieldID(minecraft,
+            return counted(env)->GetFieldID(minecraft,
                 profile.playerControllerField.c_str(),
                 profile.playerControllerSignature.c_str());
         });
@@ -1167,47 +1179,47 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             profile.itemStackSignature + profile.blockPosSignature +
             profile.enumFacingSignature + profile.vec3Signature + ")Z";
         placementCapability = lookupRequired(env, candidate.inventoryField, [&] {
-                return env->GetFieldID(player, profile.inventoryField.c_str(),
+                return counted(env)->GetFieldID(player, profile.inventoryField.c_str(),
                                        profile.inventoryPlayerSignature.c_str());
             }) &&
             lookupRequired(env, candidate.currentItem, [&] {
-                return env->GetFieldID(inventoryPlayer,
+                return counted(env)->GetFieldID(inventoryPlayer,
                     profile.currentItemField.c_str(), "I");
             }) &&
             lookupRequired(env, candidate.mainInventory, [&] {
-                return env->GetFieldID(inventoryPlayer,
+                return counted(env)->GetFieldID(inventoryPlayer,
                     profile.mainInventoryField.c_str(),
                     (std::string("[") + profile.itemStackSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getItem, [&] {
-                return env->GetMethodID(itemStack, profile.getItem.c_str(),
+                return counted(env)->GetMethodID(itemStack, profile.getItem.c_str(),
                     (std::string("()") + profile.itemSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getBlockFromItem, [&] {
-                return env->GetMethodID(itemBlock,
+                return counted(env)->GetMethodID(itemBlock,
                     profile.getBlockFromItem.c_str(),
                     (std::string("()") + profile.blockSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getIdFromBlock, [&] {
-                return env->GetStaticMethodID(block,
+                return counted(env)->GetStaticMethodID(block,
                     profile.getIdFromBlock.c_str(),
                     (std::string("(") + profile.blockSignature + ")I").c_str());
             }) &&
             lookupRequired(env, candidate.getFacingByIndex, [&] {
-                return env->GetStaticMethodID(enumFacing,
+                return counted(env)->GetStaticMethodID(enumFacing,
                     profile.getFacingByIndex.c_str(),
                     (std::string("(I)") + profile.enumFacingSignature).c_str());
             }) &&
             lookupRequired(env, candidate.vec3Constructor, [&] {
-                return env->GetMethodID(vec3, "<init>", "(DDD)V");
+                return counted(env)->GetMethodID(vec3, "<init>", "(DDD)V");
             }) &&
             lookupRequired(env, candidate.onPlayerRightClick, [&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.onPlayerRightClick.c_str(),
                     rightClickSignature.c_str());
             }) &&
             lookupRequired(env,candidate.syncCurrentPlayItem,[&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.syncCurrentPlayItem.c_str(),"()V");
             });
     }
@@ -1217,15 +1229,15 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if(smartHotbarCapability) {
         smartHotbarCapability=
             lookupRequired(env,candidate.keyBindingIsPressed,[&] {
-                return env->GetMethodID(keyBinding,profile.keyBindingIsPressed.c_str(),"()Z");
+                return counted(env)->GetMethodID(keyBinding,profile.keyBindingIsPressed.c_str(),"()Z");
             })&&
             lookupRequired(env,candidate.keyBindsHotbar,[&] {
-                return env->GetFieldID(gameSettings,
+                return counted(env)->GetFieldID(gameSettings,
                     profile.keyBindsHotbarField.c_str(),
                     (std::string("[")+profile.keyBindingSignature).c_str());
             })&&
             lookupRequired(env,candidate.windowClick,[&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.windowClick.c_str(),
                     (std::string("(IIII")+profile.entityPlayerSignature+")"+
                      profile.itemStackSignature).c_str());
@@ -1247,24 +1259,24 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             profile.blockPosSignature + profile.enumFacingSignature + ")Z";
         bedBreakerCapability =
             lookupRequired(env, candidate.clickBlock, [&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.clickBlock.c_str(), blockInteractionSignature.c_str());
             }) &&
             lookupRequired(env, candidate.onPlayerDamageBlock, [&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.onPlayerDamageBlock.c_str(),
                     blockInteractionSignature.c_str());
             }) &&
             lookupRequired(env, candidate.resetBlockRemoving, [&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.resetBlockRemoving.c_str(), "()V");
             }) &&
             lookupRequired(env, candidate.getBlockReachDistance, [&] {
-                return env->GetMethodID(playerController,
+                return counted(env)->GetMethodID(playerController,
                     profile.getBlockReachDistance.c_str(), "()F");
             }) &&
             lookupRequired(env, candidate.getStrVsBlock, [&] {
-                return env->GetMethodID(itemStack, profile.getStrVsBlock.c_str(),
+                return counted(env)->GetMethodID(itemStack, profile.getStrVsBlock.c_str(),
                     (std::string("(") + profile.blockSignature + ")F").c_str());
             });
         bedBreakerCapability = bedBreakerCapability &&
@@ -1275,7 +1287,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     }
     if (playerControllerClassLoaded && !profile.attackEntity.empty()) {
         (void)lookupRequired(env, candidate.attackEntity, [&] {
-            return env->GetMethodID(playerController, profile.attackEntity.c_str(),
+            return counted(env)->GetMethodID(playerController, profile.attackEntity.c_str(),
                 (std::string("(") + profile.entityPlayerSignature +
                  profile.entitySignature + ")V").c_str());
         });
@@ -1315,18 +1327,18 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     for (std::size_t axis = 0; axis < candidate.motionFields.size(); ++axis) {
         if (!candidate.motionFields[axis] && !profile.motionFields[axis].empty())
             (void)lookupRequired(env, candidate.motionFields[axis], [&] {
-                return env->GetFieldID(entity, profile.motionFields[axis].c_str(), "D");
+                return counted(env)->GetFieldID(entity, profile.motionFields[axis].c_str(), "D");
             });
     }
     if (!candidate.onGround && !profile.onGroundField.empty())
         (void)lookupRequired(env, candidate.onGround, [&] {
-            return env->GetFieldID(entity, profile.onGroundField.c_str(), "Z");
+            return counted(env)->GetFieldID(entity, profile.onGroundField.c_str(), "Z");
         });
 
     std::array<jfieldID, 6U> boundsFields{};
     for (std::size_t index = 0U; index < boundsFields.size(); ++index) {
         if (!lookupRequired(env, boundsFields[index], [&] {
-                return env->GetFieldID(aabb, profile.aabbFields[index].c_str(), "D");
+                return counted(env)->GetFieldID(aabb, profile.aabbFields[index].c_str(), "D");
             })) {
             return false;
         }
@@ -1343,11 +1355,11 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     candidate.maxZ = boundsFields[5U];
 
     auto makeGlobal = [&](jclass const local, jclass& global) noexcept {
-        global = static_cast<jclass>(env->NewGlobalRef(local));
-        if (env->ExceptionCheck() == JNI_TRUE) {
-            env->ExceptionClear();
+        global = static_cast<jclass>(counted(env)->NewGlobalRef(local));
+        if (counted(env)->ExceptionCheck() == JNI_TRUE) {
+            counted(env)->ExceptionClear();
             if (global != nullptr) {
-                env->DeleteGlobalRef(global);
+                counted(env)->DeleteGlobalRef(global);
                 global = nullptr;
             }
             return false;
@@ -1361,10 +1373,10 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         makeGlobal(rayVector, candidate.rayVectorClass) &&
         makeGlobal(rayHit, candidate.rayHitClass)) {
         const auto method=[&](jmethodID& out,jclass type,const std::string& name,const std::string& signature) {
-            if(!name.empty()) (void)lookupRequired(env,out,[&] { return env->GetMethodID(type,name.c_str(),signature.c_str()); });
+            if(!name.empty()) (void)lookupRequired(env,out,[&] { return counted(env)->GetMethodID(type,name.c_str(),signature.c_str()); });
         };
         const auto field=[&](jfieldID& out,jclass type,const std::string& name,const std::string& signature) {
-            if(!name.empty()) (void)lookupRequired(env,out,[&] { return env->GetFieldID(type,name.c_str(),signature.c_str()); });
+            if(!name.empty()) (void)lookupRequired(env,out,[&] { return counted(env)->GetFieldID(type,name.c_str(),signature.c_str()); });
         };
         method(candidate.rayVectorConstructor,rayVector,"<init>","(DDD)V");
         method(candidate.rayTraceBlocks,world,profile.rayTraceBlocks,
@@ -1387,8 +1399,8 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             field(candidate.cameraHitType,rayHit,name,profile.hitTypeSignature);
             if(candidate.cameraHitType) break;
         }
-        jclass enumClass=env->FindClass("java/lang/Enum");
-        if(enumClass) {method(candidate.enumOrdinal,enumClass,"ordinal","()I");env->DeleteLocalRef(enumClass);}
+        jclass enumClass=counted(env)->FindClass("java/lang/Enum");
+        if(enumClass) {method(candidate.enumOrdinal,enumClass,"ordinal","()I");counted(env)->DeleteLocalRef(enumClass);}
         for(const auto& name:profile.entityTicksCandidates) {
             field(candidate.entityTicks,entity,name,"I"); if(candidate.entityTicks) break;
         }
@@ -1461,27 +1473,27 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
         makeGlobal(positionPacket, candidate.positionPacketClass) &&
         makeGlobal(lookPacket, candidate.lookPacketClass) &&
         makeGlobal(positionLookPacket, candidate.positionLookPacketClass)) {
-        candidate.addToSendQueue = env->GetMethodID(
+        candidate.addToSendQueue = counted(env)->GetMethodID(
             packetNetHandler, profile.addToSendQueue.c_str(),
             (std::string("(") + profile.networkPacketSignature + ")V").c_str());
-        candidate.movementPacketConstructor = env->GetMethodID(
+        candidate.movementPacketConstructor = counted(env)->GetMethodID(
             movementPacket, "<init>", "(Z)V");
-        candidate.positionPacketConstructor = env->GetMethodID(
+        candidate.positionPacketConstructor = counted(env)->GetMethodID(
             positionPacket, "<init>", "(DDDZ)V");
-        candidate.lookPacketConstructor = env->GetMethodID(
+        candidate.lookPacketConstructor = counted(env)->GetMethodID(
             lookPacket, "<init>", "(FFZ)V");
-        candidate.positionLookPacketConstructor = env->GetMethodID(
+        candidate.positionLookPacketConstructor = counted(env)->GetMethodID(
             positionLookPacket, "<init>", "(DDDFFZ)V");
         for (std::size_t i=0; i<candidate.packetPosition.size(); ++i)
-            candidate.packetPosition[i]=env->GetFieldID(
+            candidate.packetPosition[i]=counted(env)->GetFieldID(
                 movementPacket,profile.packetPositionFields[i].c_str(),"D");
-        candidate.packetYaw = env->GetFieldID(
+        candidate.packetYaw = counted(env)->GetFieldID(
             movementPacket, profile.packetYawField.c_str(), "F");
-        candidate.packetPitch = env->GetFieldID(
+        candidate.packetPitch = counted(env)->GetFieldID(
             movementPacket, profile.packetPitchField.c_str(), "F");
-        candidate.packetOnGround = env->GetFieldID(
+        candidate.packetOnGround = counted(env)->GetFieldID(
             movementPacket, profile.packetOnGroundField.c_str(), "Z");
-        if (env->ExceptionCheck() == JNI_TRUE || !candidate.addToSendQueue ||
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || !candidate.addToSendQueue ||
             !candidate.movementPacketConstructor || !candidate.positionPacketConstructor ||
             !candidate.lookPacketConstructor ||
             !candidate.positionLookPacketConstructor || !candidate.packetYaw ||
@@ -1524,26 +1536,26 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (tabCapability) {
         tabCapability =
             lookupRequired(env, candidate.getNetHandler, [&] {
-                return env->GetMethodID(minecraft, profile.getNetHandler.c_str(),
+                return counted(env)->GetMethodID(minecraft, profile.getNetHandler.c_str(),
                                         getNetHandlerSignature.c_str());
             }) &&
             lookupRequired(env, candidate.getPlayerInfoMap, [&] {
-                return env->GetMethodID(netHandler, profile.getPlayerInfoMap.c_str(),
+                return counted(env)->GetMethodID(netHandler, profile.getPlayerInfoMap.c_str(),
                                         "()Ljava/util/Collection;");
             }) &&
             lookupRequired(env, candidate.getGameProfile, [&] {
-                return env->GetMethodID(networkPlayerInfo,
+                return counted(env)->GetMethodID(networkPlayerInfo,
                                         profile.getGameProfile.c_str(),
                                         "()Lcom/mojang/authlib/GameProfile;");
             }) &&
             lookupRequired(env, candidate.gameProfileGetName, [&] {
-                return env->GetMethodID(gameProfile, "getName",
+                return counted(env)->GetMethodID(gameProfile, "getName",
                                         "()Ljava/lang/String;");
             });
         if (tabCapability && candidate.uuidToString != nullptr) {
-            candidate.gameProfileGetId = env->GetMethodID(
+            candidate.gameProfileGetId = counted(env)->GetMethodID(
                 gameProfile, "getId", "()Ljava/util/UUID;");
-            if (env->ExceptionCheck() == JNI_TRUE ||
+            if (counted(env)->ExceptionCheck() == JNI_TRUE ||
                 candidate.gameProfileGetId == nullptr) {
                 clearException(env);
                 candidate.gameProfileGetId = nullptr;
@@ -1565,7 +1577,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
     auto clearGlobal = [&](jclass& reference) noexcept {
         if (reference != nullptr) {
-            env->DeleteGlobalRef(reference);
+            counted(env)->DeleteGlobalRef(reference);
             reference = nullptr;
         }
     };
@@ -1783,23 +1795,23 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     }
 
     jobject minecraftObject = candidate.minecraftInstanceField != nullptr
-        ? env->GetStaticObjectField(minecraft, candidate.minecraftInstanceField)
-        : env->CallStaticObjectMethod(minecraft, candidate.getMinecraft);
-    if (env->ExceptionCheck() == JNI_TRUE || minecraftObject == nullptr) {
+        ? counted(env)->GetStaticObjectField(minecraft, candidate.minecraftInstanceField)
+        : counted(env)->CallStaticObjectMethod(minecraft, candidate.getMinecraft);
+    if (counted(env)->ExceptionCheck() == JNI_TRUE || minecraftObject == nullptr) {
         clearException(env);
         return false;
     }
     localReferences.add(minecraftObject);
-    jobject renderManagerObject = env->CallObjectMethod(minecraftObject,
+    jobject renderManagerObject = counted(env)->CallObjectMethod(minecraftObject,
                                                          candidate.getRenderManager);
-    jobject timerObject = env->GetObjectField(minecraftObject, candidate.timerField);
-    jobject modelViewBuffer = env->GetStaticObjectField(activeRenderInfo,
+    jobject timerObject = counted(env)->GetObjectField(minecraftObject, candidate.timerField);
+    jobject modelViewBuffer = counted(env)->GetStaticObjectField(activeRenderInfo,
                                                          candidate.activeModelView);
-    jobject projectionBuffer = env->GetStaticObjectField(activeRenderInfo,
+    jobject projectionBuffer = counted(env)->GetStaticObjectField(activeRenderInfo,
                                                           candidate.activeProjection);
-    jobject viewportBuffer = env->GetStaticObjectField(activeRenderInfo,
+    jobject viewportBuffer = counted(env)->GetStaticObjectField(activeRenderInfo,
                                                         candidate.activeViewport);
-    if (env->ExceptionCheck() == JNI_TRUE || renderManagerObject == nullptr ||
+    if (counted(env)->ExceptionCheck() == JNI_TRUE || renderManagerObject == nullptr ||
         timerObject == nullptr ||
         modelViewBuffer == nullptr || projectionBuffer == nullptr || viewportBuffer == nullptr) {
         clearException(env);
@@ -1810,20 +1822,20 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     localReferences.add(modelViewBuffer);
     localReferences.add(projectionBuffer);
     localReferences.add(viewportBuffer);
-    if (env->GetDirectBufferCapacity(modelViewBuffer) < 16 ||
-        env->GetDirectBufferCapacity(projectionBuffer) < 16 ||
-        env->GetDirectBufferCapacity(viewportBuffer) < 4 ||
-        env->GetDirectBufferAddress(modelViewBuffer) == nullptr ||
-        env->GetDirectBufferAddress(projectionBuffer) == nullptr ||
-        env->GetDirectBufferAddress(viewportBuffer) == nullptr) {
+    if (counted(env)->GetDirectBufferCapacity(modelViewBuffer) < 16 ||
+        counted(env)->GetDirectBufferCapacity(projectionBuffer) < 16 ||
+        counted(env)->GetDirectBufferCapacity(viewportBuffer) < 4 ||
+        counted(env)->GetDirectBufferAddress(modelViewBuffer) == nullptr ||
+        counted(env)->GetDirectBufferAddress(projectionBuffer) == nullptr ||
+        counted(env)->GetDirectBufferAddress(viewportBuffer) == nullptr) {
         clearException(env);
         return false;
     }
     const auto makeGlobalObject = [&](jobject const local, jobject& global) noexcept {
-        global = env->NewGlobalRef(local);
-        if (env->ExceptionCheck() == JNI_TRUE || global == nullptr) {
+        global = counted(env)->NewGlobalRef(local);
+        if (counted(env)->ExceptionCheck() == JNI_TRUE || global == nullptr) {
             clearException(env);
-            if (global != nullptr) env->DeleteGlobalRef(global);
+            if (global != nullptr) counted(env)->DeleteGlobalRef(global);
             global = nullptr;
             return false;
         }
@@ -1843,6 +1855,8 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
 
 bool GameBindings::resolve(JNIEnv* const env) noexcept
 {
+    bindingJniCounter = &m_bindingJniCalls; bindingJvmtiCounter = &m_bindingJvmtiCalls;
+    struct ResetCounters { ~ResetCounters() { bindingJniCounter = nullptr; bindingJvmtiCounter = nullptr; } } resetCounters;
     if (env == nullptr || !m_mappingRegistry.freeze()) {
         return false;
     }
@@ -1864,7 +1878,7 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
 
         std::unique_ptr<BindingCache> candidate(new (std::nothrow) BindingCache());
         if (candidate == nullptr) {
-            env->DeleteLocalRef(minecraft);
+            counted(env)->DeleteLocalRef(minecraft);
             return false;
         }
         bool resolved = false;
@@ -1883,7 +1897,7 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
         // release store; after it, the cache and owned profile are immutable
         // through callback drain.
         m_cache = std::move(candidate);
-        env->DeleteLocalRef(minecraft);
+        counted(env)->DeleteLocalRef(minecraft);
         m_retryAtMilliseconds.store(0U, std::memory_order_relaxed);
         m_resolutionPhase.store(ResolutionPhase::Resolved, std::memory_order_release);
         try {
@@ -1896,7 +1910,7 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
         return true;
     }
 
-    env->DeleteLocalRef(minecraft);
+    counted(env)->DeleteLocalRef(minecraft);
     return false;
 }
 

@@ -5,6 +5,7 @@
 #undef main
 #include <QThread>
 #include <windows.h>
+#include "../../mapping/InstalledProof.h"
 int main(int argc, char **argv) {
     QStringList args;
     for (int i = 0; i < argc; ++i) args << QString::fromLocal8Bit(argv[i]);
@@ -38,7 +39,22 @@ int main(int argc, char **argv) {
         Json selection;
         if (args[1] == "inspect") {
             raw["detailLevel"] = "lite"; raw["captureKind"] = "jvmti-metadata-double-read";
+            std::set<std::string> content;
+            if (args.contains("--binding-check")) {
+                const auto pack = Json::read(filePath(get("--pack"))), contracts = Json::read(filePath(get("--contracts")));
+                for (const auto &p : pack.at("providers").array()) for (const auto &d : p.at("dictionaries").array()) {
+                    const auto required = requiredClassNames(contracts, d.at("symbols"));
+                    for (const auto &name : required.array()) {
+                        auto value = name.string(); std::replace(value.begin(), value.end(), '.', '/'); content.insert("L" + value + ";");
+                    }
+                }
+            }
             for (auto &c : raw["classes"].array()) {
+                if (args.contains("--binding-check")) {
+                    const bool required = content.contains(c.at("name").string());
+                    c["installedDigest"] = sha256(required ? installedClassMaterial(c) : installedHierarchyMaterial(c));
+                    c["installedProofKind"] = required ? "required-content" : "hierarchy-metadata";
+                }
                 for (auto key : {"constantPool", "constantPoolCount", "major", "minor"}) c.object().erase(key);
                 for (auto &m : c["methods"].array()) m.object().erase("bytecode");
             }

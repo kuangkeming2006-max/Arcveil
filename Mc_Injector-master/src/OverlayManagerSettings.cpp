@@ -1,5 +1,6 @@
 #include "OverlayManager.h"
 #include "../agent/ui/GuiTypography.h"
+#include "../agent/ui/GuiLayout.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -436,7 +437,7 @@ void OverlayManager::setAimAttackCps(const int cps)
 
 void OverlayManager::setClickGuiWidthPercent(const int percent)
 {
-    const int bounded = std::clamp(percent, 80, 150);
+    const int bounded = std::clamp(percent, 40, 150);
     if (m_clickGuiWidthPercent == bounded) return;
     m_clickGuiWidthPercent = bounded;
     storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
@@ -444,7 +445,7 @@ void OverlayManager::setClickGuiWidthPercent(const int percent)
 
 void OverlayManager::setClickGuiHeightPercent(const int percent)
 {
-    const int bounded = std::clamp(percent, 80, 150);
+    const int bounded = std::clamp(percent, 40, 150);
     if (m_clickGuiHeightPercent == bounded) return;
     m_clickGuiHeightPercent = bounded;
     storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
@@ -570,6 +571,14 @@ void OverlayManager::setGuiScaleIndex(const int index)
     storeFeatureSettings();
     emit guiScaleIndexChanged();
     sendGuiScaleSnapshot();
+}
+
+void OverlayManager::setGuiElementScale(int percent)
+{
+    percent=mcoverlay::ui::normalizeGuiElementScale(percent);
+    if(percent==m_guiElementScale) return;
+    m_guiElementScale=percent;
+    storeFeatureSettings();emit guiElementScaleChanged();sendGuiElementScaleSnapshot();
 }
 
 void OverlayManager::setGuiFontSize(int size)

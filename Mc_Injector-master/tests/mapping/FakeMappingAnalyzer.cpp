@@ -33,7 +33,9 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 1000; ++i)
             event({{"event", "symbol"}, {"symbol", QString::number(i)}, {"confidence", 0.99}});
     const QJsonObject identity{{"family", "Forge"}, {"minecraftVersion", "1.8.9"},
-        {"mappingIdentity", "fixture-mapping-identity"}, {"metadataIdentity", "fixture-metadata-identity"}};
+        {"mappingIdentity", "fixture-mapping-identity"}, {"metadataIdentity", "fixture-metadata-identity"},
+        {"bindingIdentity", QString(64, QLatin1Char('a'))},
+        {"runtimeBinding", QJsonObject{{"anchor", "net.minecraft.client.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}}}};
     if (args[1] == "identify") { writeObject(get("--out"), identity); return 0; }
     if(args[1]=="select") {
         const auto snapshot=readObject(get("--snapshot"));
@@ -58,8 +60,8 @@ int main(int argc, char **argv) {
                 QString::number((quint64(c.dwHighDateTime) << 32) | c.dwLowDateTime)}});
         return 0;
     }
-    if (args[1] == "validate") {
-        if (mode == "unresolved") {
+    if (args[1] == "validate" || args[1] == "validate-cache") {
+        if (mode == "unresolved" || (mode == "changed" && args[1] == "validate-cache")) {
             writeObject(get("--out"), {{"valid", false}});
             event({{"event", "validation"}, {"valid", false}});
             return 3;

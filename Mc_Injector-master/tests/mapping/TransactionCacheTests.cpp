@@ -29,6 +29,8 @@ struct TransactionCacheTests {
         QObject::connect(&service, &MappingService::ready, [&](const auto &, const auto &) { ++ready; });
         QObject::connect(&service, &MappingService::failed, [&](const auto &s) { ++failed; std::printf("FAILURE %s\n", s.toUtf8().constData()); });
         QObject::connect(&service, &MappingService::eventReceived, [&](const QJsonObject &e) {
+            if (e.value("event") == "CACHE_LOOKUP" && !e.value("hit").toBool())
+                std::printf("CACHE_MISS %s\n", e.value("reason").toString().toUtf8().constData());
             autoCalls += e.value("event") == "AUTO_RESOLVE";
             hits += e.value("event") == "CACHE_LOOKUP" && e.value("hit").toBool();
             promoted += e.value("event") == "CACHE_PROMOTE";
@@ -49,11 +51,15 @@ struct TransactionCacheTests {
               "B: second same-build attach uses scoped real validation with zero automatic resolve calls");
         check(progress.successful() && progress.status().contains("Cache HIT"),
               "B: fresh live validation retains Cache HIT -> Live validation -> Ready presentation");
+        check(service.m_transaction->detailCaptureCalls == 0 && !service.m_hit.bindingIdentity.isEmpty(),
+              "B: verified installed proof reuses mapping with zero detail captures");
         // Fresh loader instance + extra class + enumeration order differ, identity is unchanged.
         qputenv("ARCVEIL_TRANSACTION_EXTRA", "1"); qputenv("ARCVEIL_TRANSACTION_LOADER", "98765");
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 3 || failed; }) && ready == 3 && autoCalls == 0 && hits == 1 && service.m_mappingIdentity == firstIdentity,
               "C: class count/order/loader instance do not affect reusable mapping identity");
+        check(service.m_transaction->detailCaptureCalls == 0 && service.m_runtimeBinding.value("instance").toDouble() == 98765,
+              "C: restart fast check pins current loader and performs zero detail captures");
         check(!Cache(service.m_root).reference(fileDigest(contracts), "Badlion", "1.8.9").valid(),
               "D: Badlion never takes Lunar lastVerified as a family reference");
         // Cancel while real Analyzer capture is in flight, then check no cache publication/ready.
@@ -111,6 +117,16 @@ struct TransactionCacheTests {
         const auto previousReady = ready, previousPromote = promoted; autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready > previousReady || failed; }) && ready == previousReady + 1 && autoCalls == 1 && promoted == previousPromote + 1 && service.m_mappingIdentity != firstIdentity,
               "J: cached live structural identity rejected -> automatic resolve -> new atomic promotion");
+        const auto legacySource = service.m_hit;
+        service.m_root = temp.path() + "/legacy";
+        Cache(service.m_root).promote(legacySource.pack, legacySource.snapshot, legacySource.fingerprint, fileDigest(contracts),
+            {{"valid", true}, {"injectionReady", true}, {"fingerprint", legacySource.fingerprint}},
+            legacySource.mappingIdentity, legacySource.metadataIdentity, legacySource.family, legacySource.minecraftVersion);
+        const auto legacyReady = ready, legacyPromoted = promoted; autoCalls = 0; hits = 0; start();
+        check(spin([&] { return ready > legacyReady || failed; }) && ready == legacyReady + 1 && autoCalls == 0 && hits == 1 &&
+            service.m_transaction->detailCaptureCalls == 0 && promoted == legacyPromoted + 1 &&
+            !Cache(service.m_root).preferred(fileDigest(contracts)).bindingIdentity.isEmpty(),
+            "K: PR #6 verified source upgrades offline, compact live validation, atomic proof publication, zero details");
         check(failed == 0, "all real transaction/cache scenarios complete without unexpected failure");
         std::printf("Transaction/cache: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;

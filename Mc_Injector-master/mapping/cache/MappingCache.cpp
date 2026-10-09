@@ -80,7 +80,7 @@ Entry Cache::entry(const QString &revision, const QString &contractDigest, bool 
                 proof.value("packDigest").toString(),
                 contractDigest,
                 proof.value("mappingIdentity").toString(), proof.value("metadataIdentity").toString(),
-                family, version, {}, quint64(proof.value("promotionSerial").toDouble())};
+                family, version, {}, quint64(proof.value("promotionSerial").toDouble()), proof.value("bindingIdentity").toString()};
     } catch (...) {
         return {};
     }
@@ -93,6 +93,18 @@ QStringList Cache::knownPacks(const QString &contractDigest) const {
         if (e.valid()) result << e.pack;
     }
     return result;
+}
+Entry Cache::preferred(const QString &contractDigest) const {
+    // Ordering hint only. Caller must independently check current family, complete
+    // required metadata/content and defining loader before authorizing reuse.
+    const auto i = index();
+    const auto revision = i.value("lastVerified").toString();
+    bool indexed = false;
+    const auto verified = i.value("verified").toObject();
+    for (auto it = verified.begin(); it != verified.end(); ++it) indexed |= it.value().toString() == revision;
+    if (!indexed) return {};
+    auto e = entry(revision, contractDigest, false);
+    return e.valid() && !e.mappingIdentity.isEmpty() && !e.metadataIdentity.isEmpty() ? e : Entry{};
 }
 Entry Cache::lookup(const QString &fingerprint, const QString &contractDigest) const {
     auto e =
@@ -202,6 +214,7 @@ Entry Cache::promote(const QString &pack, const QString &snapshot, const QString
                                       {"analyzerVersion", 5},
                                       {"mappingIdentity", mappingIdentity},
                                       {"metadataIdentity", metadataIdentity},
+                                      {"bindingIdentity", validation.value("identity").toObject().value("bindingIdentity")},
                                       {"family", family},
                                       {"minecraftVersion", minecraftVersion},
                                       {"fingerprint", fingerprint},
@@ -220,7 +233,8 @@ Entry Cache::promote(const QString &pack, const QString &snapshot, const QString
     // Only this final atomic pointer update makes a staged object visible.
     writeObject(m_root + "/index.json", i);
     return {revision, fingerprint, dir + "/pack.json", dir + "/snapshot.json",
-            digest, contractDigest, mappingIdentity, metadataIdentity, family, minecraftVersion, {}, serial};
+            digest, contractDigest, mappingIdentity, metadataIdentity, family, minecraftVersion, {}, serial,
+            validation.value("identity").toObject().value("bindingIdentity").toString()};
 }
 bool Cache::rollback() {
     QDir().mkpath(m_root);

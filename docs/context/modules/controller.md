@@ -67,6 +67,11 @@ guiFontSize/guiFontWeight Qt 属性共用 guiTypographyChanged；features QSetti
 GUI_TYPOGRAPHY_CHANGED 验证字号/字重后保存并通知 QML。共享校验仅依赖
 agent/ui/GuiTypography.h 的纯值策略，不引入 renderer、ImGui 或 JNI。
 
+guiElementScale Qt 属性及 guiElementScaleChanged 信号暴露独立 GUI 元素缩放；
+QSettings 和配置档案保存 60–150%（默认 100%）。sendGuiElementScaleSnapshot 在
+初始同步、应用配置和属性编辑时发送 GUI_ELEMENT_SCALE；接收 CHANGED 消息时严格
+校验字段数和范围后保存。GuiLayout.h 提供纯值校验。窗口宽高的持久化及协议范围为 40–150%。
+
 现有 include 例外是 OverlayManagerCodec.internal.cpp → SmartHotbarPolicy.h 的 validPacked 纯函数；不意味着控制器可以读 BindingCache 或调用 JNI。
 
 ## 测试与按需下钻
@@ -124,3 +129,10 @@ Active ends only through detach (normal authenticated DETACH transaction). A new
 Attach cancels the preceding owner and queues behind bounded Agent teardown before
 starting its new owner. Transport preference is memoized by PID/processStart and
 shared from capture to Agent startup. See MAPPING_ATTACH_AUDIT.md and mapping-pipeline.
+
+v56.5: MappingService.runtimeBinding() returns the currently validated anchor and
+defining-loader type/instance. launchVerifiedAgent pins these in Agent options and
+rechecks transaction ownership/process identity after observable callbacks before
+starting either loader. HELLO authenticates transport; BINDING_READY reports successful
+exact JNI lookup and counters; Active/TRANSACTION_COMMIT requires it and RENDERER_READY.
+The attach timeout remains armed until binding succeeds. Invalid receipts fail closed.

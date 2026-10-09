@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < args.size(); ++i) {
             if (!args[i].startsWith("--") || options.contains(args[i]))
                 throw std::runtime_error("invalid/duplicate option");
-            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only") {
+            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only" || args[i]=="--binding-check") {
                 options[args[i]] = "true";
                 continue;
             }
@@ -160,6 +160,13 @@ int main(int argc, char **argv) {
             }
             result["identity"] = mappingIdentity(Json::read(filePath(option("--pack"))), lite, contracts());
             writeJson(filePath(option("--out")), result);
+        } else if (command == "validate-cache") {
+            result = validateCachedRuntime(Json::read(filePath(option("--pack"))),
+                readSnapshot(filePath(option("--snapshot"))), contracts(),
+                option("--binding-identity").toStdString(), events);
+            writeJson(filePath(option("--out")), result);
+            event("validation", result);
+            if (!result.at("valid").boolean()) return 3;
         } else if (command == "validate") {
             const auto pack = Json::read(filePath(option("--pack")));
             result = options.contains("--snapshot")

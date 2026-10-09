@@ -13,6 +13,9 @@ struct AgentOptions final {
     std::wstring mappingPack;
     std::string mappingHash;
     bool mappingOptionsValid = true;
+    bool bindingRequired = false;
+    std::string mappingAnchor, mappingLoaderType;
+    unsigned mappingLoaderInstance = 0;
 
     [[nodiscard]] bool valid() const noexcept;
 };

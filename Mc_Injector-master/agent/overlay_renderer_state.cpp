@@ -52,6 +52,20 @@ bool OverlayRenderer::consumeGuiTypographyChange(ui::GuiTypography& value) noexc
     return true;
 }
 
+void OverlayRenderer::setGuiElementScale(int percent) noexcept
+{
+    if (!m_guiDesign.elementScaleDirty)
+        m_guiDesign.elementScale=ui::normalizeGuiElementScale(percent);
+}
+
+bool OverlayRenderer::consumeGuiElementScaleChange(int& percent) noexcept
+{
+    if (!m_guiDesign.elementScaleDirty) return false;
+    percent=m_guiDesign.elementScale;
+    m_guiDesign.elementScaleDirty=false;
+    return true;
+}
+
 bool OverlayRenderer::consumeClickGuiToggle() noexcept
 {
     pollFallbackInput();

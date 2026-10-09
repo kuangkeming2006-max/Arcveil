@@ -31,6 +31,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 | Controller → Agent | AIM_OPTIONS、AIM_ATTACK_CPS、SMART_HOTBAR | sendFeatureSnapshot → 同名 command；packed 值用 SmartHotbarPolicy 校验 |
 | Controller → Agent | BIND、GUI_SCALE、BED_RESCAN | sendBindSnapshot/sendGuiScaleSnapshot/refreshBedCache → 同名 command |
 | Controller → Agent | GUI_TYPOGRAPHY `<size> <weight>` | sendGuiTypographySnapshot → handleControlLine；size 14–24，weight 400/600/700 |
+| Controller → Agent | GUI_ELEMENT_SCALE `<percent>` | sendGuiElementScaleSnapshot → handleControlLine；单个整数 60–150，默认 100 |
 | Controller → Agent | HYPIXEL_RESULT、STATS、STATS_ERROR | publishHypixelResult/publishPlayerStats/publishPlayerStatsError → 同名 command |
 | Controller → Agent | MEDIA_STATE、MEDIA_SPECTRUM、MEDIA_SETTINGS | publishMediaState/publishMediaSpectrum/sendMediaSettings → 同名 command |
 | Controller → Agent | BLACKLIST_RESET、SETTINGS、PRESET、ENTRY、REMOVE、WARNING、SYNC_END（均带 BLACKLIST_ 前缀） | BlacklistService.commandReady → OverlayManager.sendBlacklistCommand → handleControlLine |
@@ -39,6 +40,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 | Agent → Controller | FEATURE_STATE_CHANGED / _V2 / _V3（当前发 V3）、AIM_OPTIONS_CHANGED、AIM_ATTACK_CPS_CHANGED、SMART_HOTBAR_CHANGED | queueFeatureChanged → telemetryMain → processAgentLine |
 | Agent → Controller | BIND_CHANGED、GUI_SCALE_CHANGED | 对应 queue* → telemetryMain → processAgentLine |
 | Agent → Controller | GUI_TYPOGRAPHY_CHANGED `<size> <weight>` | packed atomic + revision → telemetryMain → processAgentLine → QSettings |
+| Agent → Controller | GUI_ELEMENT_SCALE_CHANGED `<percent>` | atomic + revision → telemetryMain → processAgentLine → QSettings / 配置档案 |
 | Agent → Controller | GAME_STATE | queueTelemetry → formatGameState/telemetryMain → processAgentLine |
 | Agent → Controller | PLAYER_FOUND、PLAYER_STATUS、MATCH_STATE、HYPIXEL_QUERY | mailbox/queueHypixelQuery → telemetryMain → processAgentLine → controller signals |
 | Agent → Controller | MEDIA_ACTION、MEDIA_SETTINGS_CHANGED | queueMediaAction/queueMediaSettingsChanged → telemetryMain → processAgentLine |
@@ -48,6 +50,8 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 Agent 还发送 STATE_APPLIED、FEATURE_STATE_APPLIED、BIND_APPLIED、GUI_SCALE_APPLIED、MEDIA_SETTINGS_APPLIED、BED_RESCAN_ACCEPTED 等 ACK。
 当前 controller 的主要分派没有为上述每个 ACK 建独立状态迁移；部分由 smoke 脚本验证。
 GUI_TYPOGRAPHY_APPLIED 同样为确认消息；字体不加入 FEATURE_STATE_V3 的位置字段。
+GUI_ELEMENT_SCALE_APPLIED `<percent>` 确认独立元素缩放；非法范围/格式返回
+ERROR BAD_GUI_ELEMENT_SCALE。元素缩放也不加入 V3 位置字段。既有窗口宽高字段范围扩为 40–150%。
 不能仅因协议注释有某个消息就认定 controller 会处理它，未来搬迁也不顺带改变 ACK 消费行为。
 
 GAME_STATE v1 是 15 个空格分隔字段：消息名、版本、sequence、unix-ms、valid、health、max-health、entity-id、x/y/z、loaded-entities、bed-count、mapping、state。
@@ -69,6 +73,13 @@ ControllerResponsivenessTests 验证生产接收路径及事件循环相关行�
 没有完整的双端协议 schema/黄金样例测试覆盖所有扩展消息、编码、版本兼容及边界长度。后续拆 codec 时应补这些验证，不在本轮修改产品行为。
 
 IPC 是跨模块契约，没有一个现成独立 ipc 库囊括所有业务 codec。
+
+v56.5 startup extension: authenticated Agent sends BINDING_READY <milliseconds>
+<jvmtiCalls> <jniCalls> only after exact pinned-loader JNI binding succeeds; failure
+sends ERROR RUNTIME_BINDING_FAILED. Controller rejects malformed/zero-count receipts,
+checks current transaction/PID/start, and requires both binding and renderer readiness
+before Active. HELLO alone no longer stops the attach timeout. Legacy Agents lacking
+this receipt cannot silently activate through the current Controller.
 普通 UI/renderer 改动读本页即可；消息变更才读取两端对应分支和服务编码入口，不需要加载整个 runtime/controller 大文件。
 
 2026-09-26 导航更新：控制器接收/快照在 OverlayManagerProtocol.cpp，服务消息在 Services.cpp，读写在 Transport.cpp，公共 token helper 在 Codec.internal.cpp；Agent 接收在 AgentRuntimeControl.cpp，发送在 Telemetry.cpp，feature 编码在 Features.cpp。消息格式与字段顺序未改，生命周期 smoke 和控制器响应性测试已运行通过。

@@ -55,6 +55,12 @@ int main(int argc, char **argv) {
               "malformed partial mapping options fail closed");
     check(!mcoverlay::parseAgentOptions((options + ";mapping=00").c_str()).valid(),
           "duplicate mapping option rejected");
+    const auto binding = options + ";bindingRequired=1;mappingAnchor=4c613b;mappingLoaderType=4c623b;mappingLoaderInstance=123";
+    check(mcoverlay::parseAgentOptions(binding.c_str()).valid(), "complete exact-loader binding options accepted");
+    for (const auto &suffix : {std::string(";bindingRequired=1"), std::string(";mappingAnchor=4c613b"),
+         std::string(";bindingRequired=1;mappingAnchor=GG;mappingLoaderType=4c623b;mappingLoaderInstance=123")})
+        check(!mcoverlay::parseAgentOptions((options + suffix).c_str()).valid(), "partial or malformed loader pin fails closed");
+    check(!mcoverlay::parseAgentOptions((binding + ";mappingLoaderInstance=123").c_str()).valid(), "duplicate loader pin rejected");
     Cache cache(dir.path() + "/cache");
     cache.candidate("run-one", "fingerprint", "analyzing");
     check(!cache.lookup("fingerprint", "contract").valid(), "candidate cannot be cache hit");

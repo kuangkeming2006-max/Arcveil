@@ -266,8 +266,8 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
     s.aimMaximumDistance = std::clamp(aimMaximumDistance,
                                       std::max(1, s.aimMinimumDistance), 128);
     s.aimFovDegrees = std::clamp(aimFovDegrees, 1, 360);
-    s.clickGuiWidthPercent = std::clamp(clickGuiWidthPercent, 80, 150);
-    s.clickGuiHeightPercent = std::clamp(clickGuiHeightPercent, 80, 150);
+    s.clickGuiWidthPercent = std::clamp(clickGuiWidthPercent, 40, 150);
+    s.clickGuiHeightPercent = std::clamp(clickGuiHeightPercent, 40, 150);
     s.clickGuiOpacity = std::clamp(clickGuiOpacity, 35, 100);
     s.aimNearestPriority = (extraBits & 0x01U) != 0U;
     s.textGuiVerticalLine = (extraBits & 0x02U) != 0U;
@@ -387,9 +387,9 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
                           std::memory_order_release);
     m_aimAttackCps.store(std::clamp(settings.aimAttackCps,1,20),
                          std::memory_order_release);
-    m_clickGuiWidthPercent.store(std::clamp(settings.clickGuiWidthPercent, 80, 150),
+    m_clickGuiWidthPercent.store(std::clamp(settings.clickGuiWidthPercent, 40, 150),
                                  std::memory_order_release);
-    m_clickGuiHeightPercent.store(std::clamp(settings.clickGuiHeightPercent, 80, 150),
+    m_clickGuiHeightPercent.store(std::clamp(settings.clickGuiHeightPercent, 40, 150),
                                   std::memory_order_release);
     m_clickGuiOpacity.store(std::clamp(settings.clickGuiOpacity, 35, 100),
                             std::memory_order_release);
@@ -509,9 +509,9 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
     m_featureChangedAimAttackCps.store(
         std::clamp(settings.aimAttackCps,1,20),std::memory_order_relaxed);
     m_featureChangedClickGuiWidthPercent.store(
-        std::clamp(settings.clickGuiWidthPercent, 80, 150), std::memory_order_relaxed);
+        std::clamp(settings.clickGuiWidthPercent, 40, 150), std::memory_order_relaxed);
     m_featureChangedClickGuiHeightPercent.store(
-        std::clamp(settings.clickGuiHeightPercent, 80, 150), std::memory_order_relaxed);
+        std::clamp(settings.clickGuiHeightPercent, 40, 150), std::memory_order_relaxed);
     m_featureChangedClickGuiOpacity.store(
         std::clamp(settings.clickGuiOpacity, 35, 100), std::memory_order_relaxed);
     m_featureChangedExtraBits.store(packExtraFeatures(settings),

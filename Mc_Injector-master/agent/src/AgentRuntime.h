@@ -58,6 +58,7 @@ private:
     void queueMenuHotkeyChanged(unsigned virtualKey) noexcept;
     void queueGuiScaleChanged(int index) noexcept;
     void queueGuiTypographyChanged(ui::GuiTypography value) noexcept;
+    void queueGuiElementScaleChanged(int percent) noexcept;
     void queueMediaSettingsChanged(const MediaOverlaySettings& settings) noexcept;
     void queueMediaAction(MediaAction action) noexcept;
     void queueBlacklistAction(const BlacklistAction& action) noexcept;
@@ -158,6 +159,8 @@ private:
     std::atomic<bool> m_shutdownRequested{false};
     std::atomic<bool> m_vmUnloading{false};
     std::atomic<bool> m_rendererReadySent{false};
+    std::atomic<int> m_bindingResult{0}; // release publishes resolver diagnostics to telemetry
+    std::uint64_t m_bindingMs = 0, m_bindingJvmtiCalls = 0, m_bindingJniCalls = 0;
     std::atomic<bool> m_handshakeSent{false};
     // Set only after the owning SwapBuffers thread has shut down ImGui while
     // its original HGLRC is current. This is distinct from full runtime
@@ -270,6 +273,9 @@ private:
     std::atomic<int> m_guiTypography{ui::packTypography({})};
     std::atomic<int> m_guiTypographyChanged{ui::packTypography({})};
     std::atomic<std::uint32_t> m_guiTypographyChangedRevision{0U};
+    std::atomic<int> m_guiElementScale{100};
+    std::atomic<int> m_guiElementScaleChanged{100};
+    std::atomic<std::uint32_t> m_guiElementScaleChangedRevision{0U};
     std::atomic<bool> m_frameFaulted{false};
     std::uint64_t m_lastTelemetryTick = 0U; // render-thread owned
     std::uint64_t m_telemetrySequence = 0U; // render-thread owned

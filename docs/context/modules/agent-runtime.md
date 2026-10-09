@@ -30,6 +30,11 @@ queueTelemetry 的发布采用非阻塞尝试获取锁；样本可以被后续�
 发布 revision mailbox。telemetryMain 发送 GUI_TYPOGRAPHY_CHANGED，成功发送后才推进
 sent revision。字号/字重一起发布，避免跨线程混用两次编辑的值。
 
+GUI_ELEMENT_SCALE 的单个整数经 GuiLayout.h 校验为 60–150%，拒绝额外字段。
+帧线程调用 setGuiElementScale，并将 consumeGuiElementScaleChange 发布到独立 atomic /
+revision mailbox；telemetryMain 发送 GUI_ELEMENT_SCALE_CHANGED，成功后推进 sent revision。
+GUI_ELEMENT_SCALE_APPLIED 确认收到的设置。FEATURE_STATE 的窗口宽高字段支持 40–150%。
+
 ## 调用流
 
 启动：jvm 导出 → AgentRuntime.start → workerMain → OpenGlHook.install → resolver/scanner/telemetry 启动 → IPC handshake。
@@ -62,6 +67,12 @@ hook 安装失败也有专门管道错误上报路径，不能因提取 worker �
 读取 GameBindings/OverlayRenderer/OpenGlHook 时默认止于 public 声明；
 只有跨线程清理或 callback 时序问题才读对应实现。
 AgentRuntime.h 当前直接包含 overlay_renderer.h，传递引入 binding/transform 大量声明；这不表示所有传递内容都需加载。
+
+v56.5: bindingRequired=1 options must include mapping/hash and a complete hex-encoded
+mappingAnchor/mappingLoaderType plus unsigned mappingLoaderInstance. Resolver publishes
+its result, elapsed milliseconds and JVMTI/JNI counters before a release-store;
+telemetry acquire-loads it and sends BINDING_READY or ERROR RUNTIME_BINDING_FAILED.
+Renderer initialization can run concurrently; it cannot authorize mapping success.
 
 已有验证为 Attach、NativeLoader、OpenGL/JVM smoke（含 split threads），以及相邻 renderer/controller 测试。
 没有独立全面的 runtime command codec 测试，协议版本/feature round-trip 是后续验证缺口。2026-09-26 构建、Attach、NativeLoader（含驻留重附加）、OpenGL unified/split smoke 均通过。

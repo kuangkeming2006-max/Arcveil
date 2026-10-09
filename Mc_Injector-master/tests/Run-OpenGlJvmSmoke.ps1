@@ -210,7 +210,9 @@ function Read-ProtocolLine {
 
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
-        [System.Collections.Generic.List[string]] $Received
+        [System.Collections.Generic.List[string]] $Received,
+
+        [string] $ExpectedErrorPrefix = ''
     )
 
     $line = Wait-TaskResult -Task $Reader.ReadLineAsync() -Stopwatch $Stopwatch `
@@ -222,7 +224,8 @@ function Read-ProtocolLine {
         throw 'The agent sent a protocol line larger than 1024 bytes.'
     }
     [void] $Received.Add($line)
-    if ($line.StartsWith('ERROR ', [System.StringComparison]::Ordinal)) {
+    if ($line.StartsWith('ERROR ', [System.StringComparison]::Ordinal) -and
+        ($ExpectedErrorPrefix.Length -eq 0 -or -not $line.StartsWith($ExpectedErrorPrefix, [System.StringComparison]::Ordinal))) {
         throw "Agent reported an error: $line"
     }
     return $line
@@ -392,6 +395,23 @@ try {
         } while ($line -cne ('GUI_TYPOGRAPHY_APPLIED ' + $typography))
     }
 
+    foreach ($percent in @(60, 150, 100)) {
+        $writer.WriteLine('GUI_ELEMENT_SCALE ' + $percent)
+        do {
+            $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+                -LimitSeconds $TimeoutSeconds -Operation 'applying GUI element size' `
+                -Received $received
+        } while ($line -cne ('GUI_ELEMENT_SCALE_APPLIED ' + $percent))
+    }
+    foreach ($invalid in @('59', '151', '120 extra', 'nope')) {
+        $writer.WriteLine('GUI_ELEMENT_SCALE ' + $invalid)
+        do {
+            $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+                -LimitSeconds $TimeoutSeconds -Operation 'rejecting invalid GUI element size' `
+                -Received $received -ExpectedErrorPrefix 'ERROR BAD_GUI_ELEMENT_SCALE '
+        } while (-not $line.StartsWith('ERROR BAD_GUI_ELEMENT_SCALE '))
+    }
+
     # Exercise the complete persisted feature-state grammar. The synthetic JVM
     # has no Minecraft classes, but the renderer/control protocol must still
     # accept and acknowledge the settings atomically.
@@ -426,6 +446,23 @@ try {
     do {
         $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
             -LimitSeconds $TimeoutSeconds -Operation 'applying the v39 FreeLook snapshot' `
+            -Received $received
+    } while ($line -cne 'FEATURE_STATE_APPLIED')
+
+    # The synthetic JVM intentionally has no Minecraft classes, so telemetry
+    # Width/height keep their V3 positions and now accept 40% on the live Agent.
+    $smallLayout = $featureV3Payload.Trim() -split ' '
+    $smallLayout[77] = '40'; $smallLayout[78] = '40'
+    $writer.WriteLine('FEATURE_STATE_V3 ' + ($smallLayout -join ' '))
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'applying 40 percent GUI dimensions' `
+            -Received $received
+    } while ($line -cne 'FEATURE_STATE_APPLIED')
+    $writer.WriteLine('FEATURE_STATE_V3' + $featureV3Payload)
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'restoring normal GUI dimensions' `
             -Received $received
     } while ($line -cne 'FEATURE_STATE_APPLIED')
 

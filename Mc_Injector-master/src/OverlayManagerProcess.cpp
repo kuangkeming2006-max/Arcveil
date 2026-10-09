@@ -357,6 +357,10 @@ bool OverlayManager::targetHasLoadedOverlayAgent(quint32 pid) const
 
 bool OverlayManager::startNativeLoaderFallback()
 {
+    const auto owner = m_transaction;
+    const auto ownsLaunch = [&] { return owner && owner == m_transaction && owner->valid &&
+        owner->pid == m_targetPid && MappingService::processStartFor(m_targetPid) == owner->processStart; };
+    if (!ownsLaunch()) return false;
     m_nativeFallbackGrace.stop();
     m_nativeFallbackAttempted = true;
     if (!targetHasLoadedJvm(m_targetPid)
@@ -384,10 +388,13 @@ bool OverlayManager::startNativeLoaderFallback()
     m_loaderKind = LoaderKind::NativeLoadLibrary;
     setState(State::LaunchingAttachHelper);
     setStatusMessage(QStringLiteral("JVM Attach did not complete; retrying through the visible native DLL export..."));
+    if (!ownsLaunch()) return false;
     m_attachProcess.setProgram(nativeLoader);
     m_attachProcess.setArguments({QString::number(m_targetPid),
                                   m_agentDllPath,
                                   m_agentOptions});
+    m_mappingService.loaderStarted("NativeLoader");
+    if (!ownsLaunch()) return false;
     m_attachProcess.start();
 
     // Give the fallback a full handshake window instead of consuming the
