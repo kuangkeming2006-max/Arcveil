@@ -471,6 +471,11 @@ void MappingService::validate(const QString &pack, bool automatic) {
                    return;
                }
                m_validation = readObject(m_run + "/validation.json");
+               if (m_validation.value("unsupportedApi").toBool()) {
+                   fail(m_validation.value("reason").toString() + ": " +
+                        m_validation.value("minecraftVersion").toString());
+                   return;
+               }
                QStringList rejected;
                if (automatic) {
                    auto rows = m_validation.value("symbols").toArray();
@@ -588,6 +593,11 @@ void MappingService::resolve() {
             return;
         }
         const auto candidate = readObject(m_run + "/candidate.json");
+        if (candidate.value("unsupportedApi").toBool()) {
+            fail(candidate.value("reason").toString() + ": " +
+                 candidate.value("minecraftVersion").toString());
+            return;
+        }
         if (candidate.value("stateVersion").toInt() != 1 ||
             candidate.value("fingerprint").toString() != m_fingerprint) {
             fail("Invalid incremental candidate receipt");

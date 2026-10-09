@@ -36,15 +36,15 @@ bool GameBindings::onItemUse(JNIEnv* env,jobject minecraft,const bool entering) 
     }
     struct Frame {JNIEnv* e;~Frame(){if(e->ExceptionCheck())e->ExceptionClear();e->PopLocalFrame(nullptr);}} frame{env};
     if(env->CallBooleanMethod(minecraft,c->isMainThread)!=JNI_TRUE||env->ExceptionCheck()) return false;
-    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject player=c->gameApi().player(env, minecraft);
     jobject screen=env->GetObjectField(minecraft,c->currentScreen);
     if(!player||screen||env->ExceptionCheck()) return false;
     jobject inventory=env->GetObjectField(player,c->inventoryField);
     if(!inventory||env->ExceptionCheck()) return false;
     const int selected=env->GetIntField(inventory,c->currentItem);
-    auto stacks=static_cast<jobjectArray>(env->GetObjectField(inventory,c->mainInventory));
+    auto stacks=c->gameApi().inventory(env, inventory);
     if(!stacks||selected<0||selected>=9||env->ExceptionCheck()) return false;
-    jobject held=env->GetObjectArrayElement(stacks,selected);
+    jobject held=stacks.at(env, selected);
     const int count=held?env->GetIntField(held,c->stackSize):0;
     if(env->ExceptionCheck()) return false;
     if(entering) {
@@ -75,9 +75,7 @@ bool GameBindings::consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept
     if(env->PushLocalFrame(96)<0) {clearException(env);return false;}
     struct Locals {JNIEnv* env;~Locals(){env->PopLocalFrame(nullptr);}} locals{env};
     const auto fail=[&]() noexcept {clearException(env);return false;};
-    jobject minecraft=cache->minecraftInstanceField
-        ? env->GetStaticObjectField(cache->minecraftClass,cache->minecraftInstanceField)
-        : env->CallStaticObjectMethod(cache->minecraftClass,cache->getMinecraft);
+    jobject minecraft=cache->gameApi().minecraft(env);
     if(!minecraft||env->ExceptionCheck()) return fail();
     if(env->CallBooleanMethod(minecraft,cache->isMainThread)!=JNI_TRUE||
        env->ExceptionCheck()) return fail();
@@ -165,7 +163,7 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
     if(!hotbarKeyPhase&&m_hotbarPausePhase==HotbarPausePhase::AwaitResumePacket) {
         const auto* c=m_cache.get();
         jobject player=env&&minecraft&&c&&c->playerField
-            ?env->GetObjectField(minecraft,c->playerField):nullptr;
+            ?c->gameApi().player(env, minecraft):nullptr;
         setHotbarMovementPaused(env,player);
         if(player) env->DeleteLocalRef(player);
         clearException(env);
@@ -183,9 +181,9 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
        env->PushLocalFrame(96)<0) {if(env) clearException(env);requeue();return false;}
     struct Frame {JNIEnv* e;~Frame(){if(e->ExceptionCheck())e->ExceptionClear();e->PopLocalFrame(nullptr);}} frame{env};
     jobject screen=c->currentScreen?env->GetObjectField(minecraft,c->currentScreen):nullptr;
-    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject player=c->gameApi().player(env, minecraft);
     jobject inventory=player?env->GetObjectField(player,c->inventoryField):nullptr;
-    auto stacks=inventory?static_cast<jobjectArray>(env->GetObjectField(inventory,c->mainInventory)):nullptr;
+    auto stacks=c->gameApi().inventory(env, inventory);
     jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
     if(screen||!player||!inventory||!stacks||!controller||env->ExceptionCheck()) {
         restoreHotbarMovement(env);
@@ -195,10 +193,10 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
     const auto actions=hotbar::unpack(m_smartHotbarConfig.load(std::memory_order_acquire));
     const int wanted=refill?static_cast<int>(hotbar::Action::Blocks):
         actions[static_cast<std::size_t>(destination)];
-    const jsize length=std::min<jsize>(env->GetArrayLength(stacks),36);
+    const jsize length=std::min<jsize>(stacks.size(env),36);
     std::array<hotbar::ItemKind,36U> kinds{};
     for(jsize slot=0;slot<length;++slot) {
-        jobject stack=env->GetObjectArrayElement(stacks,slot);
+        jobject stack=stacks.at(env, slot);
         if(!stack) continue;
         const int amount=c->stackSize?env->GetIntField(stack,c->stackSize):1;
         jobject item=amount>0?env->CallObjectMethod(stack,c->getItem):nullptr;

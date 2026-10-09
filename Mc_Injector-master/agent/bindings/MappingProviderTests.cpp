@@ -14,6 +14,7 @@ using namespace mcoverlay::bindings;
     mapping.id = "test-lunar-1.8.9";
     mapping.label = "Test Lunar mapping";
     mapping.family = ClientFamily::Lunar;
+    mapping.minecraftVersion = {1, 8, 9};
     mapping.detection = {
         {DetectionMatch::LaunchHintContains, ".lunarclient", 250U}};
     mapping.minecraftName = "example.lunar.Minecraft";

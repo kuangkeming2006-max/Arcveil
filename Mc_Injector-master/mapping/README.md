@@ -242,3 +242,22 @@ real attach/detach cycles in a persistent fresh cache and requires cycle 2 to ha
 cacheHits > 0 and autoResolveCalls == 0. Main-menu no_player/no_world is acceptable
 only after the Agent publishes a mapping profile and renderer Active. See
 ../tests/mapping/V56_4_VALIDATION.md for evidence and remaining coverage limits.
+
+
+## Internal v56.7 — version and API support
+
+Minecraft version, client family and mapping namespace are independent.
+`gameVersion` declares one target version for the whole pack; it is not an
+independent runtime version probe. Schema-1 remains readable with Unknown
+namespace. Schema-2 requires `mappingNamespace` on every dictionary, with
+Notch/SRG/MCP/Custom values. `default-v2.json` now uses schema-2 with all prior
+symbols, ordered aliases, detection and priorities preserved. Automatic structural
+remapping emits Custom. Deploy this pack together with the matching binaries.
+
+Schema validation reports `apiSupported` but always `injectionReady=false`.
+Full validation, cache validation and resolve require a verified VersionAdapter;
+currently only exact 1.8.9 qualifies. A relabelled 1.12.2 pack is rejected with
+`unsupportedApi`, a concrete reason and minecraftVersion, even against a
+descriptor-compatible synthetic snapshot. MappingService treats this as terminal.
+Current live member/descriptor/loader checks and cache digest/proof requirements
+remain mandatory. Adding a dictionary alone never proves a new API or hook works.

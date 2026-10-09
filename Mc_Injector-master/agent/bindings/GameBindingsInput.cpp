@@ -156,9 +156,7 @@ bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexc
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved &&
         m_cache != nullptr) {
         BindingCache* const cache = m_cache.get();
-        jobject minecraft = cache->minecraftInstanceField != nullptr
-            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        jobject minecraft = cache->gameApi().minecraft(env);
         if (env->ExceptionCheck() != JNI_TRUE && minecraft != nullptr) {
             // func_71364_i updates Minecraft.inGameHasFocus as well as LWJGL;
             // this prevents a normal 1.8.9 client from immediately re-grabbing.
@@ -208,9 +206,7 @@ bool GameBindings::gameScreenOpen(JNIEnv* const env) noexcept
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved
         ? m_cache.get() : nullptr;
     if (cache != nullptr && cache->currentScreen != nullptr) {
-        jobject minecraft = cache->minecraftInstanceField != nullptr
-            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        jobject minecraft = cache->gameApi().minecraft(env);
         if (!env->ExceptionCheck() && minecraft != nullptr) {
             jobject screen = env->GetObjectField(minecraft, cache->currentScreen);
             const bool failed = env->ExceptionCheck() == JNI_TRUE;

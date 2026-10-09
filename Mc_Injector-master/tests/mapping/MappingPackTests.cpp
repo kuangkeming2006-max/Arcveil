@@ -1,4 +1,5 @@
 #include "../../agent/bindings/MappingPack.h"
+#include "../../agent/bindings/VersionAdapter.h"
 #include <cstdio>
 #include <iomanip>
 #include <sstream>
@@ -45,14 +46,23 @@ int main() {
         }
     check(dictionaries == 4, "all four legacy dictionaries migrated");
     const auto v2 = Json::read(path.parent_path() / "default-v2.json");
-    (void)parseMappingPack(v2);
+    const auto parsedV2=parseMappingPack(v2);
+    check(mappingPackJson(parsedV2)==v2,"schema-2 namespace metadata roundtrips");
+    for(const auto& provider:parsedV2.providers)for(const auto& dict:provider.dictionaries) {
+        check(dict.minecraftVersion==MinecraftVersion{1,8,9},"pack version reaches every runtime dictionary");
+        check(dict.mappingNamespace!=MappingNamespace::Unknown,"schema-2 has explicit namespace");
+        check(selectVersionAdapter(dict.minecraftVersion)==&Legacy18Adapter,
+              "every family and namespace shares the verified API adapter");
+    }
     std::size_t preserved = 0;
     for (const auto &provider : document.at("providers").array())
         for (const auto &old : provider.at("dictionaries").array())
             for (const auto &nextProvider : v2.at("providers").array())
                 for (const auto &next : nextProvider.at("dictionaries").array())
                     if (old.at("id") == next.at("id")) {
-                        check(old == next, "v2 preserves complete legacy dictionary");
+                        auto legacyNext=next;
+                        legacyNext.object().erase("mappingNamespace");
+                        check(old == legacyNext, "v2 preserves complete legacy symbols and selection metadata");
                         ++preserved;
                     }
     check(preserved == 4, "v2 retains all four legacy dictionaries");
@@ -68,6 +78,7 @@ int main() {
     MappingRegistry missing(path.parent_path() / "does-not-exist.json");
     check(!missing.healthy() && !missing.freeze(),
           "missing pack fails closed without compiled symbol fallback");
+    check(missing.loadError().find("unavailable")!=std::string::npos,"missing pack keeps actionable diagnostic");
     const auto reject = [&](Json j, const char *why) {
         bool rejected = false;
         try {
@@ -78,8 +89,25 @@ int main() {
         check(rejected, why);
     };
     auto j = document;
-    j["schemaVersion"] = 2;
+    j["schemaVersion"] = 3;
     reject(j, "unsupported schema rejected");
+    j=v2;
+    j["providers"].array()[0]["dictionaries"].array()[0]["mappingNamespace"]="Forge";
+    reject(j,"client family is not a mapping namespace");
+    j=v2;
+    j["providers"].array()[0]["dictionaries"].array()[0].object().erase("mappingNamespace");
+    reject(j,"schema-2 requires an explicit namespace");
+    j=document;j["gameVersion"]="1.8.9-forge";
+    reject(j,"version cannot contain a client family");
+    j=document;j["gameVersion"]="1.12.2";
+    check(parseMappingPack(j).providers[0].dictionaries[0].minecraftVersion==MinecraftVersion{1,12,2},
+          "schema parsing does not pretend to prove API support");
+    check(selectVersionAdapter(MinecraftVersion::parse(j.at("gameVersion").string()))==nullptr,
+          "relabelled legacy mapping has no supported adapter");
+    auto inconsistent=pack;inconsistent.gameVersion="1.12.2";
+    bool mismatchRejected=false;
+    try{(void)mappingPackJson(inconsistent);}catch(...){mismatchRejected=true;}
+    check(mismatchRejected,"serialization cannot silently relabel dictionary versions");
     j = document;
     j["packVersion"] = 0;
     reject(j, "invalid pack version rejected");

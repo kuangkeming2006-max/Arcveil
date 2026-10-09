@@ -245,6 +245,9 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
     if (!validIdentifier(id)) return reject("mapping id must be 1-64 ASCII identifier characters");
     if (label.empty() || label.size() > kMaxLabelLength) return reject("mapping label is empty or too long");
     if (family == ClientFamily::Unknown) return reject("mapping client family is unknown");
+    if (!minecraftVersion.known()) return reject("mapping Minecraft version is missing or invalid");
+    if (static_cast<unsigned>(mappingNamespace) > static_cast<unsigned>(MappingNamespace::Custom))
+        return reject("invalid mapping namespace");
     if (detection.size() > kMaxDetectionPatterns) return reject("too many mapping detection patterns");
     for (const DetectionPattern& pattern : detection) {
         if (pattern.value.empty() || pattern.value.size() > kMaxSymbolLength ||
@@ -444,7 +447,11 @@ MappingRegistry::MappingRegistry(const std::filesystem::path& packFile, std::str
                 std::move(p.detection),std::move(p.dictionaries)))!=MappingRegistrationResult::Accepted)
                 throw std::runtime_error("mapping pack registration failed");
         }
-    } catch (...) {m_healthy=false;m_providers.clear();}
+    } catch (const std::exception& e) {
+        m_healthy=false;m_providers.clear();assignError(&m_loadError,e.what());
+    } catch (...) {
+        m_healthy=false;m_providers.clear();assignError(&m_loadError,"unknown mapping pack load failure");
+    }
 }
 
 MappingRegistry::~MappingRegistry() = default;
