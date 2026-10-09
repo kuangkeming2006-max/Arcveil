@@ -285,3 +285,20 @@ reads of every historical snapshot. Full source snapshot integrity is checked on
 for the chosen structural reference (trying the next ranked reference on corruption).
 Current live validation remains mandatory for every candidate. runtimeFingerprint is
 also exposed explicitly as a Qt property and JSONL diagnostic alias.
+
+
+## v56.7 multi-version foundation
+
+Start at `P/agent/bindings/GameVersion.h`, `VersionAdapter.h`, then
+`GameApi.internal.h` and `GameBindingsCache.internal.h::gameApi`.
+MinecraftVersion is pack-declared, independent of ClientFamily and MappingNamespace.
+Schema-1 packs remain readable (Unknown namespace); default-v2 now uses schema-2
+with authored namespace metadata and unchanged symbols/priorities. Structural
+remapping labels schema-2 output Custom. Only exact 1.8.9 has a verified Adapter.
+Analyzer full/cache/resolve and Agent profile lookup reject unsupported APIs;
+MappingService cold start and unsupported receipts terminate with a diagnostic.
+GameBindings public facade/lifecycle remains; versionCapabilities reports a support
+ceiling, further restricted by live IDs/hooks. Internal borrowed GameApi/InventoryView
+own no JNI refs/frames and must stay local to a calling operation.
+See [review and remaining assumptions](../MULTIVERSION_REVIEW.md) and
+`P/tests/mapping/V56_7_VALIDATION.md` for actual test limits.

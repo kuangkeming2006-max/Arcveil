@@ -192,3 +192,17 @@ runtimeBinding -> pinned Agent GameBindings JNI lookup -> BINDING_READY -> Contr
 Active (also requires renderer readiness). Cold/miss/drift retains full validation and
 atomic cache publication. Immutable installed-content proof never contains loader
 instance authority; each attach supplies a fresh current-process loader pin.
+
+
+## v56.7 version / API boundary
+
+MappingService → `agent/bindings/VersionAdapter.h` is a pure-value API support
+policy dependency (no JNI, Qt or BindingCache access). Cold-start default packs
+are checked before missing-class watching; Analyzer receipts remain authoritative
+for live validation. Analyzer → the same policy gates full/cache/resolve;
+GameBindingsResolve selects it before profile-specific JNI lookup.
+`GameBindings::versionCapabilities()` is a published-cache support ceiling,
+not a replacement for optional live IDs or hook readiness.
+`BindingCache::gameApi()` and InventoryView remain private binding access views,
+with no new JNI ownership, IPC or AttachTransaction boundary. See
+[MULTIVERSION_REVIEW](MULTIVERSION_REVIEW.md).

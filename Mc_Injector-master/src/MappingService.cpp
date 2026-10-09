@@ -1,4 +1,5 @@
 #include "MappingService.h"
+#include "../agent/bindings/VersionAdapter.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -245,6 +246,14 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
         performance("cache lookup", lookupElapsed.elapsed());
         if (!current()) return;
         if (preferred.valid()) { checkCached(preferred); return; }
+        // Cold start may have no matching anchor yet. Reject an unsupported
+        // declared API before entering the missing-class watch loop.
+        const auto declaredVersion=readObject(m_scopePack).value("gameVersion").toString();
+        if (!mcoverlay::bindings::selectVersionAdapter(
+                mcoverlay::bindings::MinecraftVersion::parse(declaredVersion.toStdString()))) {
+            fail("Unsupported Minecraft API version: no verified Version Adapter: " + declaredVersion);
+            return;
+        }
         m_identityPacksFile = m_run + "/identity-packs.json";
         writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
         event({{"event", "step"},

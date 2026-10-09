@@ -2,11 +2,20 @@
 #include "../InstalledProof.h"
 #include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
+#include "../../agent/bindings/VersionAdapter.h"
 #include <algorithm>
 #include <set>
 #include <sstream>
 namespace mcoverlay::mapping {
 namespace {
+bool supportedApi(const Json& pack) {
+    return bindings::selectVersionAdapter(bindings::MinecraftVersion::parse(pack.at("gameVersion").string())) != nullptr;
+}
+Json unsupportedApi(const Json& pack) {
+    return Json::Object{{"valid",false},{"injectionReady",false},{"complete",false},
+        {"requiredComplete",false},{"unsupportedApi",true},{"reason","unsupported Minecraft API version: no verified Version Adapter"},
+        {"minecraftVersion",pack.at("gameVersion")}};
+}
 std::string sig(std::string value){std::replace(value.begin(),value.end(),'.','/');return value.empty()?"":"L"+value+";";}
 std::string binary(std::string value){if(value.size()<3||value.front()!='L'||value.back()!=';')throw std::runtime_error("not a class signature");value=value.substr(1,value.size()-2);std::replace(value.begin(),value.end(),'/','.');return value;}
 std::string render(const std::string& expression,const Json& symbols){std::string out;for(std::size_t i=0;i<expression.size();++i){if(expression[i]=='{'){auto end=expression.find('}',i);if(end==std::string::npos)throw std::runtime_error("invalid descriptor template");out+=symbols.at(expression.substr(i+1,end-i-1)).string();i=end;}else out+=expression[i];}return out;}
@@ -441,6 +450,7 @@ Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &c
                            const std::string &bindingIdentity,
                            const Events &events) {
     (void)bindings::parseMappingPack(pack);
+    if (!supportedApi(pack)) return unsupportedApi(pack);
     const auto identity = mappingIdentity(pack, snapshot, contracts, true);
     // bindingIdentity covers metadata/content and the defining-loader partition.
     // Diagnostic metadataIdentity retains original session-specific method names.
@@ -466,7 +476,7 @@ Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &c
 }
 Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
     if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");
-    (void)bindings::parseMappingPack(pack);Model model(snapshot);Json::Array attempts;
+    (void)bindings::parseMappingPack(pack);if(!supportedApi(pack))return unsupportedApi(pack);Model model(snapshot);Json::Array attempts;
     const auto family=detectedFamily(pack,model);auto providers=pack.at("providers").array();std::stable_sort(providers.begin(),providers.end(),[](const Json&a,const Json&b){return a.at("priority").integer()>b.at("priority").integer();});
     for(const auto&p:providers)for(const auto&d:p.at("dictionaries").array()){
         if(family!="Unknown"&&d.at("family").string()!=family && !(family=="Badlion" && (d.at("family").string()=="Vanilla" || d.at("family").string()=="Forge")))continue;
@@ -480,7 +490,9 @@ Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts
 }
 Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contracts,const Events& events,const Json* state,bool incremental){
     if((target.contains("detailLevel")&&target.at("detailLevel").string()=="lite")||(reference&&reference->contains("detailLevel")&&reference->at("detailLevel").string()=="lite"))throw std::runtime_error("lite metadata cannot enter normalized bytecode/call-graph matching; inspect-detail required");
-    (void)bindings::parseMappingPack(pack);Model live(target,true);Json::Array attempts;
+    (void)bindings::parseMappingPack(pack);
+    if(!supportedApi(pack)){auto rejected=unsupportedApi(pack);rejected["fingerprint"]=target.at("fingerprint");return rejected;}
+    Model live(target,true);Json::Array attempts;
     std::unique_ptr<Model> baseline;if(reference)baseline=std::make_unique<Model>(*reference,true);
     Json best; int bestScore=-1;
     const bool stateBound=state && state->contains("stateVersion") && state->at("stateVersion").integer()==1 &&
@@ -489,7 +501,11 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
         state->at("referenceFingerprint")==baseline->snapshot.at("fingerprint");
     for(const auto&p:pack.at("providers").array())for(const auto&original:p.at("dictionaries").array()){
         if(stateBound && state->at("dictionary")!=original.at("id")) continue;
-        auto dict=original;auto& symbols=dict["symbols"];contractCheck(contracts,symbols);
+        auto dict=original;
+        // Structural remapping may produce a mixed/transformed namespace.
+        // Preserve legacy schema-1 as Unknown; never mislabel recovered names SRG/MCP.
+        if(pack.at("schemaVersion").integer()==2)dict["mappingNamespace"]="Custom";
+        auto& symbols=dict["symbols"];contractCheck(contracts,symbols);
         bool complete=bool(baseline);Json::Array results;std::map<const Class*,const Class*> classes;std::map<std::string,std::string> names;
         if(baseline){
             std::map<std::string,std::vector<const Class*>> structures;

@@ -128,6 +128,17 @@ struct TransactionCacheTests {
             !Cache(service.m_root).preferred(fileDigest(contracts)).bindingIdentity.isEmpty(),
             "K: PR #6 verified source upgrades offline, compact live validation, atomic proof publication, zero details");
         check(failed == 0, "all real transaction/cache scenarios complete without unexpected failure");
+        // Unsupported API is terminal, even when names/descriptors match a fixture.
+        auto unsupportedPack=readObject(service.m_defaultPack);
+        unsupportedPack["gameVersion"]="1.12.2";
+        service.m_defaultPack=temp.path()+"/unsupported-pack.json";
+        writeObject(service.m_defaultPack,unsupportedPack);
+        service.m_root=temp.path()+"/unsupported-cache";
+        const auto unsupportedReady=ready, unsupportedPromoted=promoted;
+        start();
+        check(spin([&]{return failed>0;}) && failed==1 && ready==unsupportedReady && promoted==unsupportedPromoted &&
+              !service.busy() && !service.m_watchTimer.isActive() && service.status().contains("Version Adapter"),
+              "L: unsupported API reports terminal failure, never ready/promote/retry");
         std::printf("Transaction/cache: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }

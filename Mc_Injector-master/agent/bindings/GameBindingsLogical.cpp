@@ -84,15 +84,13 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
         clearException(env);
         (void)m_logicalController.cancelPendingAttack(pending,reason);
     };
-    jobject mc=c->minecraftInstanceField
-        ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
-        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    jobject mc=c->gameApi().minecraft(env);
     if(!mc||env->ExceptionCheck()) {cancel("minecraft_unavailable");return;}
     if(env->CallBooleanMethod(mc,c->isMainThread)!=JNI_TRUE||env->ExceptionCheck()) {
         clearException(env);return;
     }
-    jobject player=env->GetObjectField(mc,c->playerField);
-    jobject world=env->GetObjectField(mc,c->worldField);
+    jobject player=c->gameApi().player(env, mc);
+    jobject world=c->gameApi().world(env, mc);
     if(!player||!world||env->ExceptionCheck()) {cancel("world_unavailable");return;}
     jobject target=env->CallObjectMethod(world,c->getEntityById,pending.entityId);
     if(!target||env->ExceptionCheck()) {
@@ -407,8 +405,8 @@ bool GameBindings::executeLogicalInteraction(
         return false;
     };
     if(!env || !minecraft || !c) return fail("bindings_unavailable");
-    jobject player=env->GetObjectField(minecraft,c->playerField);
-    jobject world=env->GetObjectField(minecraft,c->worldField);
+    jobject player=c->gameApi().player(env, minecraft);
+    jobject world=c->gameApi().world(env, minecraft);
     jobject controller=env->GetObjectField(minecraft,c->playerControllerField);
     if(!player || !world || !controller || env->ExceptionCheck()==JNI_TRUE) {
         return fail("interaction_context_unavailable");
@@ -517,7 +515,7 @@ bool GameBindings::consumeLogicalInteraction(
     // active Silent Lock owner; holding attack without a lock stays vanilla.
     if(env&&minecraft&&c&&syncSprintOwner()==SprintOwner::SilentCombat&&
        c->setSprinting&&c->playerField) {
-        jobject player=env->GetObjectField(minecraft,c->playerField);
+        jobject player=c->gameApi().player(env, minecraft);
         if(player&&!env->ExceptionCheck())
             env->CallVoidMethod(player,c->setSprinting,JNI_FALSE);
         clearException(env);
@@ -560,7 +558,7 @@ bool GameBindings::observeLogicalCamera(JNIEnv* env,jobject minecraft,bool down)
        !c->rotationPitch ||
        env->PushLocalFrame(16)<0) { clearException(env); return false; }
     const auto failed=[&] {clearException(env);env->PopLocalFrame(nullptr);return false;};
-    jobject player=env->GetObjectField(minecraft,c->playerField);
+    jobject player=c->gameApi().player(env, minecraft);
     jobject hit=c->cameraMouseOver
         ? env->GetObjectField(minecraft,c->cameraMouseOver) : nullptr;
     silent::BlockTarget block{}; int id=-1;

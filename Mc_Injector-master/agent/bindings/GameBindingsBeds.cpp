@@ -178,6 +178,11 @@ void GameBindings::runBedScanner(JNIEnv* const env, HANDLE const stopEvent) noex
             continue;
         }
         BindingCache* const cache = m_cache.get();
+        if (!cache->adapter->capabilities.supports(bindings::VersionCapability::BedScanning)) {
+            clearWorld();
+            if (stopRequested(500U)) break;
+            continue;
+        }
         // Only this scanner thread owns processedChunks/bedsByChunk. The UI and
         // IPC threads publish one atomic bit, so a manual refresh cannot race
         // vector/hash-table mutation or issue JNI calls from the wrong thread.
@@ -191,9 +196,7 @@ void GameBindings::runBedScanner(JNIEnv* const env, HANDLE const stopEvent) noex
         }
 
         bool cycleValid = true;
-        jobject minecraft = cache->minecraftInstanceField != nullptr
-            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        jobject minecraft = cache->gameApi().minecraft(env);
         if (env->ExceptionCheck() == JNI_TRUE || minecraft == nullptr) cycleValid = false;
         jboolean singlePlayer = JNI_FALSE;
         jobject world = nullptr;
@@ -202,7 +205,7 @@ void GameBindings::runBedScanner(JNIEnv* const env, HANDLE const stopEvent) noex
             if (env->ExceptionCheck() == JNI_TRUE) cycleValid = false;
         }
         if (cycleValid) {
-            world = env->GetObjectField(minecraft, cache->worldField);
+            world = cache->gameApi().world(env, minecraft);
             if (env->ExceptionCheck() == JNI_TRUE) cycleValid = false;
         }
 

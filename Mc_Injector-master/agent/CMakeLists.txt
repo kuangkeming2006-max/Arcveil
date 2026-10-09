@@ -324,3 +324,12 @@ endif()
 
 target_link_libraries(McOverlayMappingProviderTests PRIVATE advapi32)
 target_link_libraries(McOverlayMappingPackTests PRIVATE advapi32)
+
+add_executable(McOverlayGameApiTests EXCLUDE_FROM_ALL bindings/GameApiTests.cpp)
+target_compile_features(McOverlayGameApiTests PRIVATE cxx_std_20)
+target_include_directories(McOverlayGameApiTests PRIVATE
+    "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+set_target_properties(McOverlayGameApiTests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+if(MINGW)
+    target_link_options(McOverlayGameApiTests PRIVATE -static -static-libgcc -static-libstdc++)
+endif()

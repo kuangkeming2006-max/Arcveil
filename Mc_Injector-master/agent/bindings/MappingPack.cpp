@@ -29,9 +29,19 @@ std::vector<DetectionPattern> detection(const Json& j) {
     }return result;
 }
 Json detectionJson(const std::vector<DetectionPattern>& d){Json::Array out;for(const auto& p:d)out.push_back(Json::Object{{"match",int(p.match)},{"value",p.value},{"confidence",int(p.confidence)}});return out;}
-MappingDictionary dictionary(const Json& document) {
-    keys(document,{"id","label","family","detection","symbols"});
+MappingDictionary dictionary(const Json& document, MinecraftVersion version, int schemaVersion) {
+    if(schemaVersion==1) keys(document,{"id","label","family","detection","symbols"});
+    else keys(document,{"id","label","family","mappingNamespace","detection","symbols"});
     MappingDictionary d;d.id=bounded(document.at("id"),64);d.label=bounded(document.at("label"),128);d.family=family(document.at("family"));d.detection=detection(document.at("detection"));
+    d.minecraftVersion=version;
+    if(schemaVersion==2) {
+        const auto ns=bounded(document.at("mappingNamespace"),32);
+        if(ns=="Notch")d.mappingNamespace=MappingNamespace::Notch;
+        else if(ns=="SRG")d.mappingNamespace=MappingNamespace::SRG;
+        else if(ns=="MCP")d.mappingNamespace=MappingNamespace::MCP;
+        else if(ns=="Custom")d.mappingNamespace=MappingNamespace::Custom;
+        else throw std::runtime_error("unknown mapping namespace");
+    }
     const auto& symbols=document.at("symbols");std::size_t count=0;
 #define MC_MAPPING_STRING(name) d.name=bounded(symbols.at(#name));++count;
 #define MC_MAPPING_ARRAY(name,extent) {const auto& a=symbols.at(#name).array();if(a.size()!=extent)throw std::runtime_error("wrong symbol array length: " #name);for(std::size_t i=0;i<extent;++i)d.name[i]=bounded(a[i]);++count;}
@@ -47,7 +57,9 @@ MappingPack parseMappingPack(const mapping::Json& document) {
     keys(document,{"schemaVersion","packVersion","id","gameVersion","source","providers"});
     MappingPack pack;pack.schemaVersion=document.at("schemaVersion").integer();pack.packVersion=document.at("packVersion").integer();
     pack.id=bounded(document.at("id"),64);pack.gameVersion=bounded(document.at("gameVersion"),64);pack.source=bounded(document.at("source"),1024);
-    if(pack.schemaVersion!=1||pack.packVersion<1||!identifier(pack.id)||pack.gameVersion.empty())throw std::runtime_error("unsupported/invalid mapping pack version");
+    if((pack.schemaVersion!=1&&pack.schemaVersion!=2)||pack.packVersion<1||!identifier(pack.id))throw std::runtime_error("unsupported/invalid mapping pack version");
+    const auto version=MinecraftVersion::parse(pack.gameVersion);
+    if(!version.known())throw std::runtime_error("missing/invalid Minecraft gameVersion");
     const auto& entries=document.at("providers").array();if(entries.empty()||entries.size()>32)throw std::runtime_error("mapping provider capacity");
     std::set<std::string> ids;
     for(const auto& entry:entries) {
@@ -55,7 +67,7 @@ MappingPack parseMappingPack(const mapping::Json& document) {
         p.id=bounded(entry.at("id"),64);p.family=family(entry.at("family"));p.priority=entry.at("priority").integer();p.detection=detection(entry.at("detection"));
         if(!identifier(p.id)||p.priority<0||p.priority>10000||!ids.insert(p.id).second)throw std::runtime_error("invalid/duplicate provider metadata");
         const auto& dictionaries=entry.at("dictionaries").array();if(dictionaries.empty()||dictionaries.size()>16)throw std::runtime_error("dictionary capacity");
-        for(const auto& item:dictionaries){auto d=dictionary(item);if(d.family!=p.family||!ids.insert(d.id).second)throw std::runtime_error("duplicate/family-mismatched dictionary");p.dictionaries.push_back(std::move(d));}
+        for(const auto& item:dictionaries){auto d=dictionary(item,version,pack.schemaVersion);if(d.family!=p.family||!ids.insert(d.id).second)throw std::runtime_error("duplicate/family-mismatched dictionary");p.dictionaries.push_back(std::move(d));}
         pack.providers.push_back(std::move(p));
     }return pack;
 }
@@ -73,9 +85,19 @@ mapping::Json mappingDictionaryJson(const MappingDictionary& d) {
 #include "MappingSymbols.inc"
 #undef MC_MAPPING_STRING
 #undef MC_MAPPING_ARRAY
-    return Json::Object{{"id",d.id},{"label",d.label},{"family",clientFamilyName(d.family)},{"detection",detectionJson(d.detection)},{"symbols",std::move(symbols)}};
+    Json result=Json::Object{{"id",d.id},{"label",d.label},{"family",clientFamilyName(d.family)},{"detection",detectionJson(d.detection)},{"symbols",std::move(symbols)}};
+    if(d.mappingNamespace!=MappingNamespace::Unknown) result["mappingNamespace"]=std::string(mappingNamespaceName(d.mappingNamespace));
+    return result;
 }
 mapping::Json mappingPackJson(const MappingPack& pack) {
+    const auto version=MinecraftVersion::parse(pack.gameVersion);
+    if(!version.known()||(pack.schemaVersion!=1&&pack.schemaVersion!=2))
+        throw std::runtime_error("invalid pack version during serialization");
+    for(const auto& p:pack.providers)for(const auto& d:p.dictionaries) {
+        if(d.minecraftVersion!=version)throw std::runtime_error("dictionary/pack Minecraft version mismatch");
+        if((pack.schemaVersion==1)!=(d.mappingNamespace==MappingNamespace::Unknown))
+            throw std::runtime_error("dictionary namespace does not match pack schema");
+    }
     Json::Array providers;for(const auto& p:pack.providers){Json::Array dicts;for(const auto& d:p.dictionaries)dicts.push_back(mappingDictionaryJson(d));providers.push_back(Json::Object{{"id",p.id},{"family",clientFamilyName(p.family)},{"priority",p.priority},{"detection",detectionJson(p.detection)},{"dictionaries",std::move(dicts)}});}
     return Json::Object{{"schemaVersion",pack.schemaVersion},{"packVersion",pack.packVersion},{"id",pack.id},{"gameVersion",pack.gameVersion},{"source",pack.source},{"providers",std::move(providers)}};
 }

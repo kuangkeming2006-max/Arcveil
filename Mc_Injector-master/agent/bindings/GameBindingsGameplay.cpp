@@ -360,19 +360,15 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         return finish(false);
     };
 
-    jobject minecraft = cache->minecraftInstanceField != nullptr
-        ? env->GetStaticObjectField(cache->minecraftClass,
-                                    cache->minecraftInstanceField)
-        : env->CallStaticObjectMethod(cache->minecraftClass,
-                                      cache->getMinecraft);
+    jobject minecraft = cache->gameApi().minecraft(env);
     if (env->ExceptionCheck() == JNI_TRUE || minecraft == nullptr) return fail();
     const jboolean mainThread = env->CallBooleanMethod(minecraft,
                                                        cache->isMainThread);
     if (env->ExceptionCheck() == JNI_TRUE || mainThread != JNI_TRUE) return fail();
 
-    jobject player = env->GetObjectField(minecraft, cache->playerField);
+    jobject player = cache->gameApi().player(env, minecraft);
     jobject settings = env->GetObjectField(minecraft, cache->gameSettingsField);
-    jobject world = env->GetObjectField(minecraft, cache->worldField);
+    jobject world = cache->gameApi().world(env, minecraft);
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr ||
         settings == nullptr || world == nullptr) return fail();
     // Ask vanilla's input path to sprint. Writing setSprinting(true) from
@@ -1151,16 +1147,15 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 env->CallObjectMethod(world, cache->getBlockState, targetPosition);
             jobject targetBlock = targetState == nullptr ? nullptr :
                 env->CallObjectMethod(targetState, cache->getBlock);
-            jobjectArray hotbar = static_cast<jobjectArray>(env->GetObjectField(
-                inventory, cache->mainInventory));
+            auto hotbar = cache->gameApi().inventory(env, inventory);
             if (env->ExceptionCheck() == JNI_TRUE || targetPosition == nullptr ||
-                targetBlock == nullptr || hotbar == nullptr) return fail();
+                targetBlock == nullptr || !hotbar) return fail();
             int selectedSlot = std::clamp(static_cast<int>(
                 env->GetIntField(inventory, cache->currentItem)), 0, 8);
             float bestStrength = -1.0F;
-            const jsize hotbarLength = std::min<jsize>(env->GetArrayLength(hotbar), 9);
+            const jsize hotbarLength = std::min<jsize>(hotbar.size(env), 9);
             for (jsize slot = 0; slot < hotbarLength; ++slot) {
-                jobject stack = env->GetObjectArrayElement(hotbar, slot);
+                jobject stack = hotbar.at(env, slot);
                 if (stack == nullptr) continue;
                 const jfloat strength = env->CallFloatMethod(
                     stack, cache->getStrVsBlock, targetBlock);
@@ -1238,9 +1233,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 nearest = &marker;
         }
         if (nearest != nullptr) {
-            jobject loaded = cache->loadedEntitiesField != nullptr
-                ? env->GetObjectField(world, cache->loadedEntitiesField)
-                : env->CallObjectMethod(world, cache->getLoadedEntities);
+            jobject loaded = cache->gameApi().entities(env, world);
             jobjectArray entities = loaded == nullptr ? nullptr :
                 static_cast<jobjectArray>(env->CallObjectMethod(
                     loaded, cache->listToArray));
@@ -1453,9 +1446,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         jobject inventory = env->GetObjectField(player, cache->inventoryField);
         jobject controller = env->GetObjectField(minecraft,
             cache->playerControllerField);
-        jobjectArray hotbar = inventory == nullptr ? nullptr :
-            static_cast<jobjectArray>(env->GetObjectField(inventory,
-                cache->mainInventory));
+        auto hotbar = cache->gameApi().inventory(env, inventory);
         if (env->ExceptionCheck() == JNI_TRUE) return fail();
         auto allowedBlock = [](const int id) noexcept {
             if (id == 12 || id == 13) return false; // sand / gravel fall
@@ -1467,8 +1458,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         };
         int selectedSlot = -1;
         jobject selectedStack = nullptr;
-        if (hotbar != nullptr && controller != nullptr) {
-            const jsize length = std::min<jsize>(9, env->GetArrayLength(hotbar));
+        if (static_cast<bool>(hotbar) && controller != nullptr) {
+            const jsize length = std::min<jsize>(9, hotbar.size(env));
             const int current = std::clamp(
                 static_cast<int>(env->GetIntField(inventory, cache->currentItem)),
                 0, std::max(0, static_cast<int>(length) - 1));
@@ -1476,7 +1467,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 const int slot = pass == 0 ? current :
                     (static_cast<int>(pass) <= current
                         ? static_cast<int>(pass) - 1 : static_cast<int>(pass));
-                jobject stack = env->GetObjectArrayElement(hotbar, slot);
+                jobject stack = hotbar.at(env, slot);
                 if (stack == nullptr) continue;
                 jobject itemObject = env->CallObjectMethod(stack, cache->getItem);
                 if (env->ExceptionCheck() == JNI_TRUE) return fail();
