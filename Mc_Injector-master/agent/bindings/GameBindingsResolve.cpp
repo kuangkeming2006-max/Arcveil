@@ -333,6 +333,14 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
                                   jclass const minecraft,
                                   BindingCache& candidate)
 {
+    candidate.adapter = bindings::selectVersionAdapter(profile.minecraftVersion);
+    if (candidate.adapter == nullptr) {
+        log::info("Unsupported Minecraft API version " + std::to_string(profile.minecraftVersion.major) + "." +
+                  std::to_string(profile.minecraftVersion.minor) + "." + std::to_string(profile.minecraftVersion.patch) +
+                  " for mapping " + profile.id +
+                  ": no verified Version Adapter.");
+        return false;
+    }
     if (env == nullptr || minecraft == nullptr) {
         return false;
     }
@@ -1189,7 +1197,7 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
             lookupRequired(env, candidate.mainInventory, [&] {
                 return counted(env)->GetFieldID(inventoryPlayer,
                     profile.mainInventoryField.c_str(),
-                    (std::string("[") + profile.itemStackSignature).c_str());
+                    candidate.adapter->inventoryDescriptor(profile.itemStackSignature).c_str());
             }) &&
             lookupRequired(env, candidate.getItem, [&] {
                 return counted(env)->GetMethodID(itemStack, profile.getItem.c_str(),
@@ -1857,7 +1865,9 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
 {
     bindingJniCounter = &m_bindingJniCalls; bindingJvmtiCounter = &m_bindingJvmtiCalls;
     struct ResetCounters { ~ResetCounters() { bindingJniCounter = nullptr; bindingJvmtiCounter = nullptr; } } resetCounters;
-    if (env == nullptr || !m_mappingRegistry.freeze()) {
+    if (env == nullptr) return false;
+    if (!m_mappingRegistry.freeze()) {
+        log::info("Mapping registry unavailable: " + m_mappingRegistry.loadError());
         return false;
     }
 
@@ -1901,10 +1911,12 @@ bool GameBindings::resolve(JNIEnv* const env) noexcept
         m_retryAtMilliseconds.store(0U, std::memory_order_relaxed);
         m_resolutionPhase.store(ResolutionPhase::Resolved, std::memory_order_release);
         try {
-            log::info(std::string("Minecraft 1.8.9 bindings resolved: ") + profile->label);
+            log::info(std::string("Minecraft bindings resolved: ") + profile->label +
+                      " [adapter=" + std::string(m_cache->adapter->id) +
+                      ", namespace=" + std::string(bindings::mappingNamespaceName(profile->mappingNamespace)) + "]");
             m_freeLookDiagnostics.event("MAPPING_RESOLVED",profile->label);
         } catch (...) {
-            log::info("Minecraft 1.8.9 bindings resolved.");
+            log::info("Minecraft bindings resolved.");
             m_freeLookDiagnostics.event("MAPPING_RESOLVED","label unavailable");
         }
         return true;

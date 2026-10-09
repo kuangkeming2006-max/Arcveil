@@ -1,4 +1,5 @@
 #include "Analyzer.h"
+#include "../../agent/bindings/VersionAdapter.h"
 #include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <QCryptographicHash>
@@ -215,6 +216,8 @@ Json validatePack(const Json &pack) {
     return Json::Object{{"valid", true},
                         {"level", "schema"},
                         {"injectionReady", false},
+                        {"apiSupported", bindings::selectVersionAdapter(bindings::MinecraftVersion::parse(parsed.gameVersion)) != nullptr},
+                        {"versionSource", "pack-declared; requires live API validation"},
                         {"packId", parsed.id},
                         {"dictionaries", count}};
 }
@@ -246,12 +249,15 @@ Json diffPacks(const Json &before, const Json &after) {
                                                {"symbol", key},
                                                {"before", value},
                                                {"after", b.at(id).at("symbols").at(key)}});
-        for (const auto *key : {"label", "family", "detection"})
-            if (a.at(id).at(key) != b.at(id).at(key))
+        for (const auto *key : {"label", "family", "detection", "mappingNamespace"}) {
+            const auto oldValue=a.at(id).contains(key)?a.at(id).at(key):Json();
+            const auto newValue=b.at(id).contains(key)?b.at(id).at(key):Json();
+            if (oldValue != newValue)
                 changes.push_back(Json::Object{{"dictionary", id},
                                                {"metadata", key},
-                                               {"before", a.at(id).at(key)},
-                                               {"after", b.at(id).at(key)}});
+                                               {"before", oldValue},
+                                               {"after", newValue}});
+        }
     }
     return Json::Object{{"changed", before != after},
                         {"changes", changes},

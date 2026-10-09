@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "packVersion": 2,
   "id": "minecraft-1.8.9-runtime-v2",
   "gameVersion": "1.8.9",
@@ -15,6 +15,7 @@
           "id": "minecraft-1.8.9-forge-srg",
           "label": "Forge SRG",
           "family": "Forge",
+          "mappingNamespace": "SRG",
           "detection": [
             {
               "match": 1,
@@ -384,6 +385,7 @@
           "id": "minecraft-1.8.9-vanilla-notch",
           "label": "Vanilla obfuscated",
           "family": "Vanilla",
+          "mappingNamespace": "Notch",
           "detection": [],
           "symbols": {
             "minecraftName": "ave",
@@ -753,6 +755,7 @@
           "id": "minecraft-1.8.9-lunar-mcp",
           "label": "Lunar 1.8.9 (MCP named)",
           "family": "Lunar",
+          "mappingNamespace": "MCP",
           "detection": [
             {
               "match": 1,
@@ -1114,6 +1117,7 @@
           "id": "minecraft-1.8.9-lunar-notch",
           "label": "Lunar 1.8.9 (vanilla namespace)",
           "family": "Lunar",
+          "mappingNamespace": "Notch",
           "detection": [
             {
               "match": 1,
@@ -1475,6 +1479,7 @@
           "id": "minecraft-1.8.9-lunar-srg",
           "label": "Lunar 1.8.9 SRG",
           "family": "Lunar",
+          "mappingNamespace": "SRG",
           "detection": [
             {
               "match": 1,

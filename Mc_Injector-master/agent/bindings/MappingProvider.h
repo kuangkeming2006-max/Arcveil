@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameVersion.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +58,8 @@ struct MappingDictionary final {
     std::string id;
     std::string label;
     ClientFamily family = ClientFamily::Unknown;
+    MinecraftVersion minecraftVersion{};
+    MappingNamespace mappingNamespace = MappingNamespace::Unknown;
     std::vector<DetectionPattern> detection;
 
     std::string minecraftName;
@@ -427,6 +431,7 @@ public:
     // it returns.
     [[nodiscard]] bool freeze() noexcept;
     [[nodiscard]] bool healthy() const noexcept;
+    [[nodiscard]] const std::string& loadError() const noexcept { return m_loadError; }
 
     void observeClassSignature(std::string_view signature,
                                ClientEnvironment& environment) const noexcept;
@@ -446,6 +451,7 @@ private:
     std::vector<std::unique_ptr<MappingProvider>> m_providers;
     bool m_frozen = false;
     bool m_healthy = true;
+    std::string m_loadError; // Constructor-only diagnostic; immutable afterward.
 };
 
 } // namespace mcoverlay::bindings

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameBindings.h"
+#include "GameApi.internal.h"
 
 namespace mcoverlay {
 
@@ -9,6 +10,11 @@ namespace mcoverlay {
 // an acquire load before dereferencing m_cache, so it can never observe a
 // partially initialized JNI cache.
 struct GameBindings::BindingCache final {
+    const bindings::VersionAdapter* adapter = nullptr;
+    [[nodiscard]] bindings::GameApi gameApi() const noexcept {
+        return {adapter, minecraftClass, getMinecraft, minecraftInstanceField,
+                playerField, worldField, getLoadedEntities, loadedEntitiesField, mainInventory};
+    }
     jclass minecraftClass = nullptr;
     jclass playerClass = nullptr;
     jclass livingClass = nullptr;
