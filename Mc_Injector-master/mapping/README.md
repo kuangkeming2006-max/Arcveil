@@ -211,3 +211,34 @@ exercises the real Analyzer's retention/invalidation and export gate.
 MappingProgressTests and ControllerUiSmoke cover provisional migration, verified
 upgrade, automatic open, stop, close/reopen and both themes. Exact evidence and
 limits are in tests/mapping/V55_9_VALIDATION.md.
+
+
+## v56.4 transaction/cache audit
+
+Attach owns a UUID + PID/creation-time transaction through mapping, loading and
+Active. Cancellation suppresses old ready/cache/loading/UI results. Reusable cache
+v2 uses stable required installed-class structure and family/contracts/schema/
+analyzer evidence; runtime fingerprints are only transaction drift receipts.
+A verified family cache candidate always gets required-only live validation and
+final recheck, with no automatic resolve on a compatible second Attach.
+
+Reference priority: stable identity, same family/version, same family, explicit
+Vanilla base/version, none. Cross-client lastVerified is never a strong reference.
+Pause Automatic Matching stops future retries and preserves the pending owner;
+Clear Selection is browsing, Cancel Attach cancels preflight/loading, Active Detach
+uses normal Agent DETACH. Closing progress only hides presentation.
+
+The current Probe filename is MappingProbe-v8.dll. NativeLoader preference is
+memoized by PID/creation time. Known required classes can be linked without target
+initialization for cold-start validation; changed detail is reused only within its
+original transaction. Stable ambiguity pauses polling; missing runtime classes use
+at most 5-second watch backoff. Console records transaction, cache, reference and
+capture transport decisions.
+
+Acceptance commands (from a configured build): run Test-Resolver.py, then
+Prepare-TransactionFixtures.py; TransactionCacheTests takes FixtureMappingAnalyzer,
+resolver-fixtures and contracts-v1.json. McOverlayLiveMappingSmoke PID performs two
+real attach/detach cycles in a persistent fresh cache and requires cycle 2 to have
+cacheHits > 0 and autoResolveCalls == 0. Main-menu no_player/no_world is acceptable
+only after the Agent publishes a mapping profile and renderer Active. See
+../tests/mapping/V56_4_VALIDATION.md for evidence and remaining coverage limits.

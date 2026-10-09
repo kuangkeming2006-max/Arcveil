@@ -18,7 +18,7 @@ unlink or conceal the module.
 
 ## Current feature set
 
-Internal build: **v56.2**. The pre-connection About page shows the build number.
+Internal build: **v56.4**. The pre-connection About page shows the build number.
 Fullscreen IME now requests TSF candidate updates from Microsoft Pinyin and
 restores the native candidate window if candidate rendering stops. Live Windows
 TIP tests cover native controls and game-style WGL windows on one or two threads.

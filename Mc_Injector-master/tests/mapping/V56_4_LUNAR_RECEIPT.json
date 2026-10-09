@@ -1,0 +1,224 @@
+{
+  "internalVersion": "v56.4",
+  "baseline": "main@ea8a961",
+  "client": "Lunar Client 1.8.9 v2.23.1-2641",
+  "environment": "Windows x64, main menu",
+  "observed": [
+    "ATTACH_ACCEPTANCE cycle=1 autoResolveCalls=0 cacheHits=0 transaction=0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+    "AGENT_MAPPING profile=Lunar 1.8.9 SRG state=no_player renderer=1",
+    "ATTACH_ACCEPTANCE cycle=2 autoResolveCalls=0 cacheHits=1 transaction=78d356ac-d13a-43d8-8998-5e69abb0c565",
+    "AGENT_MAPPING profile=Lunar 1.8.9 SRG state=no_player renderer=1",
+    "LIVE_RESULT success=1 profile=Lunar 1.8.9 SRG mappingState=no_player renderer=1 error= detail="
+  ],
+  "events": [
+    {
+      "event": "TRANSACTION_BEGIN",
+      "eventVersion": 1,
+      "generation": 2,
+      "reason": "",
+      "state": "MappingFastPath",
+      "time": "2026-10-07T18:05:54.962Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 2,
+      "pid": 23700,
+      "reason": "standard-attach-explicitly-unsupported",
+      "time": "2026-10-07T18:05:57.536Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 2,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "standard-attach-unavailable",
+      "time": "2026-10-07T18:06:00.814Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+      "transport": "NativeLoader"
+    },
+    {
+      "cacheKey": "",
+      "event": "CACHE_LOOKUP",
+      "eventVersion": 1,
+      "generation": 2,
+      "hit": false,
+      "mappingIdentity": "",
+      "reason": "no-verified-family-candidate",
+      "targetFamily": "Lunar",
+      "time": "2026-10-07T18:06:03.618Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "REFERENCE_SELECTION",
+      "eventVersion": 1,
+      "generation": 2,
+      "reason": "no-family-compatible-reference",
+      "sourceFamily": "",
+      "sourceMappingIdentity": "",
+      "targetFamily": "Lunar",
+      "targetMappingIdentity": "",
+      "time": "2026-10-07T18:06:03.621Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 2,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:06:16.135Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 2,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:07:07.765Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 2,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:07:17.915Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02",
+      "transport": "NativeLoader"
+    },
+    {
+      "cacheKey": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "event": "CACHE_PROMOTE",
+      "eventVersion": 1,
+      "generation": 2,
+      "mappingIdentity": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "revision": "b8b5ad76-005d-4f73-b0b3-d831b036acf9",
+      "time": "2026-10-07T18:07:37.657Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "TRANSACTION_COMMIT",
+      "eventVersion": 1,
+      "generation": 2,
+      "reason": "Agent authenticated and renderer active",
+      "state": "Active",
+      "time": "2026-10-07T18:07:38.900Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "TRANSACTION_CANCEL",
+      "eventVersion": 1,
+      "generation": 2,
+      "reason": "Detach / process switch",
+      "state": "Cancelling",
+      "time": "2026-10-07T18:07:38.944Z",
+      "transactionId": "0eb040a3-4038-4d95-9767-9f5a1cd99f02"
+    },
+    {
+      "event": "TRANSACTION_BEGIN",
+      "eventVersion": 1,
+      "generation": 6,
+      "reason": "",
+      "state": "MappingFastPath",
+      "time": "2026-10-07T18:07:39.562Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 6,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:07:43.428Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "REFERENCE_SELECTION",
+      "eventVersion": 1,
+      "generation": 6,
+      "reason": "same-family-cache-candidate; awaiting-live-validation",
+      "sourceFamily": "Lunar",
+      "sourceMappingIdentity": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "targetFamily": "Lunar",
+      "targetMappingIdentity": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "time": "2026-10-07T18:07:45.469Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565"
+    },
+    {
+      "cacheKey": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "event": "CACHE_LOOKUP",
+      "eventVersion": 1,
+      "generation": 6,
+      "hit": true,
+      "mappingIdentity": "a600c6407657da1e50c95439ad5602e8a291c8c60bfa21c9dd9fed52842b35f8",
+      "reason": "stable-metadata-candidate; live-validation-required",
+      "time": "2026-10-07T18:07:47.946Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 6,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:07:50.882Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 6,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:08:13.738Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "CAPTURE_TRANSPORT_SELECTED",
+      "eventVersion": 1,
+      "generation": 6,
+      "pid": 23700,
+      "processStart": "134358625607077478",
+      "reason": "remembered-pid-processStart",
+      "time": "2026-10-07T18:08:18.633Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565",
+      "transport": "NativeLoader"
+    },
+    {
+      "event": "TRANSACTION_COMMIT",
+      "eventVersion": 1,
+      "generation": 6,
+      "reason": "Agent authenticated and renderer active",
+      "state": "Active",
+      "time": "2026-10-07T18:08:28.756Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565"
+    },
+    {
+      "event": "TRANSACTION_CANCEL",
+      "eventVersion": 1,
+      "generation": 6,
+      "reason": "Detach / process switch",
+      "state": "Cancelling",
+      "time": "2026-10-07T18:08:28.910Z",
+      "transactionId": "78d356ac-d13a-43d8-8998-5e69abb0c565"
+    }
+  ]
+}

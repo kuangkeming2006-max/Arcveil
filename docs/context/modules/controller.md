@@ -81,11 +81,11 @@ agent/ui/GuiTypography.h 的纯值策略，不引入 renderer、ImGui 或 JNI。
 2026-09-26：控制器构建、响应性、HotkeyCapture 和 UI 点击/弹窗/主题 smoke 通过；116 个原成员函数体唯一且保持不变。
 
 Mapping preflight now lives in MappingService.h/.cpp. OverlayManager remains in
-Validating until the service emits ready(pack,digest); launchVerifiedAgent then
+Validating until the service emits readyForTransaction(id,pack,digest); launchVerifiedAgent then
 starts the existing injection path. closeSessionTransport cancels the preflight.
 See mapping-pipeline.md for cache, subprocess and startup-options contracts.
 
-Mapping Console v55.5: main.cpp registers MappingService as a QML singleton. MappingEventModel is a bounded 2,000-row view over JSONL events; clearing the view preserves disk logs. Cancel routes through OverlayManager.detach to reset the owner session; rollback only selects the next injection revision.
+Mapping Console v55.5: main.cpp registers MappingService as a QML singleton. MappingEventModel is a bounded 2,000-row view over JSONL events; clearing the view preserves disk logs. Cancel routes through OverlayManager.cancelAttach to reset the owner session; rollback only selects the next injection revision.
 
 `McOverlayMediaShutdownTests` uses a delayed child-process fixture. v55.7 disconnects
 media callbacks before member destruction and reaps the child after kill; this
@@ -107,3 +107,20 @@ request signals. Stop preserves busy/OverlayManager state and in-flight validati
 only cancel cancels the whole attach. Incomplete matching waits, final drift starts
 another generation, and ready still follows validation, identity check and promotion.
 Tests add DynamicMappingServiceTests with production service/external subprocess.
+
+## v56.4 Attach transaction ownership
+
+Start at P/src/AttachTransaction.h and OverlayManager.h. Every Attach click creates
+an independent UUID + PID/processStart owner. Public transactionId/transactionState
+expose Idle/Selected/MappingFastPath/MappingResolving/MappingPaused/MappingVerified/
+LoadingAgent/Active/Cancelling/Detached/Failed. Existing State remains the transport
+substate for compatibility. MappingService receives the shared transaction;
+readyForTransaction/failedForTransaction are the controller authorization boundary.
+Callbacks, sockets, queued drains, timers and helper completions check the owner or
+operation generation. Process creation time is checked before Agent loading.
+
+ProcessScanner selection is browsing only. cancelAttach invalidates Mapping/loading;
+Active ends only through detach (normal authenticated DETACH transaction). A new
+Attach cancels the preceding owner and queues behind bounded Agent teardown before
+starting its new owner. Transport preference is memoized by PID/processStart and
+shared from capture to Agent startup. See MAPPING_ATTACH_AUDIT.md and mapping-pipeline.

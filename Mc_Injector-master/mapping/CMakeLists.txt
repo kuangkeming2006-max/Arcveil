@@ -9,7 +9,7 @@ add_library(MappingProbe SHARED probe/MappingProbe.cpp)
 target_compile_features(MappingProbe PRIVATE cxx_std_20)
 target_include_directories(MappingProbe PRIVATE "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 target_compile_definitions(MappingProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-set_target_properties(MappingProbe PROPERTIES OUTPUT_NAME "MappingProbe-v3" PREFIX "" AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+set_target_properties(MappingProbe PROPERTIES OUTPUT_NAME "MappingProbe-v8" PREFIX "" AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 if(MINGW)
     target_link_options(MappingProbe PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
@@ -58,3 +58,14 @@ target_compile_features(DynamicMappingServiceTests PRIVATE cxx_std_20)
 target_link_libraries(DynamicMappingServiceTests PRIVATE Qt6::Core)
 target_compile_definitions(DynamicMappingServiceTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_dependencies(DynamicMappingServiceTests FakeDynamicMappingAnalyzer)
+
+add_executable(FixtureMappingAnalyzer EXCLUDE_FROM_ALL ../tests/mapping/FixtureMappingAnalyzer.cpp)
+target_link_libraries(FixtureMappingAnalyzer PRIVATE mc_mapping_analyzer_core)
+add_executable(TransactionCacheTests EXCLUDE_FROM_ALL ../tests/mapping/TransactionCacheTests.cpp
+    ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingServiceDynamic.cpp ../src/MappingService.h
+    ../src/MappingEventModel.cpp ../src/MappingProgressModel.cpp ../src/MappingProgressModel.h
+    ../src/MappingProgressController.cpp ../src/MappingProgressController.h cache/MappingCache.cpp)
+target_compile_features(TransactionCacheTests PRIVATE cxx_std_20)
+target_compile_definitions(TransactionCacheTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(TransactionCacheTests PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+add_dependencies(TransactionCacheTests FixtureMappingAnalyzer)

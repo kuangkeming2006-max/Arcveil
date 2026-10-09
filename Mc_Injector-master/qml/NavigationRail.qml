@@ -10,6 +10,7 @@ Rectangle {
     signal browseRequested()
     signal returnRequested()
     signal clearSelectionRequested()
+    signal cancelAttachRequested()
     signal paneWidthRequested(real paneWidth)
     signal paneWidthCommitted()
     id: navigationRail
@@ -397,20 +398,21 @@ Rectangle {
                     MaterialButton {
                         Layout.preferredWidth: 116
                         Layout.preferredHeight: 36
-                        text: host.sessionAvailable
-                              ? (host.browsingProcesses ? "Return" : "Browse processes")
-                              : "Clear selection"
+                        text: host.injectionInProgress ? "Cancel Attach"
+                              : (host.sessionAvailable ? (host.browsingProcesses ? "Return" : "Browse processes") : "Clear Selection")
                         filled: false
                         foregroundColor: host.primaryColor
                         outlineColor: "transparent"
                         onClicked: {
-                            if (host.sessionAvailable) {
+                            if (host.injectionInProgress) navigationRail.cancelAttachRequested()
+                            else if (host.sessionAvailable) {
                                 if (host.browsingProcesses)
                                     navigationRail.returnRequested()
                                 else
                                     navigationRail.browseRequested()
                             } else {
-                                navigationRail.clearSelectionRequested()
+                                if (OverlayManager.busy) navigationRail.cancelAttachRequested()
+                                else navigationRail.clearSelectionRequested()
                             }
                         }
                     }

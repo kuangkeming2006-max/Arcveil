@@ -11,8 +11,7 @@
 #include <memory>
 #include <windows.h>
 using namespace mapping_cache;
-namespace {
-QString processStart(quint32 pid) {
+QString MappingService::processStartFor(quint32 pid) {
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!h)
         return {};
@@ -25,22 +24,30 @@ QString processStart(quint32 pid) {
                ? QString::number((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime)
                : QString{};
 }
-} // namespace
 MappingService::MappingService(QObject *parent) : QObject(parent) {
     m_root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) +
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
-    m_probe = m_tools + "/MappingProbe-v3.dll";
+    m_probe = m_tools + "/MappingProbe-v8.dll";
     m_contracts = m_tools + "/contracts-v1.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
     m_watchTimer.setSingleShot(true);
-    connect(&m_watchTimer, &QTimer::timeout, this, &MappingService::watchLite);
     m_timeout.setSingleShot(true);
-    connect(&m_timeout, &QTimer::timeout, this, [this] { fail("Mapping analysis timed out"); });
 }
 MappingService::~MappingService() { cancel(); }
+bool MappingService::current() const {
+    return m_transaction && m_transaction->valid && m_transaction->pid == m_pid &&
+           m_transaction->processStart == m_start;
+}
+void MappingService::transactionEvent(const QString &type, const QString &reason) {
+    event({{"event", type}, {"reason", reason},
+           {"state", m_transaction ? m_transaction->stateName() : QString("Idle")}});
+}
 void MappingService::event(QJsonObject value) {
+    if (value.contains("fingerprint")) value["runtimeFingerprint"] = value.value("fingerprint");
+    value["transactionId"] = transactionId();
+    value["generation"] = double(m_generation);
     value["eventVersion"] = 1;
     value["time"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     if (!m_run.isEmpty()) {
@@ -57,6 +64,7 @@ void MappingService::event(QJsonObject value) {
 }
 void MappingService::stopProcess() {
     m_timeout.stop();
+    if (m_processJob) { CloseHandle(m_processJob); m_processJob = nullptr; }
     if (!m_process)
         return;
     auto *job = m_process.data();
@@ -73,37 +81,58 @@ void MappingService::stopProcess() {
 }
 void MappingService::cancel() {
     ++m_generation;
+    if (m_busy && m_transaction) m_transaction->invalidate();
     m_watchTimer.stop();
     m_watchEnabled = false;
     stopProcess();
     if (m_busy) {
         m_busy = false;
         m_status = "Cancelled";
+        const auto generation = m_generation;
+        transactionEvent("TRANSACTION_CANCEL", "Cancel Attach");
+        if (generation != m_generation) return;
         event({{"event", "cancelled"}});
+        if (generation != m_generation) return;
         emit changed();
     }
 }
 void MappingService::fail(const QString &reason) {
     ++m_generation;
+    if (m_busy && m_transaction) m_transaction->invalidate();
     m_watchTimer.stop();
     m_watchEnabled = false;
     stopProcess();
     m_busy = false;
     m_status = reason;
-    event({{"event", "failure"}, {"reason", reason}});
+    const auto generation = m_generation;
+    const auto id = transactionId();
+    if (m_transaction) m_transaction->state = AttachTransaction::State::Failed;
     try {
         Cache(m_root).candidate(m_run, m_fingerprint, "failed");
     } catch (...) {
     }
+    event({{"event", "failure"}, {"reason", reason}});
+    if (generation != m_generation) return;
     emit changed();
+    if (generation != m_generation) return;
+    emit failedForTransaction(id, reason);
+    if (generation != m_generation) return;
     emit failed(reason);
 }
 void MappingService::prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
-                             const QString &toolsJar) {
+                             const QString &toolsJar, std::shared_ptr<AttachTransaction> transaction) {
     cancel();
     m_events.clear();
     m_progress = -1;
     m_pid = pid;
+    m_transaction = transaction ? std::move(transaction) : std::make_shared<AttachTransaction>();
+    m_transaction->pid = pid;
+    m_transaction->state = AttachTransaction::State::MappingFastPath;
+    m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_forceAutomatic = false;
+    m_stableAmbiguity = false;
+    m_candidates.clear();
+    m_candidateIndex = 0; m_candidateWarmed = false;
+    m_family.clear(); m_minecraftVersion.clear(); m_mappingIdentity.clear(); m_metadataIdentity.clear();
     m_java = java;
     m_helper = helper;
     m_modular = modular;
@@ -128,9 +157,13 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_capture = {};
     m_fingerprint.clear();
     m_pack.clear();
-    m_start = processStart(pid);
+    m_start = processStartFor(pid);
+    if (m_transaction->processStart.isEmpty()) m_transaction->processStart = m_start;
+    m_transport = m_transports.value(QString::number(pid) + ":" + m_start);
     m_run = m_root + "/runs/" + QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_busy = true;
+    QDir().mkpath(m_run);
+    transactionEvent("TRANSACTION_BEGIN");
     event({{"event", "session-start"}, {"pid", double(pid)}});
     event({{"event", "step"},
            {"index", 0},
@@ -142,12 +175,14 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
         if (m_start.isEmpty() || !QFile::exists(m_analyzer) || !QDir().mkpath(m_run))
             throw std::runtime_error("mapping analyzer/runtime unavailable");
         m_contractDigest = fileDigest(m_contracts);
+        m_identityPacksFile = m_run + "/identity-packs.json";
+        writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
         progressSchema();
         event({{"event", "step"},
                {"index", 0},
                {"state", "success"},
                {"message", QFile::exists(m_root + "/index.json")
-                               ? "Local cache found; exact lookup follows runtime fingerprint"
+                               ? "Local cache found; family and stable identity detection follows"
                                : "No local cache; capturing runtime fingerprint"}});
         Cache(m_root).candidate(m_run, {}, "inspecting");
         inspect(false);
@@ -156,6 +191,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     }
 }
 void MappingService::launch(QStringList arguments, std::function<void(int)> finished) {
+    if (!m_busy || !current()) return;
     m_analyzerFailure = {};
     struct Output {
         QByteArray bytes;
@@ -171,7 +207,7 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
     auto drain = std::make_shared<std::function<void()>>();
     std::weak_ptr<std::function<void()>> weakDrain = drain;
     *drain = [this, job, generation, output, weakDrain, finished = std::move(finished)] {
-        if (generation != m_generation || output->done)
+        if (generation != m_generation || !current() || output->done)
             return;
         output->scheduled = false;
         auto received = job->readAllStandardOutput();
@@ -200,6 +236,11 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
                 return;
             }
             const auto object = doc.object();
+            if (object.value("event") == "CAPTURE_TRANSPORT_SELECTED") {
+                m_transport = object.value("transport").toString();
+                if (m_transport == "NativeLoader")
+                    m_transports[QString::number(m_pid) + ":" + m_start] = m_transport;
+            }
             if (object.value("event").toString() == "fingerprint")
                 m_capture = object;
             if (object.value("event") == "failure") {
@@ -209,6 +250,7 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
                 event(diagnostic);
             } else {
                 event(object);
+                if (generation != m_generation || !current()) return;
                 progressAnalyzer(object);
             }
             if (generation != m_generation)
@@ -225,6 +267,7 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
             return;
         output->done = true;
         m_timeout.stop();
+        if (m_processJob) { CloseHandle(m_processJob); m_processJob = nullptr; }
         m_process = nullptr;
         job->deleteLater();
         if (output->status != QProcess::NormalExit || !output->bytes.trimmed().isEmpty()) {
@@ -234,7 +277,7 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
         try {
             finished(output->code);
         } catch (const std::exception &e) {
-            fail(QString::fromUtf8(e.what()));
+            if (generation == m_generation && current()) fail(QString::fromUtf8(e.what()));
         }
     };
     const auto schedule = [this, output, drain] {
@@ -257,38 +300,68 @@ void MappingService::launch(QStringList arguments, std::function<void(int)> fini
                 output->exited = true;
                 schedule();
             });
+    connect(job, &QProcess::started, this, [this, job, generation] {
+        if (generation != m_generation || !current()) return;
+        auto group = CreateJobObjectW(nullptr, nullptr);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        auto process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, DWORD(job->processId()));
+        if (group && process && SetInformationJobObject(group, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) &&
+            AssignProcessToJobObject(group, process)) m_processJob = group;
+        else if (group) CloseHandle(group);
+        if (process) CloseHandle(process);
+    });
     job->setProgram(m_analyzer);
     job->setArguments(arguments);
     job->start();
+    disconnect(&m_timeout, nullptr, this, nullptr);
+    connect(&m_timeout, &QTimer::timeout, this, [this, generation] {
+        if (generation == m_generation && current()) fail("Mapping analysis timed out");
+    });
     m_timeout.start(120000);
 }
 
 bool MappingService::identityValid() const {
-    return processStart(m_pid) == m_start && !m_start.isEmpty();
+    return current() && processStartFor(m_pid) == m_start && !m_start.isEmpty();
 }
 void MappingService::inspect(bool finalCheck) {
     captureLite(finalCheck ? CapturePhase::Final : CapturePhase::Initial);
 }
 void MappingService::finalize() {
-    if (processStart(m_pid) != m_start)
+    const auto owner = m_transaction;
+    const auto generation = m_generation;
+    if (!m_busy || !identityValid())
         throw std::runtime_error("target JVM exited before injection");
-    if (!m_hit.valid())
+    if (!m_validation.value("valid").toBool() || !m_validation.value("injectionReady").toBool())
+        throw std::runtime_error("finalize requires current live validation");
+    if (m_mappingIdentity.isEmpty() || m_family.isEmpty() || m_family == "Unknown")
+        throw std::runtime_error("stable mapping identity/family unavailable");
+    if (!m_hit.valid()) {
         m_hit = Cache(m_root).promote(m_pack, m_snapshot, m_fingerprint, m_contractDigest,
-                                      m_validation);
+                                      m_validation, m_mappingIdentity, m_metadataIdentity,
+                                      m_family, m_minecraftVersion);
+        event({{"event", "CACHE_PROMOTE"}, {"cacheKey", m_mappingIdentity},
+               {"mappingIdentity", m_mappingIdentity}, {"revision", m_hit.revision}});
+    }
+    if (owner != m_transaction || generation != m_generation || !current()) return;
+    m_transaction->state = AttachTransaction::State::MappingVerified;
     event({{"event", "validation"},
            {"valid", true},
            {"stage", "verified"},
            {"fingerprint", m_fingerprint},
            {"pack", m_hit.pack},
            {"digest", m_hit.digest}});
+    if (owner != m_transaction || generation != m_generation || !current()) return;
     m_watchEnabled = false;
     m_watchTimer.stop();
     m_busy = false;
-    m_status = "Mapping verified";
+    m_status = m_cachePath ? "Cache HIT -> Live validation -> Ready" : "Mapping verified -> Ready";
     progressVerified();
     m_progress = 1;
     emit changed();
-    emit ready(m_hit.pack, m_hit.digest);
+    if (owner != m_transaction || generation != m_generation || !current()) return;
+    emit readyForTransaction(transactionId(), m_hit.pack, m_hit.digest);
+    if (owner == m_transaction && generation == m_generation && current()) emit ready(m_hit.pack, m_hit.digest);
 }
 bool MappingService::rollback() {
     if (m_busy)

@@ -34,6 +34,8 @@ public:
     };
     Q_ENUM(State)
 
+    Q_PROPERTY(QString transactionId READ transactionId NOTIFY stateChanged)
+    Q_PROPERTY(QString transactionState READ transactionState NOTIFY stateChanged)
     Q_PROPERTY(State state READ state NOTIFY stateChanged)
     Q_PROPERTY(bool attached READ attached NOTIFY attachedChanged)
     Q_PROPERTY(bool rendererActive READ rendererActive NOTIFY stateChanged)
@@ -269,6 +271,9 @@ public:
     MappingService* mappingService() noexcept { return &m_mappingService; }
     Q_INVOKABLE bool attachToProcess(quint32 pid);
     Q_INVOKABLE void detach();
+    Q_INVOKABLE void cancelAttach();
+    QString transactionId() const { return m_transaction ? m_transaction->transactionId : QString{}; }
+    QString transactionState() const { return m_transaction ? m_transaction->stateName() : QString("Idle"); }
     Q_INVOKABLE void refreshBedCache();
     Q_INVOKABLE bool saveConfig(const QString &name);
     Q_INVOKABLE bool applyConfig(const QString &name);
@@ -479,6 +484,10 @@ private:
     void setErrorState(const QString &code, const QString &detail);
     void fail(const QString &code, const QString &detail);
 
+    bool startAttachTransaction(std::shared_ptr<AttachTransaction> transaction);
+    std::shared_ptr<AttachTransaction> m_transaction, m_pendingTransaction;
+    QString m_agentTransactionId;
+    quint64 m_attachRequestGeneration = 0;
     MappingService m_mappingService;
     JavaRuntime m_mappingJava;
     QString m_mappingHelper;

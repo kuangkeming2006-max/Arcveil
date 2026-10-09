@@ -27,26 +27,57 @@ std::string sha256(std::string_view value) {
         .toHex()
         .toStdString();
 }
+// Decorate once: comparing serialized classes repeatedly multiplies capture cost.
+static void canonicalSort(Json::Array &items) {
+    std::vector<std::pair<std::string, Json>> sorted;
+    sorted.reserve(items.size());
+    for (auto &item : items) { auto key = item.dump(); sorted.emplace_back(std::move(key), std::move(item)); }
+    std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    items.clear();
+    for (auto &item : sorted) items.push_back(std::move(item.second));
+}
 Json classMetadata(Json klass) {
     for (const auto *key :
          {"constantPool", "constantPoolCount", "major", "minor", "crossReferences"})
         klass.object().erase(key);
     for (auto &m : klass["methods"].array())
         m.object().erase("bytecode");
-    auto order = [](const Json &a, const Json &b) { return a.dump() < b.dump(); };
-    for (const auto *kind : {"fields", "methods", "interfaces"})
-        std::sort(klass[kind].array().begin(), klass[kind].array().end(), order);
+    for (const auto *kind : {"fields", "methods", "interfaces"}) canonicalSort(klass[kind].array());
     return klass;
 }
 static std::string snapshotDigest(const Json &snapshot) {
     Json content = Json::Object{{"snapshotVersion", 1},
                                 {"classes", snapshot.at("classes")},
-                                {"launchEvidence", snapshot.contains("launchEvidence")
-                                                       ? snapshot.at("launchEvidence")
-                                                       : Json(Json::Array{})}};
-    if (snapshot.contains("captureScope"))
-        content["captureScope"] = snapshot.at("captureScope");
+                                {"launchEvidence", Json::Array{}}};
+    // Runtime drift checks bind only the captured classes and live loader continuity.
+    // The request's lite fingerprint includes unrelated loaded classes.
+    auto runtimeLoader = [&](const Json &key) -> Json {
+        if (snapshot.contains("loaderInstances"))
+            for (const auto &item : snapshot.at("loaderInstances").array())
+                if (item.at("loaderKey") == key)
+                    return item.at("type").string() + ":" + item.at("instance").dump();
+        return key;
+    };
+    for (auto &klass : content["classes"].array()) {
+        klass["loaderKey"] = runtimeLoader(klass.at("loaderKey"));
+        klass["super"]["loaderKey"] = runtimeLoader(klass.at("super").at("loaderKey"));
+        for (auto &item : klass["interfaces"].array()) item["loaderKey"] = runtimeLoader(item.at("loaderKey"));
+        for (const auto *kind : {"fields", "methods", "interfaces"}) canonicalSort(klass[kind].array());
+    }
+    canonicalSort(content["classes"].array());
+    canonicalSort(content["launchEvidence"].array());
     return sha256(content.dump());
+}
+Json refreshSnapshotFingerprint(Json snapshot) {
+    const bool lite = snapshot.contains("detailLevel") && snapshot.at("detailLevel").string() == "lite";
+    const auto digest = snapshotDigest(snapshot);
+    snapshot["fingerprint"] = lite ? sha256("lite-v1:" + digest) : digest;
+    std::size_t methods = 0, fields = 0;
+    for (const auto &c : snapshot.at("classes").array()) {
+        methods += c.at("methods").array().size(); fields += c.at("fields").array().size();
+    }
+    snapshot["methodCount"] = double(methods); snapshot["fieldCount"] = double(fields);
+    return inspectSnapshot(std::move(snapshot));
 }
 Json inspectSnapshot(Json snapshot) {
     const bool lite =
@@ -59,8 +90,18 @@ Json inspectSnapshot(Json snapshot) {
                                                          : "jvmti-installed-double-read"))
         throw std::runtime_error("incomplete/unsupported live snapshot");
     if (snapshot.contains("normalizedVersion")) {
-        if (snapshot.at("normalizedVersion").integer() != 1)
+        if (snapshot.at("normalizedVersion").integer() != 1 && snapshot.at("normalizedVersion").integer() != 2)
             throw std::runtime_error("unsupported normalized snapshot");
+        if (snapshot.at("normalizedVersion").integer() == 1) {
+            Json legacy = Json::Object{{"snapshotVersion", 1}, {"classes", snapshot.at("classes")},
+                {"launchEvidence", snapshot.contains("launchEvidence") ? snapshot.at("launchEvidence") : Json(Json::Array{})}};
+            if (snapshot.contains("captureScope")) legacy["captureScope"] = snapshot.at("captureScope");
+            const auto oldDigest = sha256(legacy.dump());
+            if (snapshot.at("fingerprint").string() != (lite ? sha256("lite-v1:" + oldDigest) : oldDigest))
+                throw std::runtime_error("legacy snapshot fingerprint mismatch");
+            snapshot["normalizedVersion"] = 2;
+            return refreshSnapshotFingerprint(std::move(snapshot));
+        }
         const auto digest = snapshotDigest(snapshot);
         if (snapshot.at("fingerprint").string() != (lite ? sha256("lite-v1:" + digest) : digest))
             throw std::runtime_error("snapshot fingerprint mismatch");
@@ -162,7 +203,7 @@ Json inspectSnapshot(Json snapshot) {
     snapshot["fingerprint"] = lite ? sha256("lite-v1:" + fingerprint) : fingerprint;
     snapshot["methodCount"] = double(methods);
     snapshot["fieldCount"] = double(fields);
-    snapshot["normalizedVersion"] = 1;
+    snapshot["normalizedVersion"] = 2;
     snapshot.object().erase("loaders");
     return snapshot;
 }

@@ -33,12 +33,16 @@ int main(int argc, char **argv) {
     };
     const auto mode = qEnvironmentVariable("ARCVEIL_DYNAMIC_FIXTURE_MODE");
     const auto command = args[1];
+    const QJsonObject identity{{"family", "Lunar"}, {"minecraftVersion", "1.8.9"},
+        {"mappingIdentity", "fixture-target-identity"}, {"metadataIdentity", "fixture-target-metadata"}};
+    if (command == "identify") { writeObject(get("--out"), identity); return 0; }
     if (command == "inspect") {
         if (mode == "capture-fatal") {
             emitEvent({{"event", "failure"}, {"reason", "fixture capture unavailable"}});
             return 1;
         }
-        const int index = state.value("lite").toInt() + 1;
+        const bool bootstrapWarmup = !args.contains("--detect-only") && state.value("lite").toInt() > 0;
+        const int index = state.value("lite").toInt() + (bootstrapWarmup ? 0 : 1);
         state["lite"] = index;
         QString phase = index <= 2 ? "A" : index == 3 ? "U" : index == 4 ? "C" : "D";
         if (state.value("forceE").toBool())
@@ -63,7 +67,7 @@ int main(int argc, char **argv) {
     if (command == "select") {
         const auto phase = readObject(get("--snapshot")).value("phase").toString();
         writeObject(get("--out"),
-                    {{"phase", phase},
+                    {{"identity",identity},{"phase", phase},
                      {"relevantFingerprint", "relevant-" + (phase == "U" ? "A" : phase)},
                      {"classes", QJsonArray{QJsonObject{{"name", "Fixture"}}}}});
         log("select " + phase);
@@ -134,7 +138,7 @@ int main(int argc, char **argv) {
             state["validated"] = true;
             writeObject(stateFile, state);
         }
-        writeObject(get("--out"), {{"valid", valid},
+        writeObject(get("--out"), {{"identity",identity},{"valid", valid},
                                    {"injectionReady", valid},
                                    {"fingerprint", "detail-" + phase},
                                    {"symbols", symbols},

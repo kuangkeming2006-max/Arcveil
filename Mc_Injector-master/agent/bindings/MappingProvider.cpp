@@ -197,6 +197,7 @@ const char* clientFamilyName(const ClientFamily family) noexcept
     case ClientFamily::Vanilla: return "Vanilla";
     case ClientFamily::Forge: return "Forge";
     case ClientFamily::Lunar: return "Lunar";
+    case ClientFamily::Badlion: return "Badlion";
     case ClientFamily::Unknown: return "Unknown";
     }
     return "Unknown";
@@ -219,7 +220,7 @@ ClientFamily ClientEnvironment::family() const noexcept
     // Deliberate tie order: a positively detected transformed client must not
     // silently fall back to Forge merely because it shares a named anchor.
     for (const ClientFamily candidate :
-         {ClientFamily::Vanilla, ClientFamily::Forge, ClientFamily::Lunar}) {
+         {ClientFamily::Vanilla, ClientFamily::Forge, ClientFamily::Lunar, ClientFamily::Badlion}) {
         const std::uint16_t value = confidence(candidate);
         if (value >= strongest && value != 0U) {
             strongest = value;

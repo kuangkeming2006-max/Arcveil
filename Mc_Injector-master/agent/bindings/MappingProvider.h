@@ -17,7 +17,8 @@ enum class ClientFamily : std::uint8_t {
     Unknown,
     Vanilla,
     Forge,
-    Lunar
+    Lunar,
+    Badlion
 };
 
 [[nodiscard]] const char* clientFamilyName(ClientFamily family) noexcept;
@@ -32,7 +33,7 @@ public:
     [[nodiscard]] std::uint16_t confidence(ClientFamily family) const noexcept;
 
 private:
-    std::array<std::uint16_t, 4U> m_confidence{};
+    std::array<std::uint16_t, 5U> m_confidence{};
 };
 
 enum class DetectionMatch : std::uint8_t {

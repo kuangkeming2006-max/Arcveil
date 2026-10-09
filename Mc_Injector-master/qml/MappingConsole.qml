@@ -68,7 +68,7 @@ Popup {
             }
             Button { text: "Clear view"; onClicked: MappingService.clearEvents() }
             Button { text: "Rollback previous"; enabled: !MappingService.busy; onClicked: MappingService.rollback() }
-            Button { text: "Cancel check"; enabled: MappingService.busy; onClicked: OverlayManager.detach() }
+            Button { text: "Cancel Attach"; enabled: MappingService.busy; onClicked: OverlayManager.cancelAttach() }
         }
         Rectangle {
             Layout.fillWidth: true

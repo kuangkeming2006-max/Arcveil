@@ -9,6 +9,7 @@ QString qtPath(const std::filesystem::path &path);
 void writeJson(const std::filesystem::path &path, const Json &value);
 std::string sha256(std::string_view value);
 Json inspectSnapshot(Json snapshot);
+Json refreshSnapshotFingerprint(Json snapshot);
 Json classMetadata(Json klass);
 Json validatePack(const Json &pack);
 Json diffPacks(const Json &before, const Json &after);

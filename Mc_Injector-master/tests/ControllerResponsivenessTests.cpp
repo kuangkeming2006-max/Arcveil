@@ -11,6 +11,7 @@
 struct ControllerResponsivenessTests {
     static bool run() {
         OverlayManager manager;
+        manager.m_transaction = std::make_shared<AttachTransaction>();
         const QByteArray attachDisabled =
             "Exception in thread \"main\" java.lang.InternalError: "
             "Remote thread failed for unknown reason (100)";
@@ -22,6 +23,38 @@ struct ControllerResponsivenessTests {
                 1, "Remote thread failed for unknown reason (103)")) {
             std::puts("FAIL Windows Attach recovery classification");
             return false;
+        }
+        // F: old MappingService result cannot load an Agent for a replacement owner.
+        manager.m_transaction->pid = 111;
+        manager.m_targetPid = 111;
+        manager.m_transaction->state = AttachTransaction::State::MappingVerified;
+        manager.setState(OverlayManager::State::Validating);
+        emit manager.m_mappingService.readyForTransaction("old-transaction", "ignored", "ignored");
+        if (manager.state() != OverlayManager::State::Validating || manager.m_server.isListening() ||
+            manager.m_attachProcess.state() != QProcess::NotRunning) {
+            std::puts("FAIL F: late ready started Agent"); return false;
+        }
+        manager.m_transaction->invalidate();
+        emit manager.m_mappingService.readyForTransaction(manager.transactionId(), "ignored", "ignored");
+        if (manager.m_server.isListening()) { std::puts("FAIL E: cancelled owner started Agent"); return false; }
+        manager.m_transaction = std::make_shared<AttachTransaction>();
+        manager.m_targetPid = 0;
+        manager.setState(OverlayManager::State::Detached);
+        // I: browsing selection has no session capability and cannot detach Active.
+        {
+            ProcessScanner browser;
+            browser.m_processes = {{111, "javaw.exe", {}, "A", 0, 0}, {222, "javaw.exe", {}, "B", 0, 0}};
+            manager.m_transaction->pid = 111;
+            manager.m_transaction->state = AttachTransaction::State::Active;
+            manager.m_targetPid = 111;
+            manager.setState(OverlayManager::State::Active);
+            const auto id = manager.transactionId();
+            browser.selectProcess(111); browser.selectProcess(222); browser.selectProcess(0);
+            if (!manager.attached() || manager.targetPid() != 111 || manager.transactionId() != id) {
+                std::puts("FAIL I: scanner selection changed active session"); return false;
+            }
+            manager.m_targetPid = 0;
+            manager.setState(OverlayManager::State::Detached);
         }
         manager.m_agentSocket = new QLocalSocket(&manager);
         manager.m_authenticated = true;

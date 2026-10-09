@@ -96,7 +96,7 @@ private:
         } else if(phase==20) {
             auto* build=find(m_window->contentItem(),"aboutBuildLabel");
             if(m_window->property("activeRoute").toString()!="about"||!build||
-               !build->property("text").toString().contains("v56.1")||!capture("about-light")) {
+               !build->property("text").toString().contains("v56.4")||!capture("about-light")) {
                 finish(false);return;
             }
             if(m_setTheme) m_setTheme(true);
@@ -129,7 +129,7 @@ private:
             if(m_popup->property("visible").toBool() || !m_progress || !m_overlay) {finish(false);return;}
             m_progressWindow=m_window->findChild<QQuickWindow*>("mappingProgressWindow");
             if(!m_progressWindow || m_progressWindow->isVisible()) {finish(false);return;}
-            m_overlay->attachToProcess(0); // Real Attach entry; invalid PID prevents any JVM access.
+            m_progress->begin(42); // Presentation begins without a target JVM/Attach transaction.
         } else if(phase==33) {
             if(!m_progressWindow->isVisible()) {finish(false);return;}
             m_progress->begin(42);

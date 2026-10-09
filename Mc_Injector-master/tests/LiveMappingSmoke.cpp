@@ -35,8 +35,12 @@ int main(int argc, char **argv) {
     std::printf("LIVE_CACHE %s\n", cache.path().toUtf8().constData());
     LiveMappingSmoke::cache(manager.mappingService(), cache.path());
     bool finished = false, passed = false;
+    int cycle = 1, automaticCalls = 0, cacheHits = 0;
+    bool awaitingDetach = false;
     QObject::connect(manager.mappingService(), &MappingService::eventReceived,
                      [&](const QJsonObject &event) {
+                         if (event.value("event") == "AUTO_RESOLVE") ++automaticCalls;
+                         if (event.value("event") == "CACHE_LOOKUP" && event.value("hit").toBool()) ++cacheHits;
                          auto text = QJsonDocument(event).toJson(QJsonDocument::Compact);
                          std::printf("%s\n", text.constData());
                          std::fflush(stdout);
@@ -58,18 +62,35 @@ int main(int argc, char **argv) {
     QTimer poll;
     poll.setInterval(200);
     QObject::connect(&poll, &QTimer::timeout, [&] {
+        if (awaitingDetach) {
+            if (manager.state() == OverlayManager::State::Detached) {
+                awaitingDetach = false;
+                cycle = 2; automaticCalls = 0; cacheHits = 0;
+                if (!manager.attachToProcess(pid)) stop(false);
+            }
+            return;
+        }
         if (manager.state() == OverlayManager::State::Error)
             stop(false);
-        else if (manager.rendererActive() && !manager.mappingProfile().isEmpty() &&
-                 manager.mappingState() == "ready")
-            stop(true);
+        else if (manager.rendererActive() && manager.transactionState() == "Active" &&
+                 !manager.mappingService()->busy() && !manager.mappingProfile().isEmpty() &&
+                 (manager.mappingState() == "ready" || manager.mappingState() == "no_player" ||
+                  manager.mappingState() == "no_world"))
+        {
+            std::printf("ATTACH_ACCEPTANCE cycle=%d autoResolveCalls=%d cacheHits=%d transaction=%s\n",
+                cycle, automaticCalls, cacheHits, manager.transactionId().toUtf8().constData());
+            std::printf("AGENT_MAPPING profile=%s state=%s renderer=%d\n", manager.mappingProfile().toUtf8().constData(), manager.mappingState().toUtf8().constData(), manager.rendererActive());
+            std::fflush(stdout);
+            if (cycle == 1) { awaitingDetach = true; manager.detach(); }
+            else stop(automaticCalls == 0 && cacheHits > 0);
+        }
     });
     poll.start();
     QObject::connect(&manager, &OverlayManager::statusMessageChanged, [&] {
         std::printf("STATUS %s\n", manager.statusMessage().toUtf8().constData());
         std::fflush(stdout);
     });
-    QTimer::singleShot(180000, &app, [&] { stop(false); });
+    QTimer::singleShot(600000, &app, [&] { stop(false); });
     QTimer::singleShot(0, &app, [&] {
         if (!manager.attachToProcess(pid))
             stop(false);

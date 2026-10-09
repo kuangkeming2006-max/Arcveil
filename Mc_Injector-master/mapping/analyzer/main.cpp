@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < args.size(); ++i) {
             if (!args[i].startsWith("--") || options.contains(args[i]))
                 throw std::runtime_error("invalid/duplicate option");
-            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty") {
+            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only") {
                 options[args[i]] = "true";
                 continue;
             }
@@ -88,7 +88,14 @@ int main(int argc, char **argv) {
             if (options.contains("--pid")) {
                 if (command == "inspect-detail") {
                     (void)option("--candidates");
-                    result = captureLive(options, Json(), events);
+                    const auto selection = Json::read(filePath(option("--candidates")));
+                    if (options.contains("--reuse-snapshot") && selection.at("classes").array().empty()) {
+                        result = readSnapshot(filePath(option("--reuse-snapshot")));
+                        result["classes"] = Json::Array{};
+                        result["loaderInstances"] = selection.at("loaderBindings");
+                    } else result = captureLive(options, Json(), events);
+                    if (options.contains("--reuse-snapshot"))
+                        result = mergeDetailReuse(result, selection, readSnapshot(filePath(option("--reuse-snapshot"))));
                 } else if (!options.contains("--lite") && options.contains("--pack")) {
                     auto liteOptions = options;
                     liteOptions["--lite"] = "true";
@@ -131,6 +138,11 @@ int main(int argc, char **argv) {
                                {"captureKind", result.at("captureKind")},
                                {"pid", result.at("pid")},
                                {"processStart", result.at("processStart")}});
+        } else if (command == "identify") {
+            result = mappingIdentity(Json::read(filePath(option("--pack"))),
+                                     readSnapshot(filePath(option("--snapshot"))), contracts());
+            writeJson(filePath(option("--out")), result);
+            event("mapping-identity", result);
         } else if (command == "select") {
             auto lite = readSnapshot(filePath(option("--snapshot")));
             Json reference;
@@ -140,7 +152,13 @@ int main(int argc, char **argv) {
                 source = &reference;
             }
             result = selectDetailCandidates(Json::read(filePath(option("--pack"))), lite, source,
-                                            contracts(), events, options.contains("--allow-empty"));
+                                            contracts(), events, options.contains("--allow-empty"), options.contains("--validation-scope"));
+            if (options.contains("--reuse-snapshot")) {
+                result = partitionDetailReuse(result, lite, readSnapshot(filePath(option("--reuse-snapshot"))));
+                event("DETAIL_REUSE", Json::Object{{"capturedClasses", double(result.at("classes").array().size())},
+                    {"retainedClasses", double(result.at("reuseClasses").array().size())}});
+            }
+            result["identity"] = mappingIdentity(Json::read(filePath(option("--pack"))), lite, contracts());
             writeJson(filePath(option("--out")), result);
         } else if (command == "validate") {
             const auto pack = Json::read(filePath(option("--pack")));
@@ -148,6 +166,8 @@ int main(int argc, char **argv) {
                          ? validateRuntime(pack, readSnapshot(filePath(option("--snapshot"))),
                                            contracts(), events)
                          : validatePack(pack);
+            if (options.contains("--snapshot") && result.at("valid").boolean())
+                result["identity"] = mappingIdentity(result.at("pack"), readSnapshot(filePath(option("--snapshot"))), contracts());
             if (options.contains("--out"))
                 writeJson(filePath(option("--out")), result);
             event("validation", result);

@@ -32,9 +32,12 @@ int main(int argc, char **argv) {
     if (mode == "flood")
         for (int i = 0; i < 1000; ++i)
             event({{"event", "symbol"}, {"symbol", QString::number(i)}, {"confidence", 0.99}});
+    const QJsonObject identity{{"family", "Forge"}, {"minecraftVersion", "1.8.9"},
+        {"mappingIdentity", "fixture-mapping-identity"}, {"metadataIdentity", "fixture-metadata-identity"}};
+    if (args[1] == "identify") { writeObject(get("--out"), identity); return 0; }
     if(args[1]=="select") {
         const auto snapshot=readObject(get("--snapshot"));
-        writeObject(get("--out"),{{"relevantFingerprint",snapshot.value("fingerprint")},{"classes",QJsonArray{QJsonObject{{"name","Fixture"}}}}});
+        writeObject(get("--out"),{{"identity", identity},{"relevantFingerprint",snapshot.value("fingerprint")},{"classes",QJsonArray{QJsonObject{{"name","Fixture"}}}}});
         return 0;
     }
     if (args[1] == "inspect" || args[1]=="inspect-detail") {
@@ -70,7 +73,7 @@ int main(int argc, char **argv) {
         QJsonArray symbols;
         for(auto it=contracts.begin();it!=contracts.end();++it) if(it.value().toObject().value("required").toBool())
             symbols.append(QJsonObject{{"symbol",it.key()},{"accepted",true},{"mapping",values.value(it.key())},{"confidence",1.0}});
-        writeObject(get("--out"), {{"valid", true},
+        writeObject(get("--out"), {{"identity",identity},{"valid", true},
                                    {"injectionReady", true},
                                    {"symbols", symbols},
                                    {"fingerprint", readObject(get("--snapshot")).value("fingerprint")},
@@ -81,11 +84,11 @@ int main(int argc, char **argv) {
     if (args[1] == "resolve") {
         QJsonArray unresolved;const auto specs=readObject(get("--contracts")).value("symbols").toObject();
         for(auto it=specs.begin();it!=specs.end();++it)unresolved.append(it.key());
-        writeObject(get("--out"), {{"stateVersion",1},{"complete", false},{"requiredComplete",false},
+        writeObject(get("--out"), {{"stateVersion",1},{"complete", false},{"requiredComplete",mode == "changed"},
             {"accepted",QJsonObject{}},{"unresolved",unresolved},{"pack",readObject(get("--pack"))},
             {"fingerprint",readObject(get("--snapshot")).value("fingerprint")}});
         event({{"event", "candidate"}, {"complete", false}});
-        return 4;
+        return mode == "changed" ? 0 : 4;
     }
     return 2;
 }

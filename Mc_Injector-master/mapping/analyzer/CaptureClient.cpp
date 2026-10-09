@@ -1,5 +1,6 @@
 #include "CaptureClient.h"
 #include "Bytecode.h"
+#include "Resolver.h"
 #include "../ProbeProtocol.h"
 #include <QRegularExpression>
 #include <QTemporaryFile>
@@ -105,7 +106,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v3.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v8.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
@@ -125,6 +126,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                     if (spec.at("kind").string() == "class" &&
                         !d.at("symbols").at(key).string().empty())
                         names.push_back(d.at("symbols").at(key));
+                if (options.contains("--required-only")) names = requiredClassNames(contracts, d.at("symbols")).array();
                 warmup.push_back(Json::Object{{"anchor", d.at("symbols").at("minecraftSignature")},
                                               {"classes", names}});
                 for (const auto &pattern : d.at("detection").array())
@@ -133,15 +135,45 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                                                          {"value", pattern.at("value")},
                                                          {"confidence", pattern.at("confidence")}});
             }
-        request["warmup"] = warmup;
+        if (!options.contains("--detect-only")) request["warmup"] = warmup;
+        detection.push_back(Json::Object{{"family", "Badlion"}, {"value", "badlion"}, {"confidence", 250}});
         request["detection"] = detection;
+    }
+    if (options.contains("--identity-lite")) {
+        Json::Array names, classHints;
+        auto packs = Json::Array{option("--pack").toUtf8().toStdString()};
+        if (options.contains("--identity-packs")) {
+            const auto known = Json::read(filePath(option("--identity-packs")));
+            for (const auto &path : known.at("packs").array()) packs.push_back(path);
+        }
+        for (const auto &path : packs) {
+            const auto pack = Json::read(filePath(QString::fromStdString(path.string())));
+            (void)bindings::parseMappingPack(pack);
+            for (const auto &provider : pack.at("providers").array())
+                for (const auto &dict : provider.at("dictionaries").array()) {
+                    if (options.contains("--required-only")) {
+                        const auto required = requiredClassNames(contracts, dict.at("symbols"));
+                        for (const auto &name : required.array()) names.push_back(name);
+                    } else for (const auto &[key, spec] : contracts.at("symbols").object())
+                        if (spec.at("kind").string() == "class" && !dict.at("symbols").at(key).string().empty())
+                            names.push_back(dict.at("symbols").at(key));
+                    for (const auto &hint : dict.at("detection").array()) if (hint.at("match").integer() <= 1)
+                        classHints.push_back(Json::Object{{"family",dict.at("family")}, {"value",hint.at("value")},
+                            {"prefix",hint.at("match").integer()==1}, {"confidence",hint.at("confidence")}});
+                }
+        }
+        classHints.push_back(Json::Object{{"family","Badlion"}, {"value","Lnet/badlion/"}, {"prefix",true}, {"confidence",250}});
+        classHints.push_back(Json::Object{{"family","Badlion"}, {"value","Lcom/badlion/"}, {"prefix",true}, {"confidence",250}});
+        request["liteClasses"] = names; request["classHints"] = classHints;
     }
     Json paths =
         Json::Object{{"event", "CAPTURE_PATH"},
                      {"standardAttach", Json::Object{{"status", "pending"},
                                                      {"javaRuntime", java.toUtf8().toStdString()}}},
                      {"fallback", Json::Object{{"status", "not-attempted"}}}};
-    for (int attempt = 0; attempt < 2; ++attempt) {
+    const bool nativePreferred = option("--transport") == "native";
+    if (nativePreferred) paths["standardAttach"] = Json::Object{{"status", "skipped"}, {"reason", "pid/processStart transport memo"}};
+    for (int attempt = nativePreferred ? 1 : 0; attempt < 2; ++attempt) {
         const auto rawPath = output.wstring() + L"." +
                              QString::fromStdString(requestId).toStdWString() +
                              (attempt ? L".fallback.capture" : L".standard.capture");
@@ -173,6 +205,9 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                        attempt ? QStringList{QString::number(pid), probe, encoded} : args,
                        attempt ? 25000 : 60000);
         diagnostic["javaRuntime"] = java.toUtf8().toStdString();
+        if (!attempt && diagnostic.at("exitCode") == Json(10))
+            events(Json::Object{{"event", "CAPTURE_TRANSPORT_SELECTED"}, {"transport", "NativeLoader"},
+                {"pid", double(pid)}, {"reason", "standard-attach-explicitly-unsupported"}});
         if (attempt) {
             const auto match = QRegularExpression("McOverlay_Start returned ([0-9]+)")
                                    .match(QString::fromStdString(diagnostic.at("stderr").string()));
@@ -237,6 +272,10 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                 snapshot.at("pid").number() != pid)
                 throw std::runtime_error("stale/mismatched probe response");
             diagnostic["status"] = "captured";
+            events(Json::Object{{"event", "CAPTURE_TRANSPORT_SELECTED"},
+                {"transport", attempt ? "NativeLoader" : "StandardAttach"}, {"pid", double(pid)},
+                {"processStart", snapshot.at("processStart")},
+                {"reason", nativePreferred ? "remembered-pid-processStart" : (attempt ? "standard-attach-unavailable" : "standard-attach-success")}});
             paths[key] = diagnostic;
             events(paths);
             auto stats = snapshot.at("stats");
