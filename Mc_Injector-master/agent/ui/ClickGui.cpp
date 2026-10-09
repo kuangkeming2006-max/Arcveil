@@ -1,6 +1,7 @@
 #include "ClickGui.h"
 #include "AnimatedWidgets.h"
 #include "NavigationLabel.h"
+#include "GuiDrawPolicy.h"
 #include "../UiColors.h"
 #include "../FeatureNavigation.h"
 #include <imgui_internal.h>
@@ -43,6 +44,7 @@ void beginSmoothChild(const char* id, ImVec2 size, SmoothScroll& scroll,
                           fadedScrollbar(ImGuiCol_ScrollbarGrabActive));
     ImGui::BeginChild(id, size, false,
                       extra | ImGuiWindowFlags_NoScrollWithMouse);
+    configureGuiDrawList(ImGui::GetWindowDrawList());
     ImGui::PopStyleColor(4);
 }
 
@@ -202,7 +204,15 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
     const auto& snapshot = frame.snapshot;
     const auto& interactive = frame.interactive;
     auto& io = frame.io;
-    const float uiScale = clickGuiDisplayScale(frame.uiScale,io.DisplaySize.x,io.DisplaySize.y);
+    const float windowScale = clickGuiDisplayScale(frame.uiScale,io.DisplaySize.x,io.DisplaySize.y);
+    // Window dimensions and other renderer surfaces retain their existing
+    // scale. This preference controls only the contents of the Click GUI.
+    const float guiWidth=std::min(920.F*windowScale*std::clamp(m_features.clickGuiWidthPercent,40,150)/100.F,
+        std::max(1.F,io.DisplaySize.x-40.F*windowScale));
+    const float guiHeight=std::min(650.F*windowScale*std::clamp(m_features.clickGuiHeightPercent,40,150)/100.F,
+        std::max(1.F,io.DisplaySize.y-78.F*windowScale));
+    const float requestedElementScale=windowScale*normalizeGuiElementScale(design.elementScale)/100.F;
+    const float uiScale=std::min(requestedElementScale,std::min(guiWidth/460.F,guiHeight/330.F));
     const auto& delta = frame.delta;
     const auto& guiEase = frame.guiEase;
     design.typography=normalizeTypography(design.typography);
@@ -230,19 +240,12 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
 
     // Detached category tabs own the top bar. The feature rail is scoped to
     // one category; global search temporarily spans all six categories.
-    const float baseGuiWidth = std::max(560.0F,std::min(920.0F * static_cast<float>(std::clamp(
-        m_features.clickGuiWidthPercent, 80, 150)) / 100.0F,
-        (io.DisplaySize.x-40.0F*uiScale)/uiScale));
-    // Keep the navigation rail usable at the smallest height while still
-    // allowing generous vertical expansion on larger displays.
-    const float requestedGuiHeight = std::max(620.0F, 650.0F * static_cast<float>(
-        std::clamp(m_features.clickGuiHeightPercent, 80, 150)) / 100.0F);
-    const float baseGuiHeight = std::max(220.0F, std::min(requestedGuiHeight,
-        (io.DisplaySize.y - 78.0F * uiScale) / uiScale));
-    constexpr float baseRailWidth = 194.0F;
+    const float baseGuiWidth=guiWidth/uiScale;
+    const float baseGuiHeight=guiHeight/uiScale;
+    const bool compactWidth=baseGuiWidth<700.F;
+    const bool compactHeight=baseGuiHeight<430.F;
+    const float baseRailWidth=compactWidth?160.F:194.F;
     constexpr float headerHeight = 116.0F;
-    const float guiWidth = baseGuiWidth * uiScale;
-    const float guiHeight = baseGuiHeight * uiScale;
     if (m_clickGuiX < -9000.0F) {
         m_clickGuiX = std::max(8.0F, (io.DisplaySize.x - guiWidth) * 0.5F);
         m_clickGuiY = std::max(8.0F, (io.DisplaySize.y - guiHeight) * 0.16F);
@@ -530,7 +533,9 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
         const float spotlightEase = guiEase;
         // Drive geometry directly from the spring, including its overshoot.
         // A second eased/sine motion would rebound a fraction of a beat later.
-        const float spotlightScale = 0.96F + 0.04F * m_clickGuiProgress;
+        // Opening gathers inward from 126%; closing scatters outward again.
+        // Keep the original spring-driven trajectory and its small overshoot.
+        const float spotlightScale = 1.26F - 0.26F * m_clickGuiProgress;
         const ImVec2 guiCenter(m_clickGuiX + guiWidth * 0.5F,
                                m_clickGuiY + guiHeight * 0.5F);
         // Layout always uses the final rectangle. Once ImGui has generated the
@@ -589,6 +594,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
             const ImVec2 windowPosition = ImGui::GetWindowPos();
             const ImVec2 windowSize = ImGui::GetWindowSize();
             ImDrawList* const windowDraw = ImGui::GetWindowDrawList();
+            configureGuiDrawList(windowDraw,spotlightScale);
             const int parentContentVertexStart = 0;
             ImDrawList* const backgroundDraw = ImGui::GetBackgroundDrawList();
             const int shadowVertexStart = backgroundDraw->VtxBuffer.Size;
@@ -667,10 +673,12 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 windowDraw->AddText(font,pathFont,pathPosition,fadedGuiColor(color),label);
                 pathPosition.x+=font->CalcTextSizeA(pathFont,10000,0,label).x;
             };
-            pathPart("/  ",ImGui::GetFont(),guiMuted);
-            pathPart(navigation::categories[currentCategory],ImGui::GetFont(),guiMuted);
-            pathPart("  /  ",ImGui::GetFont(),guiMuted);
-            pathPart(currentPage,boldFont,guiText);
+            if(!compactWidth) {
+                pathPart("/  ",ImGui::GetFont(),guiMuted);
+                pathPart(navigation::categories[currentCategory],ImGui::GetFont(),guiMuted);
+                pathPart("  /  ",ImGui::GetFont(),guiMuted);
+                pathPart(currentPage,boldFont,guiText);
+            }
             windowDraw->AddLine(ImVec2(windowPosition.x+22*uiScale,windowPosition.y+55*uiScale),
                 ImVec2(windowPosition.x+(baseGuiWidth-24)*uiScale,windowPosition.y+55*uiScale),fadedGuiColor(hairline));
 
@@ -684,7 +692,15 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
             };
             const float tabGap=8*uiScale;
             const float tabWidth=((baseGuiWidth-44)*uiScale-5*tabGap)/6;
-            for(int category=0;category<6;++category) {
+            if(compactWidth) {
+                ImGui::SetCursorScreenPos(ImVec2(windowPosition.x+22*uiScale,windowPosition.y+66*uiScale));
+                ImGui::SetNextItemWidth((baseGuiWidth-44)*uiScale);
+                int category=design.category;
+                if(widgets::Combo("##categorySwitcher",&category,navigation::categories.data(),6)) {
+                    design.category=category;design.railElapsed=0;m_navigationScroll={};
+                    selectPage(design.rememberedPage[category]);
+                }
+            } else for(int category=0;category<6;++category) {
                 const ImVec2 pos(windowPosition.x+22*uiScale+category*(tabWidth+tabGap),windowPosition.y+70*uiScale);
                 ImGui::SetCursorScreenPos(pos);ImGui::PushID(category+400);
                 const auto id=ImGui::GetID("category");
@@ -755,6 +771,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 ImVec2((baseRailWidth - 24.0F) * uiScale,
                        (baseGuiHeight - 180.0F) * uiScale), m_navigationScroll, delta);
             ImDrawList* const navDraw = ImGui::GetWindowDrawList();
+            configureGuiDrawList(navDraw,spotlightScale);
             const ImVec2 navOrigin = ImGui::GetCursorScreenPos();
             const float rowWidth = ImGui::GetContentRegionAvail().x;
             windowDraw->AddText(boldFont,ImGui::GetFontSize()*.82F,
@@ -835,7 +852,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 float& selection=m_clickGuiNavSelection[static_cast<std::size_t>(row.page)];
                 selection+=((selected?1.0F:0.0F)-selection)*(1.0F-std::exp(-20.0F*delta));
                 const bool enabled=enabledPage(row.page);
-                const ImVec2 rowEnd(navOrigin.x+rowWidth,position.y+38.0F*uiScale);
+                const ImVec2 rowEnd(navOrigin.x+rowWidth-2.F*uiScale,position.y+38.0F*uiScale);
                 const ImVec4 enabledSurface=mixColor(guiRail,guiFrame,.46F);
                 float& enabledFade=m_clickGuiNavEnabled[static_cast<std::size_t>(row.page)];
                 enabledFade=approachExponential(enabledFade,enabled?1.0F:0.0F,15.0F,delta);
@@ -845,9 +862,11 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     navDraw->AddRectFilled(position,rowEnd,
                         fadedGuiColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,
                             selection*(enabled?0.20F:0.12F))),7.0F*uiScale);
-                    navDraw->AddRect(position,rowEnd,
+                    const float inset=1.F*uiScale+navDraw->_FringeScale;
+                    navDraw->AddRect(ImVec2(position.x+inset,position.y+inset),
+                        ImVec2(rowEnd.x-inset,rowEnd.y-inset),
                         fadedGuiColor(ImVec4(guiAccent.x,guiAccent.y,guiAccent.z,selection*.35F)),
-                        7.0F*uiScale,0,uiScale);
+                        std::max(0.F,7.F*uiScale-inset),0,uiScale/spotlightScale);
                 }
                 const float statusX=rowEnd.x-14*uiScale;
                 const auto statusColor=mixColor(mixColor(guiFrame,guiMuted,.45F),guiSuccess,enabledFade);
@@ -856,16 +875,18 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 hover += ((ImGui::IsItemHovered() ? 1.0F : 0.0F) - hover) *
                     (1.0F - std::exp(-18.0F * delta));
                 if (hover > 0.005F) navDraw->AddRectFilled(position,
-                    ImVec2(navOrigin.x + rowWidth, position.y + 38.0F * uiScale),
+                    rowEnd,
                     fadedGuiColor(ImVec4(guiAccent.x, guiAccent.y, guiAccent.z, 0.08F * hover)), 9.0F * uiScale);
                 ImFont* font=selected ? boldFont : ImGui::GetFont();
                 ImVec2 textPosition(position.x + 16.0F * uiScale,
                     position.y + (38.0F * uiScale-ImGui::GetFontSize())*0.5F);
-                textPosition.x+=hover*2*uiScale;
                 float navigationFont=ImGui::GetFontSize()*.96F;
                 const float navigationWidth=font->CalcTextSizeA(navigationFont,1000,0,row.label).x;
-                navigationFont*=std::min(1.F,(statusX-10*uiScale-textPosition.x)/std::max(1.F,navigationWidth));
+                // Reserve the complete hover travel before fitting the font;
+                // hovering must never select a different baked font size.
+                navigationFont*=std::min(1.F,(statusX-12*uiScale-textPosition.x)/std::max(1.F,navigationWidth));
                 navigationFont=std::floor(navigationFont);
+                textPosition.x+=hover*2*uiScale;
                 const ImVec4 labelColor=mixColor(guiMuted,guiText,std::max(selection,hover*.75F));
                 const ImVec4 flowColor=mixColor(ImVec4(1,1,1,1),ImVec4(.26F,.16F,.54F,1),theme);
                 drawNavigationLabel(navDraw,font,navigationFont,textPosition,row.label,
@@ -916,17 +937,22 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 "Source-aware impulse suppression, with an optional wildcard"}};
             const int page = std::clamp(m_clickGuiPage, 0, 25);
             const float contentX = windowPosition.x + (baseRailWidth + 22.0F) * uiScale;
-            windowDraw->AddText(boldFont, ImGui::GetFontSize() * 1.52F,
-                ImVec2(contentX, windowPosition.y + 135.0F * uiScale),
+            const float headingWidth=std::max(20.F,(baseGuiWidth-baseRailWidth-(compactWidth?130.F:210.F))*uiScale);
+            const char* pageTitle=pageTitles[static_cast<std::size_t>(page)];
+            const float titleSize=ImGui::GetFontSize()*(compactHeight?1.18F:1.52F);
+            const float fittedTitle=titleSize*std::min(1.F,headingWidth/
+                std::max(1.F,boldFont->CalcTextSizeA(titleSize,10000,0,pageTitle).x));
+            windowDraw->AddText(boldFont, fittedTitle,
+                ImVec2(contentX, windowPosition.y + (compactHeight?132.F:135.F) * uiScale),
                 fadedGuiColor(guiText),
-                pageTitles[static_cast<std::size_t>(page)]);
+                pageTitle);
             const float descriptionFont=ImGui::GetFontSize()*.92F;
             const float descriptionWidth=(baseGuiWidth-baseRailWidth-44)*uiScale;
             const char* description=pageDescriptions[static_cast<std::size_t>(page)];
             const float descriptionHeight=ImGui::GetFont()->CalcTextSizeA(
                 descriptionFont,10000,descriptionWidth,description).y;
-            const float bodyTop=std::max(220.F,173.F+descriptionHeight/uiScale+23.F);
-            windowDraw->AddText(ImGui::GetFont(),descriptionFont,
+            const float bodyTop=compactHeight?188.F:std::max(220.F,173.F+descriptionHeight/uiScale+23.F);
+            if(!compactHeight) windowDraw->AddText(ImGui::GetFont(),descriptionFont,
                 ImVec2(contentX, windowPosition.y + 173.0F * uiScale),
                 fadedGuiColor(guiMuted),description,nullptr,descriptionWidth);
             windowDraw->AddLine(
@@ -987,10 +1013,10 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
             }
             if (pageMaster != nullptr && pageMasterAnimation != nullptr) {
                 ImGui::SetCursorScreenPos(ImVec2(
-                    windowPosition.x + (baseGuiWidth - 134.0F) * uiScale,
+                    windowPosition.x + (baseGuiWidth - (compactWidth?91.F:170.F)) * uiScale,
                     windowPosition.y + 133.0F * uiScale));
                 const bool masterChanged = animatedToggle(
-                    "Enabled", *pageMaster, *pageMasterAnimation, uiScale);
+                    compactWidth?"##Enabled":"Enabled", *pageMaster, *pageMasterAnimation, uiScale);
                 if (page == 11 && masterChanged) {
                     m_blacklistAction = {};
                     m_blacklistAction.type = BlacklistAction::Type::Settings;
@@ -1009,6 +1035,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     changed |= masterChanged;
                 }
             } else {
+                if(!compactWidth)
                 windowDraw->AddText(boldFont, ImGui::GetFontSize() * 0.84F,
                     ImVec2(windowPosition.x + (baseGuiWidth - 79.0F) * uiScale,
                            windowPosition.y + 148.0F * uiScale),
@@ -1094,6 +1121,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                        std::max(20.F,baseGuiHeight-bodyTop-25.F) * uiScale),
                 m_settingsScroll[static_cast<std::size_t>(page)], delta,
                 ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            configureGuiDrawList(ImGui::GetWindowDrawList(),spotlightScale);
             ImGui::PushTextWrapPos(0.F);
             const auto sectionTitle = [&](const char* text) noexcept {
                 ImGui::Spacing();
@@ -1416,6 +1444,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                             ImGuiWindowFlags_NoScrollWithMouse|
                             (progress<0.985F?ImGuiWindowFlags_NoInputs:0));
                         ImDrawList* const bodyDraw=ImGui::GetWindowDrawList();
+                        configureGuiDrawList(bodyDraw,spotlightScale);
                         bodyDraw->PushClipRect(
                             ImVec2(headerMin.x,headerMin.y+headerSize.y),
                             ImVec2(headerMin.x+headerSize.x,
@@ -1708,6 +1737,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 sectionTitle("SAVED PLAYERS");
                 ImGui::BeginChild("##blacklistEntries", ImVec2(0.0F, 190.0F * uiScale),
                                   false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                configureGuiDrawList(ImGui::GetWindowDrawList(),spotlightScale);
                 for (std::uint32_t index = 0U; index < m_blacklist.count; ++index) {
                     const BlacklistEntry& entry = m_blacklist.entries[index];
                     ImGui::PushID(static_cast<int>(index));
@@ -1992,8 +2022,9 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     "Normal slot","Sword","Blocks","Shears","Pickaxe","Axe"}};
                 const float available=ImGui::GetContentRegionAvail().x;
                 const float inset=18.0F*uiScale;
-                const float rowHeight=78.0F*uiScale;
-                const float comboWidth=std::min(194.0F*uiScale,available*0.43F);
+                const bool stacked=available<440.F*uiScale;
+                const float rowHeight=(stacked?126.F:78.F)*uiScale;
+                const float comboWidth=stacked?available-inset*2:std::min(194.0F*uiScale,available*0.43F);
                 for(std::size_t slot=0;slot<m_features.smartHotbarActions.size();++slot) {
                     ImGui::PushID(static_cast<int>(slot));
                     const ImVec2 start=ImGui::GetCursorScreenPos();
@@ -2016,7 +2047,7 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                         fadedGuiColor(guiText),label);
                     draw->AddText(ImVec2(labelX,start.y+43*uiScale),fadedGuiColor(guiMuted),"Minecraft key");
                     ImGui::SetCursorScreenPos(ImVec2(end.x-inset-comboWidth,
-                        start.y+(rowHeight-ImGui::GetFrameHeight())*.5F));
+                        stacked?start.y+76*uiScale:start.y+(rowHeight-ImGui::GetFrameHeight())*.5F));
                     int& action=m_features.smartHotbarActions[slot];
                     action=std::clamp(action,0,5);
                     ImGui::SetNextItemWidth(comboWidth);
@@ -2032,6 +2063,15 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     "If the category is already in the hotbar it is selected directly. Otherwise the first matching main-inventory stack is swapped into the pressed logical slot.");
                 ImGui::PopStyleColor();
             } else {
+                sectionTitle("GUI ELEMENT SIZE");
+                ImGui::SetNextItemWidth(360*uiScale);
+                if(widgets::SliderInt("Element size",&design.elementScale,
+                    minimumGuiElementScale,maximumGuiElementScale,"%d%%",
+                    ImGuiSliderFlags_AlwaysClamp)) design.elementScaleDirty=true;
+                ImGui::TextWrapped("Changes GUI text, controls and spacing. HUDs and other windows keep their size. Small windows fit the elements automatically.");
+                if(widgets::Button("Restore element size")) {
+                    design.elementScale=100;design.elementScaleDirty=true;
+                }
                 sectionTitle("TYPOGRAPHY");
                 ImGui::SetNextItemWidth(360*uiScale);
                 if(widgets::SliderInt("Font size",&design.typography.size,
@@ -2071,11 +2111,11 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 }
                 ImGui::SetNextItemWidth(320.0F * uiScale);
                 changed |= widgets::SliderInt("Window width",
-                    &m_features.clickGuiWidthPercent, 80, 150, "%d%%",
+                    &m_features.clickGuiWidthPercent, 40, 150, "%d%%",
                     ImGuiSliderFlags_AlwaysClamp);
                 ImGui::SetNextItemWidth(320.0F * uiScale);
                 changed |= widgets::SliderInt("Window height",
-                    &m_features.clickGuiHeightPercent, 80, 150, "%d%%",
+                    &m_features.clickGuiHeightPercent, 40, 150, "%d%%",
                     ImGuiSliderFlags_AlwaysClamp);
                 ImGui::SetNextItemWidth(320.0F * uiScale);
                 changed |= widgets::SliderInt("Gaussian background blur",

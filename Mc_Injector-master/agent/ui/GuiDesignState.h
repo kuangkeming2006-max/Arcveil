@@ -1,5 +1,6 @@
 #pragma once
 #include "GuiTypography.h"
+#include "GuiLayout.h"
 #include <array>
 #include <cstdint>
 #include <unordered_map>
@@ -14,6 +15,8 @@ struct ControlMotion {
 struct ClickGuiDesignState {
     GuiTypography typography;
     bool typographyDirty=false;
+    int elementScale=100;
+    bool elementScaleDirty=false;
     int category=-1;
     std::array<int,6> rememberedPage{{8,4,0,3,11,13}};
     std::array<float,6> categorySelection{};

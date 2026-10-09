@@ -16,6 +16,8 @@ namespace mcoverlay::protocol {
 //   STATE_CHANGED <visible:0|1> <interactive:0|1>\n
 //   GUI_TYPOGRAPHY_CHANGED <size:14..24> <weight:400|600|700>\n
 //   GUI_TYPOGRAPHY_APPLIED <size:14..24> <weight:400|600|700>\n
+//   GUI_ELEMENT_SCALE_CHANGED <percent:60..150>\n
+//   GUI_ELEMENT_SCALE_APPLIED <percent:60..150>\n
 //   DETACH_COMPLETE\n
 //   STATUS <single-line-text>\n
 //   ERROR <code> <single-line-text>\n
@@ -23,6 +25,7 @@ namespace mcoverlay::protocol {
 // Controller -> agent:
 //   STATE <visible:0|1> <interactive:0|1>\n
 //   GUI_TYPOGRAPHY <size:14..24> <weight:400|600|700>\n
+//   GUI_ELEMENT_SCALE <percent:60..150>\n
 //   DETACH\n
 //
 // A broken pipe hides the overlay and leaves the signed/normal JVM agent

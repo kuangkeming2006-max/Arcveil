@@ -1,5 +1,6 @@
 #include "OverlayManager.h"
 #include "../agent/ui/GuiTypography.h"
+#include "../agent/ui/GuiLayout.h"
 #include "OverlayManagerCodec.internal.h"
 
 #include <QCoreApplication>
@@ -145,11 +146,13 @@ bool OverlayManager::applyConfig(const QString &requestedName)
     emit menuHotkeyChanged();
     emit guiScaleIndexChanged();
     emit guiTypographyChanged();
+    emit guiElementScaleChanged();
     emit configStateChanged();
     sendFeatureSnapshot();
     sendBindSnapshot();
     sendGuiScaleSnapshot();
     sendGuiTypographySnapshot();
+    sendGuiElementScaleSnapshot();
     sendMediaSettings();
     setStatusMessage(QStringLiteral("Applied config “%1”").arg(name));
     return true;
@@ -185,6 +188,8 @@ void OverlayManager::loadFeatureSettings()
         settings.value(QStringLiteral("guiFontSize"),18).toInt(),
         settings.value(QStringLiteral("guiFontWeight"),600).toInt()});
     m_guiFontSize=typography.size;m_guiFontWeight=typography.weight;
+    m_guiElementScale=mcoverlay::ui::normalizeGuiElementScale(
+        settings.value(QStringLiteral("guiElementScale"),100).toInt());
     m_espEnabled = settings.value(QStringLiteral("espEnabled"), true).toBool();
     m_entityEspEnabled = settings.value(QStringLiteral("entityEspEnabled"), true).toBool();
     m_entityEspPlayersOnly = settings.value(QStringLiteral("entityEspPlayersOnly"), false).toBool();
@@ -312,9 +317,9 @@ void OverlayManager::loadFeatureSettings()
     m_aimAttackCps=std::clamp(settings.value(
         QStringLiteral("aimAttackCps"),10).toInt(),1,20);
     m_clickGuiWidthPercent = std::clamp(settings.value(
-        QStringLiteral("clickGuiWidthPercent"), 100).toInt(), 80, 150);
+        QStringLiteral("clickGuiWidthPercent"), 100).toInt(), 40, 150);
     m_clickGuiHeightPercent = std::clamp(settings.value(
-        QStringLiteral("clickGuiHeightPercent"), 100).toInt(), 80, 150);
+        QStringLiteral("clickGuiHeightPercent"), 100).toInt(), 40, 150);
     m_clickGuiOpacity = std::clamp(settings.value(
         QStringLiteral("clickGuiOpacity"), 96).toInt(), 35, 100);
     m_featureExtraBits = settings.value(
@@ -405,6 +410,7 @@ void OverlayManager::flushFeatureSettings()
     settings.setValue(QStringLiteral("guiScaleIndex"), m_guiScaleIndex);
     settings.setValue(QStringLiteral("guiFontSize"),m_guiFontSize);
     settings.setValue(QStringLiteral("guiFontWeight"),m_guiFontWeight);
+    settings.setValue(QStringLiteral("guiElementScale"),m_guiElementScale);
     settings.setValue(QStringLiteral("espEnabled"), m_espEnabled);
     settings.setValue(QStringLiteral("entityEspEnabled"), m_entityEspEnabled);
     settings.setValue(QStringLiteral("entityEspPlayersOnly"), m_entityEspPlayersOnly);

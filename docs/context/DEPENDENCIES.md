@@ -54,6 +54,11 @@
 新增独立 GUI_TYPOGRAPHY / GUI_TYPOGRAPHY_CHANGED，不扩展既有 V3 位置字段。
 controller → ui/GuiTypography.h 为另一纯值跨目录依赖，仅校验边界和权重。
 
+2026-10-08：controller / agent-runtime → ui/GuiLayout.h 仅依赖 GUI 元素缩放的纯值
+范围策略。GUI_ELEMENT_SCALE / GUI_ELEMENT_SCALE_CHANGED 是独立 IPC 消息；renderer
+通过 setGuiElementScale / consumeGuiElementScaleChange 保持原 dirty mailbox 边界。
+GUI 元素缩放不改变其他窗口或 HUD 使用的共享 uiScale。
+
 | A → B | 原因 | 使用的接口与入口 | 内部读取策略 |
 | --- | --- | --- | --- |
 | controller → game-bindings 下的纯策略 | 验证 Smart Hotbar 打包值 | `mcoverlay::hotbar::validPacked`，`P/agent/bindings/SmartHotbarPolicy.h`；`OverlayManagerCodec.internal.cpp` | 允许读此纯值契约头；不允许据此扩展到 GameBindings.cpp/JNI。未来可另议 shared-contracts，机械拆分阶段不搬路径 |
@@ -182,7 +187,7 @@ fingerprints are retained as diagnostic receipts, not reusable keys. Probe-v8 us
 scoped lite/detail and remembered transport; no registry mutation or new Agent IPC.
 
 v56.5 supersedes the fast-path portion above: Cache -> portable bindingIdentity proof
--> Probe-v10 compact required check -> Analyzer validate-cache -> MappingService
+-> Probe-v13 compact required check -> Analyzer validate-cache -> MappingService
 runtimeBinding -> pinned Agent GameBindings JNI lookup -> BINDING_READY -> Controller
 Active (also requires renderer readiness). Cold/miss/drift retains full validation and
 atomic cache publication. Immutable installed-content proof never contains loader

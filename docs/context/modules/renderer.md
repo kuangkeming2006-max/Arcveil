@@ -18,6 +18,7 @@ runtime 提供 GameSnapshot、FeatureSettings、Hypixel/PlayerStats/Blacklist/Me
 - initialized/ownsCurrentContext 与 shutdownWithCurrentContext/abandonAfterHookDisabled 表达 GL context 生命周期。
 - setFeatureSettings 与 consumeFeatureSettings；setMenuHotkey/setGuiScaleIndex 及 consume 改动。
 - setGuiTypography/consumeGuiTypographyChange：独立字号/字重设置；dirty 保护先发布再合并外部快照。
+- setGuiElementScale/consumeGuiElementScaleChange：GUI 元素缩放 60–150%，默认 100%；独立 dirty mailbox，不修改 HUD 或其他窗口的共享缩放。
 - set*Snapshot 与 consumeHypixelQuery/consumeBlacklistAction/consumeMediaAction/consumeMediaSettings。
 - consumeClickGuiToggle/consumeBedRescanRequest/setGameScreenOpen。
 - shieldAttacker 只从 UI 选择和 snapshot 计算标识值，runtime 将其纳入游戏设置；不执行攻击或 JNI。
@@ -40,6 +41,8 @@ runtime 提供 GameSnapshot、FeatureSettings、Hypixel/PlayerStats/Blacklist/Me
 | ui/UiModel.h | 无平台依赖的 FeatureSettings、媒体、统计、黑名单值类型；virtual-key 整数保留原 wire 编码 |
 | ui/GuiDesignState.h | 无 ImGui 依赖的分类、页面记忆、控件动效状态；OverlayRenderer public header 只依赖值类型 |
 | ui/GuiTypography.h | 字号 14–24、字重 400/600/700 校验与原子打包；Click GUI 分辨率适配策略 |
+| ui/GuiLayout.h | GUI 元素缩放的范围校验与归一化；无平台和 ImGui 依赖 |
+| ui/GuiDrawPolicy.h | GUI draw list 的小数文本位置和几何边缘抗锯齿策略；动画缩放后保持一个屏幕像素的 fringe |
 | ui/ClickGui.h / .cpp | 完整共享 Click GUI，顶部六分类独立标签、分类内功能侧栏、全局搜索、24 个设置页 |
 | ui/AnimatedWidgets.h / .cpp | 每个 GUI 独立持有的 hover/press/value/focus 动效；开关、滑块、菜单、按钮、色彩与输入框 |
 | ui/NavigationLabel.h | 以原 FeatureNavigation::glyphGlow 绘制已启用侧栏功能的逐字往返流光；适配字重、字号与 reduced motion |
@@ -89,6 +92,13 @@ framebuffer 高度补偿密度并按视口收敛布局，2560×1600 / M 下正�
 字体按实际大小由 ImGui 1.92 动态 atlas 光栅化；副标题可换行，slider 为长标签留出
 额外高度。字体编辑走 GUI_TYPOGRAPHY 独立消息，不改变 FEATURE_STATE_V3 的位置字段。
 新增 shared cpp 已同步加入 Agent 和 McOverlayRendererTests 构建目标。
+
+Interface 的 Element size 独立调整 GUI 文字、控件和间距；通过 GUI_ELEMENT_SCALE
+同步与持久化，不扩展 FEATURE_STATE_V3 位置字段。窗口宽高支持 40–150%，小窗口
+自动限制内容缩放以保持可用视口；窄布局改用分类下拉菜单和堆叠 Hotbar 设置行。
+窗口尺寸仍由原档位和宽高百分比决定。侧栏 hover 预留完整位移后再确定字号，逐字
+流光使用小数顶点位置；选中边框在裁剪边界内绘制，并补偿打开/关闭动画的缩放。
+下拉框保留 Dear ImGui BeginCombo/Selectable 的交互和键盘行为，自绘圆角背景、箭头和选中标记。
 
 ## v54 IME 生命周期验证入口
 

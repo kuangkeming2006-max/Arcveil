@@ -192,6 +192,9 @@ struct ControllerResponsivenessTests {
         manager.setGuiScaleIndex(3);
         manager.setGuiFontSize(21);
         manager.setGuiFontWeight(700);
+        manager.setGuiElementScale(125);
+        manager.setClickGuiWidthPercent(40);
+        manager.setClickGuiHeightPercent(40);
         while(manager.m_featureSettingsStoreTimer.isActive() && persistenceClock.elapsed()<3000)
             QCoreApplication::processEvents(QEventLoop::AllEvents,5);
         if(manager.m_featureSettingsStoreTimer.isActive() ||
@@ -202,9 +205,14 @@ struct ControllerResponsivenessTests {
         manager.setGuiScaleIndex(0);
         manager.setGuiFontSize(14);
         manager.setGuiFontWeight(400);
+        manager.setGuiElementScale(60);
+        manager.setClickGuiWidthPercent(100);
+        manager.setClickGuiHeightPercent(100);
         if(!manager.applyConfig(QStringLiteral("Input profile")) ||
            manager.menuHotkey()!=119 || manager.guiScaleIndex()!=3 ||
-           manager.guiFontSize()!=21 || manager.guiFontWeight()!=700) {
+           manager.guiFontSize()!=21 || manager.guiFontWeight()!=700 ||
+           manager.guiElementScale()!=125 || manager.clickGuiWidthPercent()!=40 ||
+           manager.clickGuiHeightPercent()!=40) {
             std::puts("FAIL input config restore"); return false;
         }
         manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 25 600");
@@ -216,6 +224,45 @@ struct ControllerResponsivenessTests {
         manager.processAgentLine("GUI_TYPOGRAPHY_CHANGED 20 600");
         if(manager.guiFontSize()!=20 || manager.guiFontWeight()!=600) {
             std::puts("FAIL native typography echo");return false;
+        }
+        int elementNotifications=0;
+        QObject::connect(&manager,&OverlayManager::guiElementScaleChanged,[&]{++elementNotifications;});
+        for(const char* invalid:{"GUI_ELEMENT_SCALE_CHANGED 59","GUI_ELEMENT_SCALE_CHANGED 151",
+            "GUI_ELEMENT_SCALE_CHANGED nope","GUI_ELEMENT_SCALE_CHANGED 120 extra"})
+            manager.processAgentLine(invalid);
+        if(manager.guiElementScale()!=125 || elementNotifications!=0) {
+            std::puts("FAIL invalid element scale accepted");return false;
+        }
+        manager.processAgentLine("GUI_ELEMENT_SCALE_CHANGED 120");
+        manager.processAgentLine("GUI_ELEMENT_SCALE_CHANGED 120");
+        if(manager.guiElementScale()!=120 || manager.guiScaleIndex()!=3 ||
+            manager.guiFontSize()!=20 || elementNotifications!=1) {
+            std::puts("FAIL independent element scale echo");return false;
+        }
+        manager.setGuiElementScale(0);
+        if(manager.guiElementScale()!=60) return false;
+        manager.setGuiElementScale(999);
+        if(manager.guiElementScale()!=150) return false;
+        manager.setGuiElementScale(120);
+        manager.flushFeatureSettings();
+        {
+            OverlayManager restored;
+            if(restored.guiElementScale()!=120 || restored.clickGuiWidthPercent()!=40 ||
+                restored.clickGuiHeightPercent()!=40) {
+                std::puts("FAIL GUI layout persistence");return false;
+            }
+        }
+        // V3 payload positions are unchanged: 78/79 include the message token.
+        auto layoutFields=v3Fields;
+        layoutFields[77]="40";layoutFields[78]="40";
+        manager.processAgentLine("FEATURE_STATE_CHANGED_V3 "+layoutFields.join(' '));
+        if(manager.clickGuiWidthPercent()!=40 || manager.clickGuiHeightPercent()!=40) {
+            std::puts("FAIL 40 percent layout echo");return false;
+        }
+        layoutFields[77]="39";layoutFields[78]="100";
+        manager.processAgentLine("FEATURE_STATE_CHANGED_V3 "+layoutFields.join(' '));
+        if(manager.clickGuiWidthPercent()!=40 || manager.clickGuiHeightPercent()!=40) {
+            std::puts("FAIL invalid layout echo accepted");return false;
         }
         // Optional statistics failures may update status, but must keep the
         // authenticated transport and resident Agent session alive.

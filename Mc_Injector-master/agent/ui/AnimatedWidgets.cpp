@@ -1,9 +1,11 @@
 #include "AnimatedWidgets.h"
+#include "GuiDrawPolicy.h"
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace mcoverlay::ui {
 namespace {
@@ -60,7 +62,14 @@ bool Button(const char* label,ImVec2 size) noexcept {
     draw->AddRectFilled(a,b,color(bg),9*unit);
     auto border=mix(surface(),accent(),m.hover*.35F);border.w=.65F;
     draw->AddRect(a,b,color(border),9*unit,0,unit);
-    labelText(draw,add(a,(size.x-t.x)*.5F,(size.y-t.y)*.5F),label,color(text()));
+    const auto textFlags=draw->Flags;
+    draw->Flags |= ImDrawListFlags_TextNoPixelSnap;
+    const float fontSize=ImGui::GetFontSize()*std::min(1.F,std::max(1.F,size.x-20*unit)/std::max(1.F,t.x));
+    const auto fitted=ImGui::GetFont()->CalcTextSizeA(fontSize,10000,0,label,ImGui::FindRenderedTextEnd(label));
+    const ImVec4 clip(a.x+8*unit,a.y,b.x-8*unit,b.y);
+    draw->AddText(ImGui::GetFont(),fontSize,add(a,(size.x-fitted.x)*.5F,(size.y-fitted.y)*.5F),
+        color(text()),label,ImGui::FindRenderedTextEnd(label),0,&clip);
+    draw->Flags=textFlags;
     focusRing(draw,a,b,m.focus,9*unit);
     return changed;
 }
@@ -131,36 +140,79 @@ bool SliderInt(const char* label,int* value,int minimum,int maximum,const char* 
     return changed;
 }
 bool BeginCombo(const char* label,const char* preview,ImGuiComboFlags flags) noexcept {
-    const auto id=ImGui::GetID(label);
-    auto& m=design->controls[id];
+    // Based on Dear ImGui's documented BeginCombo custom-preview pattern:
+    // https://github.com/ocornut/imgui/issues/1658. Retain its popup/navigation
+    // behavior; draw a single rounded field without a boxed arrow segment.
+    const std::string hiddenLabel=std::string("###")+label;
+    const float requestedWidth=ImGui::CalcItemWidth();
+    const char* labelEnd=ImGui::FindRenderedTextEnd(label);
+    if(labelEnd!=label) ImGui::TextWrapped("%.*s",static_cast<int>(labelEnd-label),label);
+    const auto id=ImGui::GetID(hiddenLabel.c_str());
     const auto p=ImGui::GetCursorScreenPos();
-    const float width=std::min(ImGui::CalcItemWidth(),std::max(1.F,ImGui::GetContentRegionAvail().x));
-    const auto mouse=ImGui::GetIO().MousePos;
-    const bool hovered=mouse.x>=p.x && mouse.x<=p.x+width && mouse.y>=p.y && mouse.y<=p.y+34*unit;
-    m=motion(id,hovered,ImGui::IsPopupOpen(id,ImGuiPopupFlags_None));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*unit,8*unit});
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8*unit);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding,10*unit);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,mix(surface(),accent(),m.hover*.1F));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,mix(surface(),accent(),m.hover*.1F));
-    ImGui::PushStyleColor(ImGuiCol_Button,mix(surface(),accent(),m.hover*.15F));
-    const bool open=ImGui::BeginCombo(label,preview,flags);
-    ImGui::PopStyleColor(3);ImGui::PopStyleVar(3);
+    const float width=std::min(requestedWidth,std::max(1.F,ImGui::GetContentRegionAvail().x));
+    const float height=ImGui::GetFontSize()+18*unit;
+    const auto end=add(p,width,height);
+    auto* draw=ImGui::GetWindowDrawList();
+    const bool hovered=ImGui::IsMouseHoveringRect(p,end);
+    const auto fieldSurface=surface();
+    const auto fieldText=text();
+    const auto fieldAccent=accent();
+    ImGui::SetNextItemWidth(width);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{14*unit,9*unit});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,10*unit);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding,12*unit);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{8*unit,8*unit});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{0,5*unit});
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,{0,0,0,0});
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,{0,0,0,0});
+    ImGui::PushStyleColor(ImGuiCol_PopupBg,mix(fieldSurface,fieldText,.035F));
+    const bool open=ImGui::BeginCombo(hiddenLabel.c_str(),nullptr,
+        (flags & ~ImGuiComboFlags_NoPreview) | ImGuiComboFlags_NoArrowButton | ImGuiComboFlags_CustomPreview);
+    ImGui::PopStyleColor(3);ImGui::PopStyleVar(5);
+    auto& m=motion(id,hovered,open);
+    draw->AddRectFilled(p,end,color(mix(fieldSurface,fieldAccent,.05F+m.hover*.08F+m.press*.04F)),10*unit);
+    auto border=mix(fieldSurface,fieldAccent,.18F+m.hover*.25F+m.press*.25F);
+    draw->AddRect(add(p,.75F*unit,.75F*unit),add(end,-.75F*unit,-.75F*unit),color(border),9*unit,0,unit);
+    const ImVec4 textClip(p.x+14*unit,p.y,end.x-38*unit,end.y);
+    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),add(p,14*unit,9*unit),
+        color(fieldText),preview?preview:"Choose",nullptr,0,&textClip);
+    const ImVec2 centre(end.x-21*unit,p.y+height*.5F);
+    const float angle=m.press*3.14159265F;
+    const auto point=[&](float x,float y) {
+        return ImVec2(centre.x+(x*std::cos(angle)-y*std::sin(angle))*unit,
+                      centre.y+(x*std::sin(angle)+y*std::cos(angle))*unit);
+    };
+    draw->AddLine(point(-4,-2),point(0,2),color(mix(fieldText,fieldAccent,m.press)),1.7F*unit);
+    draw->AddLine(point(0,2),point(4,-2),color(mix(fieldText,fieldAccent,m.press)),1.7F*unit);
+    focusRing(draw,p,end,m.focus,10*unit);
+    if(open) configureGuiDrawList(ImGui::GetWindowDrawList());
     return open;
 }
 bool Selectable(const char* label,bool selected,ImGuiSelectableFlags flags,ImVec2 size) noexcept {
+    const auto p=ImGui::GetCursorScreenPos();
     const auto id=ImGui::GetID(label);
-    auto& m=design->controls[id];
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,mix(surface(),accent(),m.hover*.20F));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,mix(surface(),accent(),.24F));
-    if(size.y<=0)size.y=28*unit;
+    if(size.x<=0)size.x=std::max(1.F,ImGui::GetContentRegionAvail().x);
+    if(size.y<=0)size.y=ImGui::GetFontSize()+18*unit;
+    for(auto index:{ImGuiCol_Header,ImGuiCol_HeaderHovered,ImGuiCol_HeaderActive,ImGuiCol_Text})
+        ImGui::PushStyleColor(index,{0,0,0,0});
     const bool pressed=ImGui::Selectable(label,selected,flags,size);
-    motion(id,ImGui::IsItemHovered(),ImGui::IsItemActive());
-    ImGui::PopStyleColor(2);
+    const bool hovered=ImGui::IsItemHovered(),active=ImGui::IsItemActive();
+    ImGui::PopStyleColor(4);
+    auto& m=motion(id,hovered,active);
+    auto* draw=ImGui::GetWindowDrawList();
+    const auto a=add(p,2*unit,0),b=add(p,size.x-2*unit,size.y);
+    draw->AddRectFilled(a,b,color(mix(surface(),accent(),(selected?.16F:0)+m.hover*.12F)),7*unit);
+    const ImVec4 clip(a.x+12*unit,a.y,b.x-30*unit,b.y);
+    draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),add(a,12*unit,9*unit),
+        color(selected?accent():text()),label,ImGui::FindRenderedTextEnd(label),0,&clip);
+    if(selected) ImGui::RenderCheckMark(draw,add(b,-22*unit,-size.y*.5F-5*unit),color(accent()),10*unit);
+    focusRing(draw,a,b,m.focus,7*unit);
     return pressed;
 }
 bool Combo(const char* label,int* current,const char* const items[],int count,int height) noexcept {
-    static_cast<void>(height);
+    const int visibleRows=height>0?height:std::min(count,8);
+    ImGui::SetNextWindowSizeConstraints({0,0},{10000.F,
+        visibleRows*(ImGui::GetFontSize()+23*unit)+16*unit});
     bool changed=false;
     if(BeginCombo(label,*current>=0&&*current<count?items[*current]:"Choose")) {
         for(int i=0;i<count;++i) {
@@ -214,8 +266,14 @@ void animatePopups() noexcept {
 bool animatedToggle(const char* label,bool& value,float& animation,float scale) noexcept {
     unit=scale;
     const auto p=ImGui::GetCursorScreenPos();
-    const float w=std::strcmp(label,"Enabled")==0?110*unit:std::max(1.F,ImGui::GetContentRegionAvail().x);
-    const float h=36*unit;
+    const bool master=std::strcmp(label,"Enabled")==0 || std::strcmp(label,"##Enabled")==0;
+    const bool hasLabel=ImGui::FindRenderedTextEnd(label)!=label;
+    const float w=master?(hasLabel?146.F:67.F)*unit:std::max(1.F,ImGui::GetContentRegionAvail().x);
+    const float inset=master?10.F*unit:14.F*unit;
+    const float labelWidth=std::max(1.F,w-43*unit-inset*2-16*unit);
+    const float labelHeight=hasLabel?ImGui::GetFont()->CalcTextSizeA(
+        ImGui::GetFontSize(),10000,labelWidth,label,ImGui::FindRenderedTextEnd(label)).y:0;
+    const float h=std::max(44.F*unit,labelHeight+20*unit);
     const auto id=ImGui::GetID(label);
     const bool changed=ImGui::InvisibleButton(label,{w,h},ImGuiButtonFlags_EnableNav);
     if(changed)value=!value;
@@ -227,8 +285,11 @@ bool animatedToggle(const char* label,bool& value,float& animation,float scale) 
     auto* draw=ImGui::GetWindowDrawList();
     auto row=accent();row.w=.035F*m.hover;
     draw->AddRectFilled(p,add(p,w,h),color(row),8*unit);
-    labelText(draw,add(p,0,(h-ImGui::GetFontSize())*.5F),label,color(text()));
-    const ImVec2 track=add(p,w-43*unit,7*unit),end=add(track,43*unit,22*unit);
+    const ImVec4 labelClip(p.x+inset,p.y,p.x+w-inset-43*unit-16*unit,p.y+h);
+    if(hasLabel) draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),
+        add(p,inset,(h-labelHeight)*.5F),color(text()),label,
+        ImGui::FindRenderedTextEnd(label),labelWidth,&labelClip);
+    const ImVec2 track=add(p,w-inset-43*unit,(h-22*unit)*.5F),end=add(track,43*unit,22*unit);
     auto bg=mix(surface(),accent(),t);
     bg=mix(bg,text(),m.hover*.06F);
     draw->AddRectFilled(track,end,color(bg),11*unit);

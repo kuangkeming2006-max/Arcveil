@@ -67,6 +67,11 @@ guiFontSize/guiFontWeight Qt 属性共用 guiTypographyChanged；features QSetti
 GUI_TYPOGRAPHY_CHANGED 验证字号/字重后保存并通知 QML。共享校验仅依赖
 agent/ui/GuiTypography.h 的纯值策略，不引入 renderer、ImGui 或 JNI。
 
+guiElementScale Qt 属性及 guiElementScaleChanged 信号暴露独立 GUI 元素缩放；
+QSettings 和配置档案保存 60–150%（默认 100%）。sendGuiElementScaleSnapshot 在
+初始同步、应用配置和属性编辑时发送 GUI_ELEMENT_SCALE；接收 CHANGED 消息时严格
+校验字段数和范围后保存。GuiLayout.h 提供纯值校验。窗口宽高的持久化及协议范围为 40–150%。
+
 现有 include 例外是 OverlayManagerCodec.internal.cpp → SmartHotbarPolicy.h 的 validPacked 纯函数；不意味着控制器可以读 BindingCache 或调用 JNI。
 
 ## 测试与按需下钻
