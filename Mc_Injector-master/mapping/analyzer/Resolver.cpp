@@ -507,29 +507,36 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
         if(pack.at("schemaVersion").integer()==2)dict["mappingNamespace"]="Custom";
         auto& symbols=dict["symbols"];contractCheck(contracts,symbols);
         bool complete=bool(baseline);Json::Array results;std::map<const Class*,const Class*> classes;std::map<std::string,std::string> names;
+        // Preserve the concrete rejection rather than presenting every unavailable
+        // correspondence as a confidence or ambiguity problem. These diagnostics
+        // never change eligibility, thresholds, or the final live-validation gate.
+        std::map<const Class*,std::string> classFailures;
         if(baseline){
             std::map<std::string,std::vector<const Class*>> structures;
             for(const auto&c:live.classes)if(c.supported)structures[c.structure].push_back(&c);
             for(const auto& c:baseline->classes){
-                if(!c.supported)continue;
+                if(!c.supported){classFailures[&c]="installed method uses unsupported dynamic bootstrap evidence; bootstrap attributes unavailable";continue;}
                 const auto& matches=structures[c.structure];std::vector<const Class*> eligible;
                 const auto references=baseline->classReferences(&c);
                 const bool hasBody=std::any_of(c.methods.begin(),c.methods.end(),[](const Method&m){return m.json->at("name").string()!="<init>"&&m.json->at("name").string()!="<clinit>"&&m.json->at("bytecode").string().size()>8;});
-                if(!hasBody&&references.size()<2)continue;
+                if(!hasBody&&references.size()<2){classFailures[&c]="bytecode-less class lacks independent incoming reference evidence";continue;}
                 for(const auto* candidate:matches)if(references==live.classReferences(candidate))eligible.push_back(candidate);
                 if(eligible.size()==1)classes[&c]=eligible.front();
+                else if(matches.empty())classFailures[&c]="no supported target class has identical normalized installed structure";
+                else if(eligible.empty())classFailures[&c]="normalized class structure exists but incoming reference evidence differs";
+                else classFailures[&c]="multiple target classes have identical normalized structure and incoming reference evidence";
             }
             // Reject all sides of a collision before modifying the map.
             bool changed=true;
             while(changed){std::set<const Class*> rejected;
                 for(const auto&[from,to]:classes){
-                    if(baseline->find(from->json->at("name").string())!=from||live.find(to->json->at("name").string())!=to)rejected.insert(from);
-                    for(const auto&entry:classes)if(entry.first!=from&&entry.second==to)rejected.insert(from);
+                    if(baseline->find(from->json->at("name").string())!=from||live.find(to->json->at("name").string())!=to){rejected.insert(from);classFailures[from]="class name is ambiguous across defining loaders";}
+                    for(const auto&entry:classes)if(entry.first!=from&&entry.second==to){rejected.insert(from);classFailures[from]="multiple reference classes correspond to the same target class";}
                     const auto* oldSuper=baseline->related(from->json->at("super"));const auto* newSuper=live.related(to->json->at("super"));
-                    if(oldSuper&&(!classes.contains(oldSuper)||classes.at(oldSuper)!=newSuper))rejected.insert(from);
+                    if(oldSuper&&(!classes.contains(oldSuper)||classes.at(oldSuper)!=newSuper)){rejected.insert(from);classFailures[from]="superclass lacks a verified unique structural correspondence: "+oldSuper->json->at("name").string();}
                     for(const auto&iface:from->json->at("interfaces").array())if(const auto* old=baseline->related(iface)){
                         bool found=false;if(classes.contains(old))for(const auto&targetIface:to->json->at("interfaces").array())found|=live.related(targetIface)==classes.at(old);
-                        if(!found)rejected.insert(from);
+                        if(!found){rejected.insert(from);classFailures[from]="interface lacks a verified unique structural correspondence: "+old->json->at("name").string();}
                     }
                 }
                 changed=!rejected.empty();for(auto* key:rejected)classes.erase(key);
@@ -595,7 +602,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             const auto&spec=contracts.at("symbols").at(key);const auto kind=spec.at("kind").string();bool ok=bool(baseline);std::string reason="reference snapshot unavailable";Json value=oldValue;
             if(baseline){
                 reason="no unique structural match above confidence/margin threshold";
-                if(kind=="class") {const auto* old=baseline->find(sig(oldValue.string()));ok=old&&classes.contains(old);if(ok){value=binary(classes.at(old)->json->at("name").string());reason="unique class hierarchy + descriptor/field structure + normalized method fingerprints";}}
+                if(kind=="class") {const auto* old=baseline->find(sig(oldValue.string()));ok=old&&classes.contains(old);if(ok){value=binary(classes.at(old)->json->at("name").string());reason="unique class hierarchy + descriptor/field structure + normalized method fingerprints";}else reason=old&&classFailures.contains(old)?classFailures.at(old):"reference class missing or ambiguous across defining loaders";}
                 else if(kind=="descriptor"){value=rewrite(oldValue.string(),ok);if(ok)reason="descriptor derived entirely from verified class correspondences";}
                 else if(kind=="reserved"){ok=true;reason="retained explicitly authored reserved value; no runtime consumer";}
                 else {
@@ -614,7 +621,8 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
                                 else evidence=!oldUsages.empty();
                                 if(evidence&&oldUsages==live.usages(mapped,candidate))matches.push_back(&candidate);
                             }
-                        }
+                        }else if(declaring&&classFailures.contains(declaring))reason="declaring class rejected: "+classFailures.at(declaring);
+                        else if(owner&&classFailures.contains(owner))reason="owner class rejected: "+classFailures.at(owner);
                         if(matches.size()==1){replacements.push_back(matches.front()->at("name"));any=true;}else {replacements.emplace_back("");all=false;}
                     }
                     const bool alternatives=spec.contains("alternatives");ok=alternatives?any:all;

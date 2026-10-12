@@ -28,6 +28,12 @@ def update(raw):
     return raw
 write('updated-raw.json',update(json.loads((f/'renamed-raw.json').read_text())))
 write('updated-reference-raw.json',update(raw)); write('updated-pack.json',p)
+write('updated-authored-raw.json',update(raw))
+broken=update(raw)
+owner='L'+p['providers'][0]['dictionaries'][0]['symbols']['minecraftName'].replace('.','/')+';'
+field=p['providers'][0]['dictionaries'][0]['symbols']['playerField']
+next(m for c in broken['classes'] if c['name']==owner for m in c['fields'] if m['name']==field)['descriptor']='I'
+write('broken-required-raw.json',broken)
 run('inspect','--snapshot',f/'updated-reference-raw.json','--out',f/'updated-reference.json')
 run('validate','--pack',f/'updated-pack.json','--snapshot',f/'updated-reference.json','--out',f/'updated-validation.json')
 print('Prepared Lunar source/renamed/installed-code-update fixtures with real validation')

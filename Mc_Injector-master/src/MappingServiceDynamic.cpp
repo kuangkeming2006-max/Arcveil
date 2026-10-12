@@ -23,8 +23,13 @@ void MappingService::resumeMatching() {
     m_watchEnabled = true;
     m_stableAmbiguity = false;
     m_transaction->state = AttachTransaction::State::MappingResolving;
+    m_status = "Refreshing runtime mapping evidence";
     m_pendingChange = true;
-    event({{"event", "snapshot-watch"}, {"state", "running"}});
+    // A user-requested retry must collect installed evidence again. Metadata-only
+    // equality cannot prove that bytecodes have not changed since the paused run.
+    m_refreshPending = true;
+    event({{"event", "snapshot-watch"}, {"state", "running"},
+           {"reason", "manual-resume"}, {"freshDetail", true}});
     if (generation != m_generation || !current()) return;
     emit changed();
     if (generation != m_generation || !current()) return;
@@ -33,7 +38,7 @@ void MappingService::resumeMatching() {
         connect(&m_watchTimer, &QTimer::timeout, this, [this, generation] {
             if (generation == m_generation && current()) watchLite();
         });
-        m_watchTimer.start(m_watchInterval);
+        m_watchTimer.start(0);
     }
 }
 void MappingService::scheduleRetry(const QString &reason, bool unchanged) {
@@ -49,15 +54,16 @@ void MappingService::scheduleRetry(const QString &reason, bool unchanged) {
            {"paused", !m_watchEnabled}});
     if (generation != m_generation || !current()) return;
     if (m_watchEnabled && !m_stableAmbiguity) {
+        const int delayMs = m_refreshPending ? 0 : m_watchInterval;
         event({{"event", "retry-scheduled"},
-               {"delayMs", m_watchInterval},
+               {"delayMs", delayMs},
                {"generation", double(m_snapshotGeneration)}});
         if (generation != m_generation || !current()) return;
         disconnect(&m_watchTimer, nullptr, this, nullptr);
         connect(&m_watchTimer, &QTimer::timeout, this, [this, generation] {
             if (generation == m_generation && current()) watchLite();
         });
-        m_watchTimer.start(m_watchInterval);
+        m_watchTimer.start(delayMs);
         if (unchanged)
             m_watchInterval = qMin(m_maxWatchInterval, m_watchInterval * 2);
     }
@@ -74,7 +80,10 @@ void MappingService::watchLite() {
            {"state", "running"},
            {"detailLevel", "lite"},
            {"intervalMs", m_watchInterval}});
-    captureLite(m_family.isEmpty() ? CapturePhase::Initial : CapturePhase::Watch);
+    const auto phase = m_family.isEmpty() ? CapturePhase::Initial
+        : m_refreshPending ? CapturePhase::Refresh : CapturePhase::Watch;
+    m_refreshPending = false;
+    captureLite(phase);
 }
 bool MappingService::captureFailed(int code) {
     if (!code) {
@@ -133,8 +142,10 @@ void MappingService::captureLite(CapturePhase phase) {
     if (!m_modular)
         args << "--tools-jar" << m_toolsJar;
     launch(args, [this, phase](int code) {
-        if (captureFailed(code))
+        if (captureFailed(code)) {
+            if (phase == CapturePhase::Refresh && m_busy && current()) m_refreshPending = true;
             return;
+        }
         if (!identityValid() || m_capture.value("processStart").toString() != m_start ||
             m_capture.value("pid").toDouble() != m_pid) {
             fail("Target JVM identity mismatch");
@@ -145,7 +156,7 @@ void MappingService::captureLite(CapturePhase phase) {
             fail("Capture returned no fingerprint");
             return;
         }
-        if (phase == CapturePhase::Watch) {
+        if (phase == CapturePhase::Watch || phase == CapturePhase::Refresh) {
             const auto reference = Cache(m_root).reference(m_contractDigest, m_family, m_minecraftVersion, m_mappingIdentity);
             if (reference.revision != m_reference.revision && reference.valid()) {
                 m_reference = reference;
@@ -155,7 +166,7 @@ void MappingService::captureLite(CapturePhase phase) {
                 m_pendingChange = true;
                 progressReference(reference);
             }
-            if (fingerprint == m_observedLite && !m_pendingChange) {
+            if (phase == CapturePhase::Watch && fingerprint == m_observedLite && !m_pendingChange) {
                 event({{"event", "snapshot-unchanged"},
                        {"fingerprint", fingerprint},
                        {"detailSkipped", true}});
@@ -274,8 +285,10 @@ void MappingService::captureDetail(CapturePhase phase) {
     if (phase == CapturePhase::Watch && m_dynamic && !m_snapshot.isEmpty())
         args << "--reuse-snapshot" << m_snapshot;
     launch(args, [this, phase, output](int code) {
-        if (captureFailed(code))
+        if (captureFailed(code)) {
+            if (phase == CapturePhase::Refresh && m_busy && current()) m_refreshPending = true;
             return;
+        }
         if (!identityValid() || m_capture.value("pid").toDouble() != m_pid ||
             m_capture.value("processStart").toString() != m_start) {
             fail("Detail capture identity mismatch");
@@ -337,7 +350,7 @@ void MappingService::identifyTarget() {
         const auto identity = readObject(m_run + "/identity.json");
         m_family = identity.value("family").toString();
         m_minecraftVersion = identity.value("minecraftVersion").toString();
-        m_candidates = m_forceAutomatic ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
+        m_candidates = m_skipCacheCandidates ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
         m_candidateIndex = 0;
         selectCacheCandidate();
     });
@@ -440,7 +453,7 @@ void MappingService::fallbackFromCache(const QString &reason) {
     if (generation != m_generation || !current() || !m_busy) return;
     m_mappingIdentity.clear(); // Cached identity failed live evidence; target identity is unknown.
     m_candidateIndex = m_candidates.size();
-    m_forceAutomatic = true;
+    m_skipCacheCandidates = true;
     m_hit = {}; m_cachePath = false; m_validation = {};
     m_runtimeBinding = {};
     m_upgradeCacheProof = false;
@@ -452,8 +465,14 @@ void MappingService::fallbackFromCache(const QString &reason) {
     captureLite(CapturePhase::Initial);
 }
 void MappingService::choosePack() {
-    if (m_forceAutomatic && !m_cachePath) resolve();
-    else validate(m_cachePath ? m_hit.pack : m_defaultPack, false);
+    const auto generation = m_generation;
+    // A stale installed-content proof invalidates cache reuse, not the authored
+    // dictionary. Recheck current names/descriptors/modifiers in the fresh detail
+    // before attempting migration against a potentially different client build.
+    if (m_skipCacheCandidates && !m_cachePath)
+        event({{"event", "AUTHORED_REVALIDATE"}, {"reason", "cached-proof-rejected"}});
+    if (generation != m_generation || !m_busy || !current()) return;
+    validate(m_cachePath ? m_hit.pack : m_defaultPack, false);
 }
 void MappingService::validate(const QString &pack, bool automatic) {
     m_status = "Full live mapping validation";
@@ -629,7 +648,7 @@ void MappingService::resolve() {
             bool missing = reasons.isEmpty();
             for (auto it = reasons.begin(); it != reasons.end(); ++it)
                 missing |= it.value() == "missing-runtime-class";
-            if (!missing) {
+            if (!missing && !m_refreshPending) {
                 m_stableAmbiguity = true;
                 m_watchEnabled = false;
                 m_watchTimer.stop();

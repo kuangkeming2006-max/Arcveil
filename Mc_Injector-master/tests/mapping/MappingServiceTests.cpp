@@ -105,6 +105,17 @@ struct MappingServiceTests {
         check(service.events()->data(service.events()->index(1,0),MappingEventModel::Detail).toString().contains("loadedClassCount"),"capture stats visible in console");
         for (int i=0;i<2010;++i) service.m_events.append({{"event","symbol"},{"symbol",QString::number(i)}});
         check(service.events()->rowCount() == 2000 && service.events()->data(service.events()->index(0,0), MappingEventModel::Symbol).toString() == "10", "console bounds retained events");
+        // New recovery events can synchronously cancel the owning transaction.
+        // The old choosePack frame must not overwrite Cancelled or start validation.
+        service.m_busy = true;
+        service.m_skipCacheCandidates = true;
+        service.m_cachePath = false;
+        const auto recoveryCancel = QObject::connect(&service, &MappingService::eventReceived,
+            [&](const QJsonObject &e) { if (e.value("event") == "AUTHORED_REVALIDATE") service.cancel(); });
+        service.choosePack();
+        QObject::disconnect(recoveryCancel);
+        check(!service.busy() && service.status() == "Cancelled" && !service.m_process && ready == 5,
+              "authored recovery event cancellation stops old generation before validation");
         std::printf("MappingService: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }

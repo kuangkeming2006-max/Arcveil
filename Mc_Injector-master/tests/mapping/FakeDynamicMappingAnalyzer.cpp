@@ -45,6 +45,7 @@ int main(int argc, char **argv) {
         const int index = state.value("lite").toInt() + (bootstrapWarmup ? 0 : 1);
         state["lite"] = index;
         QString phase = index <= 2 ? "A" : index == 3 ? "U" : index == 4 ? "C" : "D";
+        if (mode.startsWith("stable-")) phase = "A";
         if (state.value("forceE").toBool())
             phase = "E";
         writeObject(stateFile, state);
@@ -71,11 +72,23 @@ int main(int argc, char **argv) {
                      {"relevantFingerprint", "relevant-" + (phase == "U" ? "A" : phase)},
                      {"classes", QJsonArray{QJsonObject{{"name", "Fixture"}}}}});
         log("select " + phase);
+        log(QString("select-evidence %1").arg(args.contains("--reuse-snapshot") ? "reused" : "fresh"));
         log("select-pack " + get("--pack"));
         return 0;
     }
     if (command == "inspect-detail") {
         auto phase = readObject(get("--candidates")).value("phase").toString();
+        if ((mode == "stable-resume" || mode == "stable-inflight" || mode == "stable-refresh-drift") && state.value("resumeEvidence").toBool() &&
+            !args.contains("--reuse-snapshot")) phase = "D";
+        if (mode == "stable-refresh-drift" && state.value("resumeEvidence").toBool() &&
+            !state.value("refreshDrifted").toBool()) {
+            state["refreshDrifted"] = true;
+            writeObject(stateFile, state);
+            emitEvent({{"event", "failure"}, {"retryable", true},
+                       {"failureType", "runtime-drift"}, {"reason", "fixture refresh drift"}});
+            log("detail refresh drift");
+            return 5;
+        }
         if (mode == "drift" && state.value("validated").toBool() &&
             !state.value("drifted").toBool()) {
             phase = "E";
@@ -95,6 +108,7 @@ int main(int argc, char **argv) {
         }
         writeObject(get("--out"), {{"phase", phase}});
         log("detail " + phase);
+        log(QString("detail-evidence %1").arg(args.contains("--reuse-snapshot") ? "reused" : "fresh"));
         const auto pid = get("--pid").toUInt();
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         FILETIME c{}, e{}, k{}, u{};
@@ -216,12 +230,16 @@ int main(int argc, char **argv) {
         pack["providers"] = QJsonArray{provider};
         pack["dynamicDraft"] = true;
         const bool complete = accepted.size() == 100;
+        QJsonObject reasons;
+        if (mode.startsWith("stable-"))
+            for (const auto &key : unresolved) reasons[key.toString()] = "stable-ambiguity";
         writeObject(get("--out"), {{"stateVersion", 1},
                                    {"requiredComplete", complete},
                                    {"complete", complete},
                                    {"fingerprint", "detail-" + phase},
                                    {"accepted", accepted},
                                    {"unresolved", unresolved},
+                                   {"unresolvedReasons", reasons},
                                    {"symbols", results},
                                    {"pack", pack}});
         return complete ? 0 : 4;

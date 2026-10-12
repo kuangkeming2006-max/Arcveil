@@ -302,3 +302,29 @@ ceiling, further restricted by live IDs/hooks. Internal borrowed GameApi/Invento
 own no JNI refs/frames and must stay local to a calling operation.
 See [review and remaining assumptions](../MULTIVERSION_REVIEW.md) and
 `P/tests/mapping/V56_7_VALIDATION.md` for actual test limits.
+
+
+## v56.8 Lunar update recovery
+
+Start at `MappingServiceDynamic.cpp::fallbackFromCache/choosePack` and
+`resumeMatching`, plus `src/BuildInfo.h`. A failed compact installed-content proof
+only disables cache candidates for that transaction. A fresh selected snapshot
+must independently validate the current authored dictionary before structural
+migration; an authored success still requires fresh final capture, process/start
+and fingerprint continuity, then atomic proof publication. Cache rejection alone
+is not evidence that names/descriptors changed. No confidence or required-binding
+rule was relaxed.
+
+Manual Resume schedules an immediate Refresh generation: lite -> select -> fresh
+detail, bypassing metadata equality skips and detail reuse. A queued Resume survives
+an in-flight ambiguous result and retryable capture drift. Identical insufficient
+evidence pauses again; missing classes continue the bounded watch. Final validation
+and fresh final capture still gate ready. Resolver symbol reasons distinguish
+unsupported dynamic bootstrap evidence, structure, incoming-reference, loader and
+hierarchy rejection; unresolved state classifications remain compatible.
+
+`AUTHORED_REVALIDATE` reports cache-proof recovery. All service JSONL events carry
+`internalVersion` from BuildInfo; `MappingService.internalVersion` is the read-only
+Qt display property shared by the three version labels. See
+`P/tests/mapping/V56_8_VALIDATION.md`, Test-LunarForge.py and the recorded metadata
+fixture for exact evidence and offline/live verification limits.

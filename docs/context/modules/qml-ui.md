@@ -45,6 +45,7 @@
 - ProcessScanner 提供 model roles 与 selectedPid/refreshing/scanProgress、refresh/selectProcess。
 - AppSettings 为 darkTheme、window size、navigation width、auto refresh 等持久化入口。
 - 测试观察根 `activeRoute` 与 objectName：navigation_<route>、scanRefreshButton、attachDialog、aboutBuildLabel。提取组件不应改变这些对象的可发现性。
+- 内部版本由 `P/src/BuildInfo.h` 集中定义，About、导航和 MappingProgressWindow 通过 `MappingService.internalVersion` 常量属性显示；Mapping JSONL 使用同源的完整 build 标识。
 - popup 动画中断后必须释放 modal 输入；保留视觉 parent、z、focus 和 open/close 语义。
 - 新 QML 文件无法隐式看到 main.qml 的 id；显式 props/signal 或临时 host 契约见 [拆分方案](../REFACTOR_PLAN.md)。
 
