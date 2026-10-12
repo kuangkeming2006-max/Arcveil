@@ -20,7 +20,9 @@ target_link_libraries(MappingAnalyzerTests PRIVATE mc_mapping_analyzer_core)
 
 add_custom_command(TARGET MappingAnalyzer POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/contracts-v1.json" "$<TARGET_FILE_DIR:MappingAnalyzer>/contracts-v1.json")
-install(FILES contracts-v1.json DESTINATION tools)
+add_custom_command(TARGET MappingAnalyzer POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/contracts-v2.json" "$<TARGET_FILE_DIR:MappingAnalyzer>/contracts-v2.json")
+install(FILES contracts-v1.json contracts-v2.json contracts-1.20.1.json DESTINATION tools)
 add_executable(MappingBoundaryTests EXCLUDE_FROM_ALL ../tests/mapping/MappingBoundaryTests.cpp cache/MappingCache.cpp ../agent/src/AgentOptions.cpp)
 target_link_libraries(MappingBoundaryTests PRIVATE mc_mapping_analyzer_core)
 target_compile_definitions(MappingBoundaryTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -34,6 +36,14 @@ target_sources(MappingServiceTests PRIVATE ../src/MappingProgressModel.cpp ../sr
     ../src/MappingProgressController.cpp ../src/MappingProgressController.h)
 target_link_libraries(MappingServiceTests PRIVATE Qt6::Core)
 add_dependencies(MappingServiceTests FakeMappingAnalyzer)
+
+add_executable(ModernMappingServiceTests EXCLUDE_FROM_ALL ../tests/mapping/ModernMappingServiceTests.cpp
+    ../src/MappingService.cpp ../src/MappingServiceProgress.cpp ../src/MappingServiceDynamic.cpp
+    ../src/MappingEventModel.cpp ../src/MappingService.h cache/MappingCache.cpp)
+target_compile_features(ModernMappingServiceTests PRIVATE cxx_std_20)
+target_compile_definitions(ModernMappingServiceTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(ModernMappingServiceTests PRIVATE Qt6::Core)
+add_dependencies(ModernMappingServiceTests MappingAnalyzer MappingProbe mc_overlay_attach_helper McOverlayNativeLoader)
 
 install(FILES README.md DESTINATION docs/mapping)
 

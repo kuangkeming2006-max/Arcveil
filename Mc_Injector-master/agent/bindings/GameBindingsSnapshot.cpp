@@ -78,7 +78,7 @@ void GameBindings::sampleCamera(JNIEnv* const env) noexcept
     m_snapshot.camera.valid = false;
     if (env == nullptr ||
         m_resolutionPhase.load(std::memory_order_acquire) != ResolutionPhase::Resolved ||
-        m_cache == nullptr) {
+        m_cache == nullptr || !versionCapabilities().supports(bindings::VersionCapability::WorldProjection)) {
         return;
     }
     BindingCache* const cache = m_cache.get();
@@ -237,6 +237,9 @@ void GameBindings::sampleBow(JNIEnv* env, GameSnapshot& snapshot, bool enabled) 
 const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                                          const std::uint64_t tickMilliseconds) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return sampleModern(env,tickMilliseconds);
     // Minecraft simulation runs at 20 TPS. Sampling once per tick keeps the
     // JNI budget bounded while the renderer uses last/current positions plus
     // renderPartialTicks to produce frame-rate-smooth hitboxes.

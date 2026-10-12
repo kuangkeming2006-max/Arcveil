@@ -115,3 +115,19 @@ ceiling, further restricted by live IDs/hooks. Internal borrowed GameApi/Invento
 own no JNI refs/frames and must stay local to a calling operation.
 See [review and remaining assumptions](../MULTIVERSION_REVIEW.md) and
 `P/tests/mapping/V56_7_VALIDATION.md` for actual test limits.
+
+## v56.9 modern read-only API
+
+Exact 1.20.1 now selects Modern120Adapter; exact 1.8.9 retains Legacy18Adapter.
+`GameBindingsModern.cpp` owns modern lookup/sampling/mouse-capture structure;
+`ModernMappingSymbols.inc` is the small external dictionary contract. Names and
+type descriptors stay in MappingDictionary, not Adapter version branches.
+Modern publication additionally checks actual SharedConstants version, defining
+loader, core hierarchy and all required JNI IDs. Added class refs use existing
+deleteGlobalRefs/release. GameSnapshot adds rotation and enumeration truncation;
+EntityMarker adds rotation. No IPC schema change.
+Modern capabilities are EntitySnapshots + MouseCapture. Legacy gameplay/hooks,
+inventory, bed scan and world projection remain unavailable on modern; sampleCamera
+and updateGameplay explicitly gate their existing paths. Legacy capabilities include
+their prior behavior. See [1.20 audit](../MINECRAFT_1_20_REVIEW.md) and
+`P/tests/mapping/V56_9_VALIDATION.md`; private JVM tests do not prove real game support.

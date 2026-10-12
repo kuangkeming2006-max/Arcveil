@@ -2,6 +2,9 @@
 
 #include <GL/gl.h>
 #include <jni.h>
+#include <jvmti.h>
+#include "../mapping/Json.h"
+#include "../mapping/Sha256.h"
 
 #include <process.h>
 
@@ -25,6 +28,8 @@ struct Arguments {
     std::wstring agentPath;
     std::wstring pipeName;
     std::wstring token;
+    std::wstring fixturePath, mappingPack;
+    bool coreProfile = false;
     bool splitThreads = false;
 };
 
@@ -40,7 +45,7 @@ bool isHexToken(const std::wstring_view token) noexcept
 
 bool parseArguments(const int argc, wchar_t** const argv, Arguments& result)
 {
-    if (argc != 9 && argc != 11) {
+    if (argc < 9 || argc%2!=1) {
         return false;
     }
 
@@ -55,6 +60,11 @@ bool parseArguments(const int argc, wchar_t** const argv, Arguments& result)
             result.pipeName = value;
         } else if (key == L"--token") {
             result.token = value;
+        } else if (key==L"--fixture-path") {result.fixturePath=value;
+        } else if (key==L"--mapping-pack") {result.mappingPack=value;
+        } else if (key==L"--gl-profile") {
+            if (value!=L"core" && value!=L"compat") return false;
+            result.coreProfile=value==L"core";
         } else if (key == L"--thread-mode") {
             if (value == L"split") {
                 result.splitThreads = true;
@@ -67,9 +77,56 @@ bool parseArguments(const int argc, wchar_t** const argv, Arguments& result)
     }
 
     constexpr std::wstring_view pipePrefix = L"\\\\.\\pipe\\";
-    return !result.jvmPath.empty() && !result.agentPath.empty() &&
+    return result.fixturePath.empty()==result.mappingPack.empty() && !result.jvmPath.empty() && !result.agentPath.empty() &&
            result.pipeName.starts_with(pipePrefix) &&
            isHexToken(result.token);
+}
+
+bool coreProfileRequested=false;
+HGLRC createSmokeContext(HDC dc) {
+    HGLRC legacy=wglCreateContext(dc);
+    if (!legacy || !coreProfileRequested) return legacy;
+    if (!wglMakeCurrent(dc,legacy)) {wglDeleteContext(legacy);return nullptr;}
+    const auto create=reinterpret_cast<HGLRC(WINAPI*)(HDC,HGLRC,const int*)>(wglGetProcAddress("wglCreateContextAttribsARB"));
+    const int attributes[]={0x2091,3,0x2092,2,0x9126,1,0};
+    HGLRC core=create?create(dc,nullptr,attributes):nullptr;
+    wglMakeCurrent(nullptr,nullptr);wglDeleteContext(legacy);
+    return core;
+}
+
+std::string hexBytes(std::string_view bytes) {
+    std::string out;constexpr char digits[]="0123456789abcdef";
+    for (unsigned char c:bytes) {out+=digits[c>>4];out+=digits[c&15];}
+    return out;
+}
+
+// Test-only startup receipt for this owned synthetic JVM. The separate modern
+// pipeline test independently exercises production Probe and Analyzer validation.
+std::string fixtureBindingOptions(JavaVM* vm,JNIEnv* env,const std::wstring& path) {
+    const auto file=std::filesystem::path(path);
+    const auto pack=mcoverlay::mapping::Json::read(file);
+    const auto& symbols=pack.at("providers").array()[0].at("dictionaries").array()[0].at("symbols");
+    auto name=symbols.at("minecraftName").string();std::replace(name.begin(),name.end(),'.','/');
+    auto anchor=env->FindClass(name.c_str());
+    if (env->ExceptionCheck() || !anchor) throw std::runtime_error("fixture anchor missing");
+    jvmtiEnv* ti=nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&ti),JVMTI_VERSION_1_2)!=JNI_OK) throw std::runtime_error("fixture JVMTI unavailable");
+    jobject loader=nullptr;jint identity=0;
+    if (ti->GetClassLoader(anchor,&loader)!=JVMTI_ERROR_NONE || !loader ||
+        ti->GetObjectHashCode(loader,&identity)!=JVMTI_ERROR_NONE) throw std::runtime_error("fixture loader unavailable");
+    auto type=env->GetObjectClass(loader);char* signature=nullptr;
+    if (env->ExceptionCheck() || !type || ti->GetClassSignature(type,&signature,nullptr)!=JVMTI_ERROR_NONE || !signature)
+        throw std::runtime_error("fixture loader type unavailable");
+    std::ifstream input(file,std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>(input),{}};
+    const auto utf8=file.u8string();
+    std::string result=";mapping="+hexBytes(std::string_view(reinterpret_cast<const char*>(utf8.data()),utf8.size()))+
+        ";mappingHash="+mcoverlay::mapping::windowsSha256(bytes)+";bindingRequired=1;mappingAnchor="+
+        hexBytes(symbols.at("minecraftSignature").string())+";mappingLoaderType="+hexBytes(signature)+
+        ";mappingLoaderInstance="+std::to_string(static_cast<unsigned>(identity));
+    ti->Deallocate(reinterpret_cast<unsigned char*>(signature));env->DeleteLocalRef(type);
+    env->DeleteLocalRef(loader);env->DeleteLocalRef(anchor);ti->DisposeEnvironment();
+    return result;
 }
 
 std::string wideToUtf8(const std::wstring_view value)
@@ -235,7 +292,7 @@ public:
             return fail(L"SetPixelFormat", ::GetLastError());
         }
 
-        m_context = ::wglCreateContext(m_deviceContext);
+        m_context = createSmokeContext(m_deviceContext);
         if (m_context == nullptr) {
             return fail(L"wglCreateContext", ::GetLastError());
         }
@@ -414,7 +471,7 @@ public:
         if (::SetPixelFormat(m_deviceContext, pixelFormat, &descriptor) == FALSE) {
             return fail(L"SetPixelFormat", ::GetLastError());
         }
-        m_context = ::wglCreateContext(m_deviceContext);
+        m_context = createSmokeContext(m_deviceContext);
         if (m_context == nullptr) {
             return fail(L"wglCreateContext", ::GetLastError());
         }
@@ -657,9 +714,8 @@ int wmain(const int argc, wchar_t** const argv)
         return 5;
     }
 
-    std::array<char, 20> classPathOption{};
-    constexpr std::string_view classPath = "-Djava.class.path=.";
-    std::copy(classPath.begin(), classPath.end(), classPathOption.begin());
+    coreProfileRequested=arguments.coreProfile;
+    std::string classPathOption="-Djava.class.path="+(arguments.fixturePath.empty()?std::string("."):wideToUtf8(arguments.fixturePath));
     std::array<char, 5> reducedSignalsOption{'-', 'X', 'r', 's', '\0'};
     std::array<JavaVMOption, 2> vmOptions{};
     vmOptions[0].optionString = classPathOption.data();
@@ -681,6 +737,18 @@ int wmain(const int argc, wchar_t** const argv)
     }
 
     int exitCode = 0;
+    std::string bindingOptions;
+    if (!arguments.fixturePath.empty()) {
+        auto boot=environment->FindClass("FixtureBoot");
+        if (environment->ExceptionCheck() || !boot) return 12;
+        auto initialize=environment->GetStaticMethodID(boot,"boot","()V");
+        if (environment->ExceptionCheck() || !initialize) return 12;
+        environment->CallStaticVoidMethod(boot,initialize);
+        if (environment->ExceptionCheck()) return 12;
+        environment->DeleteLocalRef(boot);
+        try {bindingOptions=fixtureBindingOptions(vm,environment,arguments.mappingPack);}
+        catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 12;}
+    }
     HMODULE agentModule = nullptr;
     using AgentOnAttach = jint(JNICALL*)(JavaVM*, char*, void*);
     using AgentOnUnload = void(JNICALL*)(JavaVM*);
@@ -706,7 +774,7 @@ int wmain(const int argc, wchar_t** const argv)
                 std::transform(token.begin(), token.end(), token.begin(), [](const char value) {
                     return static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
                 });
-                std::string options = "pipe=" + pipe + ";token=" + token + ";protocol=1";
+                std::string options = "pipe=" + pipe + ";token=" + token + ";protocol=1"+bindingOptions;
                 if (agentOnAttach == nullptr || agentOnUnload == nullptr || pipe.empty() ||
                     token.size() != 32U) {
                     std::wcerr << L"Agent exports or UTF-8 options are invalid.\n";

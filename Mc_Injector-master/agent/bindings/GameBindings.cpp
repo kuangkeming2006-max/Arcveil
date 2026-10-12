@@ -58,6 +58,8 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
         return;
     }
     if (cache.minecraftClass != nullptr) env->DeleteGlobalRef(cache.minecraftClass);
+    if (cache.mouseHandlerClass != nullptr) env->DeleteGlobalRef(cache.mouseHandlerClass);
+    if (cache.entityPlayerClass != nullptr) env->DeleteGlobalRef(cache.entityPlayerClass);
     if (cache.rayVectorClass != nullptr) env->DeleteGlobalRef(cache.rayVectorClass);
     if (cache.rayHitClass != nullptr) env->DeleteGlobalRef(cache.rayHitClass);
     if (cache.diggingPacketClass != nullptr) env->DeleteGlobalRef(cache.diggingPacketClass);

@@ -1,6 +1,8 @@
 #pragma once
 #include "Bytecode.h"
 namespace mcoverlay::mapping {
+// Bundle dispatch is exact by gameVersion; a legacy contract is never applied to modern symbols.
+const Json& contractsForPack(const Json& pack, const Json& contracts);
 Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *reference,
                             const Json &contracts, const Events &events = {}, bool allowEmpty = false,
                             bool validationOnly = false, const Json *state = nullptr);

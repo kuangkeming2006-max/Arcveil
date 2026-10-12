@@ -328,3 +328,20 @@ hierarchy rejection; unresolved state classifications remain compatible.
 Qt display property shared by the three version labels. See
 `P/tests/mapping/V56_8_VALIDATION.md`, Test-LunarForge.py and the recorded metadata
 fixture for exact evidence and offline/live verification limits.
+
+## v56.9 versioned authored contracts
+
+Start at `mapping/analyzer/Resolver::contractsForPack`, `CaptureClient.cpp`,
+`main.cpp::identify`, and `MappingServiceDynamic::writeIdentityCatalog/activeContractDigest`.
+contracts-v2.json selects unchanged standalone 1.8.9 or new 1.20.1 contract by the
+pack's exact gameVersion. The separate vanilla-1.20.1.json is official-artifact
+derived and offline checked; it has no authority before current live verification.
+Identity-lite catalogs installed modern and known cached packs. A loaded anchor
+selects a candidate API, multiple declared versions are rejected as ambiguous;
+actual version is independently checked in modern Agent before BINDING_READY.
+Family evidence is detected independently of provider support, so Forge/Lunar
+cannot silently become Vanilla. Modern non-Vanilla is unsupported in this release.
+Semantically unchanged sub-contracts keep their original standalone byte digest,
+preserving legacy cache keys; changed sub-contracts invalidate previous proofs.
+Cache format, confidence, final check and v56.8 recovery rules are unchanged.
+See [audit](../MINECRAFT_1_20_REVIEW.md), generator/provenance and V56_9_VALIDATION.

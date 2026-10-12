@@ -76,6 +76,8 @@ class MappingService final : public QObject {
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void identifyTarget();
+    void writeIdentityCatalog();
+    QString activeContractDigest(const QString& gameVersion) const;
     void selectCacheCandidate();
     void checkCached(const mapping_cache::Entry &entry);
     void fallbackFromCache(const QString &reason);
@@ -95,6 +97,7 @@ class MappingService final : public QObject {
     QString m_root, m_tools, m_run, m_pack, m_java, m_helper, m_toolsJar, m_status, m_fingerprint,
         m_start, m_contractDigest;
     QString m_analyzer, m_contracts, m_defaultPack, m_probe;
+    QString m_modernPack, m_legacyPack;
     QPointer<QProcess> m_process;
     void *m_processJob = nullptr;
     MappingEventModel m_events;

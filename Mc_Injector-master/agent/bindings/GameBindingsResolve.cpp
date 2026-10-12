@@ -196,6 +196,10 @@ jclass GameBindings::findMinecraftClass(
 
     jint count = 0;
     jclass* classes = nullptr;
+    // JVMTI creates one local JNI reference per loaded class in this native
+    // frame. Reserve before the bulk call; modern clients exceed the default
+    // JNI local capacity long before references can be released in the loop.
+    if (counted(env)->EnsureLocalCapacity(65536)<0) {clearException(env);return nullptr;}
     if (counted(m_jvmti)->GetLoadedClasses(&count, &classes) != JVMTI_ERROR_NONE || classes == nullptr) {
         return nullptr;
     }
@@ -344,6 +348,8 @@ bool GameBindings::resolveProfile(JNIEnv* const env,
     if (env == nullptr || minecraft == nullptr) {
         return false;
     }
+    if (candidate.adapter->shape == bindings::GameApiShape::Modern120)
+        return resolveModernProfile(env,profile,minecraft,candidate);
 
     LocalReferenceSet localReferences(env);
     jobject minecraftLoader = nullptr;

@@ -4,6 +4,9 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
+#include <QCryptographicHash>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 #include <cstdio>
 struct MappingServiceTests {
@@ -18,6 +21,25 @@ struct MappingServiceTests {
         };
         QTemporaryDir dir;
         MappingService service;
+        // Versioned contract packaging must preserve the v56.8 cache domain,
+        // while a changed sub-contract must invalidate the previous proof.
+        const auto digest = [](const QString& path) {
+            QFile file(path); if (!file.open(QIODevice::ReadOnly)) return QString{};
+            return QString::fromLatin1(QCryptographicHash::hash(file.readAll(),QCryptographicHash::Sha256).toHex());
+        };
+        const auto mappingRoot=QFileInfo(contracts).absolutePath();
+        service.m_tools=mappingRoot;
+        service.m_contracts=mappingRoot+"/contracts-v2.json";
+        check(service.activeContractDigest("1.8.9")==digest(contracts),"bundle preserves unchanged legacy cache contract digest");
+        check(service.activeContractDigest("1.20.1")==digest(mappingRoot+"/contracts-1.20.1.json"),"modern cache uses its own selected contract digest");
+        QFile bundleFile(service.m_contracts); bundleFile.open(QIODevice::ReadOnly);
+        auto bundle=QJsonDocument::fromJson(bundleFile.readAll()).object(); bundleFile.close();
+        auto versions=bundle.value("versions").toObject();
+        auto legacy=versions.value("1.8.9").toObject(); legacy.insert("testContractDrift",true);
+        versions.insert("1.8.9",legacy);bundle.insert("versions",versions);
+        service.m_contracts=dir.path()+"/changed-contract.json";
+        QFile changed(service.m_contracts);changed.open(QIODevice::WriteOnly);changed.write(QJsonDocument(bundle).toJson());changed.close();
+        check(service.activeContractDigest("1.8.9")!=digest(contracts),"edited legacy sub-contract invalidates cached proof");
         MappingProgressController progress;
         QObject::connect(&service,&MappingService::eventReceived,&progress,&MappingProgressController::consume);
         bool prematureMatch=false;

@@ -27,6 +27,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                                   const GameSnapshot& snapshot,
                                   const std::uint64_t tickMilliseconds) noexcept
 {
+    if (bindingsReady() && !versionCapabilities().supports(bindings::VersionCapability::LegacyGameplay))
+        return false;
     m_logicalController.debug().configure(requested.silentFileDebug,requested.silentChatDebug);
     if(!m_logicalController.debug().enabled() && m_interactionObserver.ready())
         m_interactionObserver.setEnabled(false);

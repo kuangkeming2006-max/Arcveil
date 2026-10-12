@@ -12,6 +12,7 @@
 #include <QThread>
 #include <QElapsedTimer>
 #include <cstdio>
+#include <map>
 using namespace mcoverlay::mapping;
 namespace {
 void event(std::string type, Json data) {
@@ -75,7 +76,8 @@ int main(int argc, char **argv) {
             return Json::read(
                 filePath(options.contains("--contracts")
                              ? option("--contracts")
-                             : QCoreApplication::applicationDirPath() + "/contracts-v1.json"));
+                             : QCoreApplication::applicationDirPath() +
+                               (QFile::exists(QCoreApplication::applicationDirPath()+"/contracts-v2.json") ? "/contracts-v2.json" : "/contracts-v1.json")));
         };
         const Events events = [](const Json &value) {
             auto data = value;
@@ -139,8 +141,23 @@ int main(int argc, char **argv) {
                                {"pid", result.at("pid")},
                                {"processStart", result.at("processStart")}});
         } else if (command == "identify") {
-            result = mappingIdentity(Json::read(filePath(option("--pack"))),
-                                     readSnapshot(filePath(option("--snapshot"))), contracts());
+            auto selected=option("--pack");
+            const auto snapshot=readSnapshot(filePath(option("--snapshot")));
+            if (options.contains("--identity-packs")) {
+                auto paths=Json::read(filePath(option("--identity-packs"))).at("packs").array();
+                paths.emplace_back(selected.toStdString());
+                std::map<std::string,QString> candidates;
+                for (const auto& path:paths) {
+                    const auto pack=Json::read(filePath(QString::fromStdString(path.string())));
+                    for (const auto& p:pack.at("providers").array()) for (const auto& d:p.at("dictionaries").array())
+                        for (const auto& c:snapshot.at("classes").array())
+                            if (c.at("name")==d.at("symbols").at("minecraftSignature")) candidates.try_emplace(pack.at("gameVersion").string(),QString::fromStdString(path.string()));
+                }
+                if (candidates.size()>1) throw std::runtime_error("ambiguous Minecraft API versions in live class loaders");
+                if (candidates.size()==1) selected=candidates.begin()->second;
+            }
+            result = mappingIdentity(Json::read(filePath(selected)), snapshot, contracts());
+            result["selectedPack"]=selected.toStdString();
             writeJson(filePath(option("--out")), result);
             event("mapping-identity", result);
         } else if (command == "select") {

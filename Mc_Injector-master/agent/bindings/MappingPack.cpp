@@ -43,9 +43,15 @@ MappingDictionary dictionary(const Json& document, MinecraftVersion version, int
         else throw std::runtime_error("unknown mapping namespace");
     }
     const auto& symbols=document.at("symbols");std::size_t count=0;
+    if (symbols.contains("positionMethods") && version!=MinecraftVersion{1,20,1})
+        throw std::runtime_error("unsupported Minecraft API version for modern mapping schema");
 #define MC_MAPPING_STRING(name) d.name=bounded(symbols.at(#name));++count;
 #define MC_MAPPING_ARRAY(name,extent) {const auto& a=symbols.at(#name).array();if(a.size()!=extent)throw std::runtime_error("wrong symbol array length: " #name);for(std::size_t i=0;i<extent;++i)d.name[i]=bounded(a[i]);++count;}
+    if (version == MinecraftVersion{1,20,1}) {
+#include "ModernMappingSymbols.inc"
+    } else {
 #include "MappingSymbols.inc"
+    }
 #undef MC_MAPPING_STRING
 #undef MC_MAPPING_ARRAY
     if(symbols.object().size()!=count)throw std::runtime_error("unknown logical symbol key");
@@ -82,7 +88,11 @@ mapping::Json mappingDictionaryJson(const MappingDictionary& d) {
     Json symbols=Json::Object{};
 #define MC_MAPPING_STRING(name) symbols[#name]=d.name;
 #define MC_MAPPING_ARRAY(name,extent) {Json::Array a;for(const auto& v:d.name)a.emplace_back(v);symbols[#name]=std::move(a);}
+    if (d.minecraftVersion == MinecraftVersion{1,20,1}) {
+#include "ModernMappingSymbols.inc"
+    } else {
 #include "MappingSymbols.inc"
+    }
 #undef MC_MAPPING_STRING
 #undef MC_MAPPING_ARRAY
     Json result=Json::Object{{"id",d.id},{"label",d.label},{"family",clientFamilyName(d.family)},{"detection",detectionJson(d.detection)},{"symbols",std::move(symbols)}};

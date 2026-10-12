@@ -206,3 +206,13 @@ not a replacement for optional live IDs or hook readiness.
 `BindingCache::gameApi()` and InventoryView remain private binding access views,
 with no new JNI ownership, IPC or AttachTransaction boundary. See
 [MULTIVERSION_REVIEW](MULTIVERSION_REVIEW.md).
+
+## v56.9 modern boundary
+
+MappingService → authored pack catalog/versioned contract → existing Probe/Analyzer
+→ fresh runtimeBinding → existing Agent publication/READY boundary remains intact.
+Modern GameBindings additionally verifies actual game version and defining loader.
+Snapshot/marker rotation and enumeration truncation are process-local values;
+no new IPC ownership. Renderer selects GL2/GL3 by actual context and still consumes
+GameSnapshot, never mapping names or version numbers. WorldProjection and modern
+unsupported gameplay are gated by VersionCapabilities at the binding boundary.

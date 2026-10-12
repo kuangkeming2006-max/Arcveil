@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_opengl2.h>
+#include <imgui_impl_opengl3.h>
 #include <imgui_impl_win32.h>
 
 #include <gl/GL.h>
@@ -123,7 +124,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
         m_inputState->sessionCursor.store(nullptr, std::memory_order_release);
     }
 
-    ImGui_ImplOpenGL2_NewFrame();
+    if (m_coreProfile) ImGui_ImplOpenGL3_NewFrame();
+    else ImGui_ImplOpenGL2_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     m_backdropCapturedThisFrame = false;
@@ -240,7 +242,8 @@ bool OverlayRenderer::render(HDC const deviceContext,
             ImGui::BringWindowToDisplayFront(editor);
     }
     ImGui::Render();
-    ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+    if (m_coreProfile) ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    else ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
     if(m_inputState->tsf&&m_imeDrawnGeneration)
         m_inputState->tsf->candidatesDrawn(m_imeDrawnGeneration);
     return newlyInitialized;

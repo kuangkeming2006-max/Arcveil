@@ -31,8 +31,10 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
     m_probe = m_tools + "/MappingProbe-v13.dll";
-    m_contracts = m_tools + "/contracts-v1.json";
+    m_contracts = m_tools + "/contracts-v2.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
+    m_legacyPack=m_defaultPack;
+    m_modernPack=QCoreApplication::applicationDirPath()+"/agent/mappings/vanilla-1.20.1.json";
     m_watchTimer.setSingleShot(true);
     m_timeout.setSingleShot(true);
 }
@@ -183,6 +185,7 @@ void MappingService::fail(const QString &reason) {
 void MappingService::prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
                              const QString &toolsJar, std::shared_ptr<AttachTransaction> transaction) {
     cancel();
+    if (m_defaultPack==m_modernPack) m_defaultPack=m_legacyPack;
     m_events.clear();
     m_progress = -1;
     m_pid = pid;
@@ -240,7 +243,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     try {
         if (m_start.isEmpty() || !QFile::exists(m_analyzer) || !QDir().mkpath(m_run))
             throw std::runtime_error("mapping analyzer/runtime unavailable");
-        m_contractDigest = fileDigest(m_contracts);
+        m_contractDigest = activeContractDigest(readObject(m_defaultPack).value("gameVersion").toString());
         progressSchema();
         Cache(m_root).candidate(m_run, {}, "inspecting");
         QElapsedTimer lookupElapsed; lookupElapsed.start();
@@ -256,8 +259,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
             fail("Unsupported Minecraft API version: no verified Version Adapter: " + declaredVersion);
             return;
         }
-        m_identityPacksFile = m_run + "/identity-packs.json";
-        writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
+        writeIdentityCatalog();
         event({{"event", "step"},
                {"index", 0},
                {"state", "success"},

@@ -35,7 +35,10 @@ void MappingService::progressSchema() {
     m_progressContracts = {};
     m_progressSymbols = {};
     try {
-        m_progressContracts = readObject(m_contracts).value("symbols").toObject();
+        auto contract=readObject(m_contracts);
+        if (contract.value("contractVersion").toInt()==2)
+            contract=contract.value("versions").toObject().value(readObject(m_defaultPack).value("gameVersion").toString()).toObject();
+        m_progressContracts = contract.value("symbols").toObject();
         for (auto it = m_progressContracts.begin(); it != m_progressContracts.end(); ++it) {
             const auto spec = it.value().toObject();
             event({{"event", "symbol-queued"},

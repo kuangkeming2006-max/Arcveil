@@ -1,0 +1,296 @@
+{
+  "contractVersion": 1,
+  "symbols": {
+    "minecraftName": {
+      "kind": "class",
+      "required": true
+    },
+    "minecraftSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "playerName": {
+      "kind": "class",
+      "required": true
+    },
+    "playerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "entityPlayerName": {
+      "kind": "class",
+      "required": true
+    },
+    "entityPlayerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "livingName": {
+      "kind": "class",
+      "required": true
+    },
+    "livingSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "entityName": {
+      "kind": "class",
+      "required": true
+    },
+    "entitySignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "aabbName": {
+      "kind": "class",
+      "required": true
+    },
+    "aabbSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "worldName": {
+      "kind": "class",
+      "required": true
+    },
+    "worldSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "worldClientName": {
+      "kind": "class",
+      "required": true
+    },
+    "worldClientSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "chatComponentName": {
+      "kind": "class",
+      "required": true
+    },
+    "chatComponentSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "sharedConstantsName": {
+      "kind": "class",
+      "required": true
+    },
+    "sharedConstantsSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "worldVersionName": {
+      "kind": "class",
+      "required": true
+    },
+    "worldVersionSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "mouseHandlerName": {
+      "kind": "class",
+      "required": true
+    },
+    "mouseHandlerSignature": {
+      "kind": "descriptor",
+      "required": false
+    },
+    "getMinecraft": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "(){minecraftSignature}",
+      "static": true,
+      "required": true
+    },
+    "playerField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{playerSignature}",
+      "static": false,
+      "required": true
+    },
+    "worldField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{worldClientSignature}",
+      "static": false,
+      "required": true
+    },
+    "getHealth": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "getMaxHealth": {
+      "kind": "method",
+      "owner": "livingName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "getEntityId": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()I",
+      "static": false,
+      "required": true
+    },
+    "getBounds": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(){aabbSignature}",
+      "static": false,
+      "required": true
+    },
+    "isMainThread": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "isSingleplayer": {
+      "kind": "method",
+      "owner": "minecraftName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "getLoadedEntities": {
+      "kind": "method",
+      "owner": "worldClientName",
+      "descriptor": "()Ljava/lang/Iterable;",
+      "static": false,
+      "required": true
+    },
+    "getName": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "(){chatComponentSignature}",
+      "static": false,
+      "required": true
+    },
+    "getFormattedText": {
+      "kind": "method",
+      "owner": "chatComponentName",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false,
+      "required": true
+    },
+    "getEyeHeight": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "isInvisible": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "isAlive": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "isRemoved": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "currentScreenField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "Leuq;",
+      "static": false,
+      "required": true
+    },
+    "positionMethods": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()D",
+      "static": false,
+      "required": true
+    },
+    "previousPositionFields": {
+      "kind": "field",
+      "owner": "entityName",
+      "descriptor": "D",
+      "static": false,
+      "required": true
+    },
+    "rotationMethods": {
+      "kind": "method",
+      "owner": "entityName",
+      "descriptor": "()F",
+      "static": false,
+      "required": true
+    },
+    "aabbFields": {
+      "kind": "field",
+      "owner": "aabbName",
+      "descriptor": "D",
+      "static": false,
+      "required": true
+    },
+    "getCurrentVersion": {
+      "kind": "method",
+      "owner": "sharedConstantsName",
+      "descriptor": "(){worldVersionSignature}",
+      "static": true,
+      "required": true
+    },
+    "getVersionName": {
+      "kind": "method",
+      "owner": "worldVersionName",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false,
+      "required": true
+    },
+    "mouseHandlerField": {
+      "kind": "field",
+      "owner": "minecraftName",
+      "descriptor": "{mouseHandlerSignature}",
+      "static": false,
+      "required": true
+    },
+    "grabMouse": {
+      "kind": "method",
+      "owner": "mouseHandlerName",
+      "descriptor": "()V",
+      "static": false,
+      "required": true
+    },
+    "releaseMouse": {
+      "kind": "method",
+      "owner": "mouseHandlerName",
+      "descriptor": "()V",
+      "static": false,
+      "required": true
+    },
+    "isMouseGrabbed": {
+      "kind": "method",
+      "owner": "mouseHandlerName",
+      "descriptor": "()Z",
+      "static": false,
+      "required": true
+    },
+    "guiScreenSignature": {
+      "kind": "descriptor",
+      "required": false
+    }
+  },
+  "requiredAlternatives": [],
+  "constructors": []
+}

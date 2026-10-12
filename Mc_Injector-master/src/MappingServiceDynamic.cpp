@@ -345,11 +345,23 @@ void MappingService::captureDetail(CapturePhase phase) {
 }
 void MappingService::identifyTarget() {
     launch({"identify", "--pack", m_defaultPack, "--snapshot", m_litePath,
+            "--identity-packs", m_identityPacksFile,
             "--contracts", m_contracts, "--out", m_run + "/identity.json"}, [this](int code) {
         if (code) { fail("Cannot identify target family"); return; }
         const auto identity = readObject(m_run + "/identity.json");
+        if (identity.value("minecraftVersion").toString()=="1.20.1" && QFile::exists(m_modernPack)) {
+            m_defaultPack=m_modernPack;m_scopePack=m_modernPack;
+            m_contractDigest=activeContractDigest("1.20.1");
+            writeIdentityCatalog();
+            progressSchema();
+            event({{"event","API_ADAPTER_SELECTED"},{"minecraftVersion","1.20.1"},
+                {"adapter","modern-1.20.1-readonly-v1"},{"versionAuthority","loaded anchor candidate; exact runtime check required by Agent"}});
+        }
         m_family = identity.value("family").toString();
         m_minecraftVersion = identity.value("minecraftVersion").toString();
+        if (m_minecraftVersion=="1.20.1" && m_family!="Vanilla") {
+            fail("Unsupported 1.20.1 client family: "+m_family+"; a verified family-specific mapping is required");return;
+        }
         m_candidates = m_skipCacheCandidates ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
         m_candidateIndex = 0;
         selectCacheCandidate();
@@ -457,12 +469,32 @@ void MappingService::fallbackFromCache(const QString &reason) {
     m_hit = {}; m_cachePath = false; m_validation = {};
     m_runtimeBinding = {};
     m_upgradeCacheProof = false;
-    m_identityPacksFile = m_run + "/identity-packs.json";
-    writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
+    writeIdentityCatalog();
     // Recapture the structural candidate scope; cached validation scope is too narrow
     // to supply incoming-reference evidence to automatic matching.
     m_fullLite = true;
     captureLite(CapturePhase::Initial);
+}
+void MappingService::writeIdentityCatalog() {
+    auto paths=Cache(m_root).knownPacks(m_contractDigest);
+    // Installed authored packs are candidates only. No mapping confidence or
+    // loader authority is granted until current runtime validation completes.
+    const auto bundle=readObject(m_contracts);
+    if (bundle.value("contractVersion").toInt()==2 && QFile::exists(m_modernPack)) paths.append(m_modernPack);
+    paths.removeDuplicates();
+    m_identityPacksFile=m_run+"/identity-packs.json";
+    writeObject(m_identityPacksFile,{{"packs",QJsonArray::fromStringList(paths)}});
+}
+QString MappingService::activeContractDigest(const QString& gameVersion) const {
+    const auto bundle=readObject(m_contracts);
+    if (bundle.value("contractVersion").toInt()!=2) return fileDigest(m_contracts);
+    const auto selected=bundle.value("versions").toObject().value(gameVersion).toObject();
+    // Preserve v56.8's legacy cache domain when the selected contract is
+    // semantically identical to its unchanged standalone authored file.
+    const auto standalone=m_tools+(gameVersion=="1.8.9" ? "/contracts-v1.json" : "/contracts-"+gameVersion+".json");
+    if (QFile::exists(standalone) && !selected.isEmpty() && selected==readObject(standalone))
+        return fileDigest(standalone);
+    return fileDigest(m_contracts); // Any edited/missing sub-contract invalidates old proofs.
 }
 void MappingService::choosePack() {
     const auto generation = m_generation;

@@ -1,0 +1,82 @@
+"""Production Probe/Analyzer/cache-proof checks against a private Java 17 synthetic JVM.
+No real Minecraft process, installed-client compatibility claim, or production cache writes.
+Usage: Test-ModernPipeline.py BUILD JAVA FIXTURE
+"""
+import copy, json, subprocess, sys
+from pathlib import Path
+root=Path(__file__).resolve().parents[2]
+build,java,fixture=map(lambda p:Path(p).resolve(),sys.argv[1:4])
+folder=build/'modern-pipeline-fixtures';folder.mkdir(exist_ok=True)
+pack=root/'mapping/packs/vanilla-1.20.1.json'
+contracts=root/'mapping/contracts-v2.json'
+analyzer=build/'MappingAnalyzer.exe'
+checks=0
+def run(args,code=0):
+    global checks
+    p=subprocess.run([str(analyzer),*map(str,args)],capture_output=True,text=True,timeout=90)
+    assert p.returncode==code,(args,p.returncode,p.stdout[-3000:],p.stderr)
+    checks+=1
+    return p
+def write(name,value):
+    path=folder/name;path.write_text(json.dumps(value));return path
+def read(path):return json.loads(path.read_text())
+schema=folder/'schema.json'
+run(['validate','--pack',pack,'--out',schema])
+assert read(schema)['apiSupported'] and not read(schema)['injectionReady'];checks+=1
+for field,value in [('playerSignature','Lwrong/Player;'),('getBounds',''),('mappingNamespace','Guess')]:
+    wrong=copy.deepcopy(read(pack))
+    d=wrong['providers'][0]['dictionaries'][0]
+    if field=='mappingNamespace':d[field]=value
+    else:d['symbols'][field]=value
+    run(['validate','--pack',write('malformed-'+field+'.json',wrong),'--out',folder/'bad.json'],1)
+for version in ('1.20.2','1.20.4','1.20.5','1.20.6'):
+    wrong=copy.deepcopy(read(pack));wrong['gameVersion']=version
+    result=run(['validate','--pack',write('unsupported-'+version+'.json',wrong),'--out',folder/'bad.json'],1)
+    assert 'unsupported Minecraft API version' in result.stdout;checks+=1
+process=subprocess.Popen([str(java),'-Xcheck:jni','-cp',str(fixture),'FixtureBoot'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+try:
+    assert process.stdout.readline().strip()=='FIXTURE_READY'
+    snapshot=folder/'installed.jsonl'
+    run(['inspect','--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
+         '--probe',build/'tools/MappingProbe-v13.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
+         '--pack',pack,'--contracts',contracts,'--out',snapshot])
+    validation=folder/'validation.json'
+    run(['validate','--pack',pack,'--contracts',contracts,'--snapshot',snapshot,'--out',validation])
+    receipt=read(validation)
+    assert receipt['injectionReady'] and receipt['identity']['bindingIdentity'] and receipt['identity']['runtimeBinding']['instance'];checks+=1
+    # A cache proof never replaces a fresh compact capture from this JVM.
+    compact=folder/'compact.jsonl'
+    run(['inspect','--lite','--binding-check','--required-only','--identity-lite','--pid',process.pid,
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v13.dll',
+         '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',compact])
+    run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
+         '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'cached.json'])
+    run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
+         '--binding-identity','0'*64,'--out',folder/'bad-cache.json'],3)
+    wrong=copy.deepcopy(read(pack));s=wrong['providers'][0]['dictionaries'][0]['symbols'];s['getBounds']=s['getEntityId']
+    run(['validate','--pack',write('wrong-return-descriptor.json',wrong),'--snapshot',snapshot,
+         '--contracts',contracts,'--out',folder/'bad-binding.json'],3)
+    assert not read(folder/'bad-binding.json')['injectionReady'];checks+=1
+    run(['validate','--pack',pack,'--snapshot',snapshot,'--contracts',root/'mapping/contracts-v1.json','--out',folder/'legacy-contract.json'],1)
+    catalog=write('catalog.json',{'packs':[str(pack)]})
+    run(['identify','--pack',root/'mapping/packs/default-v2.json','--snapshot',snapshot,
+         '--contracts',contracts,'--identity-packs',catalog,'--out',folder/'identity.json'])
+    assert read(folder/'identity.json')['minecraftVersion']=='1.20.1';checks+=1
+    # Family evidence must not be lost merely because only Vanilla ships in this pack.
+    run(['inspect','--snapshot',snapshot,'--out',folder/'offline-family.json'])
+    records=[json.loads(line) for line in (folder/'offline-family.json').read_text().splitlines()]
+    header=next(record for record in records if record.get('kind')=='header')
+    forge=json.loads(header['data']);forge['launchEvidence']=[{'family':'Forge','confidence':250}]
+    header['data']=json.dumps(forge)
+    forge_path=folder/'forge-evidence.jsonl'
+    forge_path.write_bytes(('\n'.join(json.dumps(record,separators=(',',':')) for record in records)+'\n').encode())
+    run(['validate','--pack',pack,'--snapshot',forge_path,
+         '--contracts',contracts,'--out',folder/'forge-rejected.json'],3)
+    assert not read(folder/'forge-rejected.json')['injectionReady'];checks+=1
+finally:
+    process.terminate()
+    try: stdout,stderr=process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill();stdout,stderr=process.communicate()
+    (folder/'synthetic-jvm-output.log').write_text(stdout+stderr)
+print(f'{checks} modern Probe/Analyzer checks passed (real Java 17 JVM, synthetic Minecraft API; no game validation)')

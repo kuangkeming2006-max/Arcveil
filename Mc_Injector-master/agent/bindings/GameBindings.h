@@ -60,6 +60,7 @@ struct EntityMarker final {
     jint entityId = -1;
     float health = 0.0F;
     float maxHealth = 0.0F;
+    float yaw = 0.0F, pitch = 0.0F;
     int hurtTime = -1;
     bool groundKnown = false;
     double distance = 0.0;
@@ -175,6 +176,8 @@ struct GameSnapshot final {
     double z = 0.0;
     AxisAlignedBox bounds{};
     jint loadedEntities = 0;
+    float yaw = 0.0F, pitch = 0.0F;
+    bool entityEnumerationTruncated = false;
     bool singlePlayer = false;
     bool integratedSinglePlayer = false;
     bool hypixelServer = false;
@@ -377,6 +380,10 @@ private:
     struct BindingCache;
 
     [[nodiscard]] bool resolve(JNIEnv* env) noexcept;
+    [[nodiscard]] bool resolveModernProfile(JNIEnv* env, const MappingProfile& profile,
+                                            jclass minecraft, BindingCache& candidate);
+    [[nodiscard]] const GameSnapshot& sampleModern(JNIEnv* env, std::uint64_t tickMilliseconds) noexcept;
+    [[nodiscard]] bool setModernInputCaptured(JNIEnv* env, bool captured) noexcept;
     [[nodiscard]] bool resolveProfile(JNIEnv* env,
                                       const MappingProfile& profile,
                                       jclass minecraft,

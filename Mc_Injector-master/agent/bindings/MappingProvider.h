@@ -63,6 +63,14 @@ struct MappingDictionary final {
     std::vector<DetectionPattern> detection;
 
     std::string minecraftName;
+    // Modern-only structure; common logical operations reuse the existing fields.
+    std::string sharedConstantsName, sharedConstantsSignature;
+    std::string worldVersionName, worldVersionSignature;
+    std::string mouseHandlerName, mouseHandlerSignature;
+    std::array<std::string, 3U> positionMethods{};
+    std::array<std::string, 2U> rotationMethods{};
+    std::string isAlive, isRemoved, getCurrentVersion, getVersionName;
+    std::string mouseHandlerField, grabMouse, releaseMouse, isMouseGrabbed;
     std::string minecraftSignature;
     std::string playerName;
     std::string playerSignature;
@@ -77,6 +85,7 @@ struct MappingDictionary final {
     // PlayerControllerMP::attackEntity accepts EntityPlayer rather than the
     // client-only EntityPlayerSP subclass stored in playerSignature.
     std::string entityPlayerSignature;
+    std::string entityPlayerName; // Modern Player base, distinct from LocalPlayer.
     std::string fireballName;
     std::string fireballSignature;
     std::string aabbName;

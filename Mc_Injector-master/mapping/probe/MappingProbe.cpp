@@ -208,6 +208,7 @@ struct Capture {
     void warmup(const Json &requests) {
         jint count = 0;
         Buffer<jclass> classes{ti};
+        if (env->EnsureLocalCapacity(65536)!=JNI_OK) throw std::runtime_error("JNI class-table local capacity unavailable");
         require(ti->GetLoadedClasses(&count, &classes.data), "warmup GetLoadedClasses");
         struct Locals {
             JNIEnv *env;
@@ -264,6 +265,7 @@ struct Capture {
     Json run() {
         jint count = 0;
         Buffer<jclass> classes{ti};
+        if (env->EnsureLocalCapacity(65536)!=JNI_OK) throw std::runtime_error("JNI class-table local capacity unavailable");
         require(ti->GetLoadedClasses(&count, &classes.data), "GetLoadedClasses");
         struct Locals {
             JNIEnv *env;

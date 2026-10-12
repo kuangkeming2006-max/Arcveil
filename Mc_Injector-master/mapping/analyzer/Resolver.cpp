@@ -7,6 +7,14 @@
 #include <set>
 #include <sstream>
 namespace mcoverlay::mapping {
+const Json& contractsForPack(const Json& pack, const Json& contracts) {
+    if (contracts.at("contractVersion").integer()==1) return contracts;
+    if (contracts.at("contractVersion").integer()!=2) throw std::runtime_error("unsupported contract bundle version");
+    const auto version=pack.at("gameVersion").string();
+    if (!bindings::selectVersionAdapter(bindings::MinecraftVersion::parse(version))) return contracts;
+    if (!contracts.at("versions").contains(version)) throw std::runtime_error("missing API binding contract for Minecraft " + version);
+    return contracts.at("versions").at(version);
+}
 namespace {
 bool supportedApi(const Json& pack) {
     return bindings::selectVersionAdapter(bindings::MinecraftVersion::parse(pack.at("gameVersion").string())) != nullptr;
@@ -169,17 +177,19 @@ Json selectedPack(const Json& pack,const Json& provider,const Json& dictionary){
 std::string detectedFamily(const Json& pack,const Model& model){
     bindings::ClientEnvironment environment;
     const auto parsed=bindings::parseMappingPack(pack);
-    if(model.snapshot.contains("launchEvidence"))for(const auto& evidence:model.snapshot.at("launchEvidence").array())for(const auto&p:parsed.providers)if(evidence.at("family").string()==bindings::clientFamilyName(p.family))environment.addEvidence(p.family,static_cast<std::uint16_t>(evidence.at("confidence").integer()));
+    // Family evidence is independent of which versions/families a pack supports.
+    if (model.snapshot.contains("launchEvidence")) for (const auto& evidence:model.snapshot.at("launchEvidence").array())
+        for (auto family:{bindings::ClientFamily::Vanilla,bindings::ClientFamily::Forge,bindings::ClientFamily::Lunar,bindings::ClientFamily::Badlion})
+            if (evidence.at("family").string()==bindings::clientFamilyName(family)) environment.addEvidence(family,evidence.at("confidence").integer());
     for(const auto&p:parsed.providers)for(const auto&d:p.dictionaries)for(const auto&pattern:d.detection)for(const auto&c:model.classes){const auto&name=c.json->at("name").string();if((pattern.match==bindings::DetectionMatch::ExactClassSignature&&name==pattern.value)||(pattern.match==bindings::DetectionMatch::ClassSignaturePrefix&&name.starts_with(pattern.value)))environment.addEvidence(d.family,pattern.confidence);}
-    if (model.snapshot.contains("launchEvidence")) for (const auto &e : model.snapshot.at("launchEvidence").array())
-        if (e.at("family").string() == "Badlion") environment.addEvidence(bindings::ClientFamily::Badlion, e.at("confidence").integer());
     for (const auto &c : model.classes) if (c.json->at("name").string().starts_with("Lnet/badlion/") ||
         c.json->at("name").string().starts_with("Lcom/badlion/")) environment.addEvidence(bindings::ClientFamily::Badlion, 250);
     return bindings::clientFamilyName(environment.family());
 }
 }
 Json selectDetailCandidates(const Json &pack, const Json &lite, const Json *reference,
-                            const Json &contracts, const Events &events, bool allowEmpty, bool validationOnly, const Json *state) {
+                            const Json &contractBundle, const Events &events, bool allowEmpty, bool validationOnly, const Json *state) {
+    const auto& contracts=contractsForPack(pack,contractBundle);
     (void)bindings::parseMappingPack(pack);
     Model live(lite);
     if (!lite.contains("detailLevel") || lite.at("detailLevel").string() != "lite")
@@ -328,7 +338,8 @@ Json requiredClassNames(const Json &contracts, const Json &symbols) {
             names.push_back(symbols.at(key));
     return names;
 }
-Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts, bool bindingOnly) {
+Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contractBundle, bool bindingOnly) {
+    const auto& contracts=contractsForPack(pack,contractBundle);
     Model model(snapshot);
     const auto family = detectedFamily(pack, model);
     std::set<const Class *> selected;
@@ -446,9 +457,10 @@ Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contrac
         {"runtimeBinding", runtimeBinding},
         {"identityComplete", complete}, {"identityClasses", double(selected.size())}};
 }
-Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
+Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contractBundle,
                            const std::string &bindingIdentity,
                            const Events &events) {
+    const auto& contracts=contractsForPack(pack,contractBundle);
     (void)bindings::parseMappingPack(pack);
     if (!supportedApi(pack)) return unsupportedApi(pack);
     const auto identity = mappingIdentity(pack, snapshot, contracts, true);
@@ -474,7 +486,8 @@ Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &c
     }
     return Json::Object{{"valid", false}, {"injectionReady", false}, {"reason", "cached-required-member-validation-failed"}};
 }
-Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts,const Events& events){
+Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contractBundle,const Events& events){
+    const auto& contracts=contractsForPack(pack,contractBundle);
     if(snapshot.contains("detailLevel")&&snapshot.at("detailLevel").string()=="lite")throw std::runtime_error("lite metadata is diagnostic only; inspect-detail validation is required before mapping/injection");
     (void)bindings::parseMappingPack(pack);if(!supportedApi(pack))return unsupportedApi(pack);Model model(snapshot);Json::Array attempts;
     const auto family=detectedFamily(pack,model);auto providers=pack.at("providers").array();std::stable_sort(providers.begin(),providers.end(),[](const Json&a,const Json&b){return a.at("priority").integer()>b.at("priority").integer();});
@@ -488,7 +501,8 @@ Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contracts
     }
     return Json::Object{{"valid",false},{"injectionReady",false},{"level","live-members"},{"reason","no family-compatible dictionary passed required live bindings"},{"attempts",attempts},{"fingerprint",model.snapshot.at("fingerprint")}};
 }
-Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contracts,const Events& events,const Json* state,bool incremental){
+Json resolveMappings(const Json& pack,const Json* reference,const Json& target,const Json& contractBundle,const Events& events,const Json* state,bool incremental){
+    const auto& contracts=contractsForPack(pack,contractBundle);
     if((target.contains("detailLevel")&&target.at("detailLevel").string()=="lite")||(reference&&reference->contains("detailLevel")&&reference->at("detailLevel").string()=="lite"))throw std::runtime_error("lite metadata cannot enter normalized bytecode/call-graph matching; inspect-detail required");
     (void)bindings::parseMappingPack(pack);
     if(!supportedApi(pack)){auto rejected=unsupportedApi(pack);rejected["fingerprint"]=target.at("fingerprint");return rejected;}

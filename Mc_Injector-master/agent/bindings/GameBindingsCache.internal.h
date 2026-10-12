@@ -11,6 +11,14 @@ namespace mcoverlay {
 // partially initialized JNI cache.
 struct GameBindings::BindingCache final {
     const bindings::VersionAdapter* adapter = nullptr;
+    jclass mouseHandlerClass = nullptr;
+    jclass entityPlayerClass = nullptr;
+    std::array<jmethodID,3U> positionMethods{};
+    std::array<jmethodID,2U> rotationMethods{};
+    jmethodID isAlive=nullptr, isRemoved=nullptr;
+    jmethodID iterableIterator=nullptr, iteratorHasNext=nullptr, iteratorNext=nullptr;
+    jfieldID mouseHandlerField=nullptr;
+    jmethodID grabMouse=nullptr, releaseMouse=nullptr, isMouseGrabbed=nullptr;
     [[nodiscard]] bindings::GameApi gameApi() const noexcept {
         return {adapter, minecraftClass, getMinecraft, minecraftInstanceField,
                 playerField, worldField, getLoadedEntities, loadedEntitiesField, mainInventory};

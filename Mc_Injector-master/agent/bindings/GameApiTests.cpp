@@ -26,6 +26,16 @@ int main() {
     for(auto unsupported:{MinecraftVersion{},MinecraftVersion{1,8,8},MinecraftVersion{1,12,2},MinecraftVersion{1,21,0}})
         check(!selectVersionAdapter(unsupported),"nearby/new versions fail closed");
     check(adapter->inventoryDescriptor("Lfixture/Stack;")=="[Lfixture/Stack;","array shape uses mapped type descriptor");
+    const auto* modern=selectVersionAdapter({1,20,1});
+    check(modern && modern->shape==GameApiShape::Modern120,"modern adapter selection is exact");
+    check(modern && modern->capabilities.supports(VersionCapability::EntitySnapshots),"modern entity support");
+    check(modern && modern->capabilities.supports(VersionCapability::MouseCapture),"modern input support ceiling");
+    check(modern && !modern->capabilities.supports(VersionCapability::LegacyGameplay),"modern never enables legacy gameplay");
+    check(modern && !modern->capabilities.supports(VersionCapability::BedScanning),"modern never enables packed legacy chunks");
+    check(modern && !modern->capabilities.supports(VersionCapability::WorldProjection),"projection requires its own implementation");
+    check(modern && modern->inventoryDescriptor("Lfixture/Stack;").empty(),"modern inventory cannot guess an array descriptor");
+    for (auto version:{MinecraftVersion{1,20,0},MinecraftVersion{1,20,2},MinecraftVersion{1,20,4},MinecraftVersion{1,20,5},MinecraftVersion{1,20,6}})
+        check(!selectVersionAdapter(version),"unimplemented modern minor versions rejected");
     JNINativeInterface_ table{};
     table.GetStaticObjectField=staticField;table.CallStaticObjectMethodV=staticMethod;
     table.GetObjectField=objectField;table.CallObjectMethodV=objectMethod;

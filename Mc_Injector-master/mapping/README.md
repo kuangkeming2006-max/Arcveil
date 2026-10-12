@@ -261,3 +261,15 @@ currently only exact 1.8.9 qualifies. A relabelled 1.12.2 pack is rejected with
 descriptor-compatible synthetic snapshot. MappingService treats this as terminal.
 Current live member/descriptor/loader checks and cache digest/proof requirements
 remain mandatory. Adding a dictionary alone never proves a new API or hook works.
+
+## Internal v56.9 — minimal Vanilla 1.20.1
+
+Exact 1.20.1 now has a read-only Modern120Adapter and an independent 52-key
+Vanilla dictionary. contracts-v2.json dispatches to standalone version contracts;
+legacy symbols/priorities and unchanged cache contract digests are preserved.
+Generate-ModernPack.py requires hash-pinned official client mappings/JAR and
+audits 37 member descriptors/modifiers offline. Agent must independently verify
+exact actual version and every required JNI ID before Ready; Cache never skips
+current live checks. Forge 1.20.1 and neighboring minors remain unsupported.
+See tests/mapping/V56_9_VALIDATION.md and docs/context/MINECRAFT_1_20_REVIEW.md
+for synthetic JVM evidence and pending real Minecraft acceptance.

@@ -259,6 +259,30 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         }
     }
 
+    if (minecraftVersion == MinecraftVersion{1,20,1}) {
+        // A separate contract prevents legacy arrays/fields from reaching modern JNI.
+        const auto pairs = std::to_array<std::pair<std::string_view,std::string_view>>({
+            {minecraftName,minecraftSignature},{playerName,playerSignature},{entityPlayerName,entityPlayerSignature},
+            {livingName,livingSignature},{entityName,entitySignature},{aabbName,aabbSignature},
+            {worldName,worldSignature},{worldClientName,worldClientSignature},
+            {chatComponentName,chatComponentSignature},{sharedConstantsName,sharedConstantsSignature},
+            {worldVersionName,worldVersionSignature},{mouseHandlerName,mouseHandlerSignature}});
+        for (const auto& [name,signature] : pairs)
+            if (!signatureMatchesBinaryName(name,signature)) return reject("modern class name/descriptor mismatch");
+        if (guiScreenSignature.size()<3 || guiScreenSignature.front()!='L' || guiScreenSignature.back()!=';')
+            return reject("modern screen descriptor missing/invalid");
+        bool valid=true;
+#define MC_MAPPING_STRING(name) {constexpr std::string_view key=#name; if (!key.ends_with("Signature") && !(key.ends_with("Name") && key!="getName" && key!="getVersionName") && !validMemberName(name)) valid=false;}
+#define MC_MAPPING_ARRAY(name,extent) for (const auto& member:name) if (!validMemberName(member)) valid=false;
+#include "ModernMappingSymbols.inc"
+#undef MC_MAPPING_STRING
+#undef MC_MAPPING_ARRAY
+        if (!valid) return reject("modern required member name missing/invalid");
+        if (family!=ClientFamily::Vanilla) return reject("modern client family has no validated mapping support");
+        assignError(error,{});
+        return true;
+    }
+
     // Core classes define whether the client profile itself is usable.  BedWars
     // sidebar/armor support is an optional capability and must never turn an
     // otherwise valid Minecraft profile into "unsupported client mappings".

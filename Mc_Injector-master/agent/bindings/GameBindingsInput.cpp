@@ -136,6 +136,9 @@ bool GameBindings::setLwjglMouseGrabbed(JNIEnv* const env, const bool grabbed) n
 
 bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return setModernInputCaptured(env,guiOpen);
     if (env == nullptr) return false;
 
     if (guiOpen && !m_overlayInputSessionActive) {
@@ -188,6 +191,9 @@ bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexc
 
 bool GameBindings::maintainInputReleased(JNIEnv* const env) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return setModernInputCaptured(env,true);
     if (env == nullptr) return false;
     const bool released = setLwjglMouseGrabbed(env, false);
     // Do not release Win32 capture here. ImGui deliberately owns capture while
