@@ -1,4 +1,5 @@
 #include "MappingProgressController.h"
+#include "BuildInfo.h"
 #include <QJsonArray>
 #include "OverlayManager.h"
 #include "StartupLoader.h"
@@ -192,6 +193,7 @@ int main(int argc, char *argv[])
     // Keep the existing storage ID so rebranding preserves preferences/keys.
     QGuiApplication::setApplicationName(QStringLiteral("MinecraftOverlayManager"));
     QGuiApplication::setApplicationDisplayName(QStringLiteral("Arcveil"));
+    QGuiApplication::setApplicationVersion(QString::fromLatin1(arcveil::build::internalBuild));
     QGuiApplication::setOrganizationName(QStringLiteral("Overlay Studio"));
 
     // Tests require an explicit command-line option. An inherited environment
