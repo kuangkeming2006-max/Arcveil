@@ -382,8 +382,9 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
                 ::glBindTexture(GL_TEXTURE_2D,m_mediaKeycapTexture);
                 ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
                 ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,0x812F /* GL_CLAMP_TO_EDGE */);
-                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,0x812F /* GL_CLAMP_TO_EDGE */);
+                const GLint wrap=m_coreProfile ? 0x812F /* GL_CLAMP_TO_EDGE */ : GL_CLAMP;
+                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,wrap);
+                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,wrap);
                 ::glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,atlasWidth,atlasHeight,0,
                                GL_RGBA,GL_UNSIGNED_BYTE,atlasPixels);
                 ::glBindTexture(GL_TEXTURE_2D,static_cast<GLuint>(previousTexture));
