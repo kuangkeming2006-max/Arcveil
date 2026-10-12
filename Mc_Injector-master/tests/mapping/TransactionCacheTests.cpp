@@ -128,6 +128,33 @@ struct TransactionCacheTests {
             !Cache(service.m_root).preferred(fileDigest(contracts)).bindingIdentity.isEmpty(),
             "K: PR #6 verified source upgrades offline, compact live validation, atomic proof publication, zero details");
         check(failed == 0, "all real transaction/cache scenarios complete without unexpected failure");
+        // A transformed client can change installed content without changing any
+        // authored binding. Reject the old cache proof, then independently validate
+        // the authored dictionary and recapture before publishing a new proof.
+        service.m_root = temp.path() + "/authored-drift";
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/lunar-raw.json").toUtf8());
+        const auto authoredReady = ready;
+        start();
+        check(spin([&] { return ready > authoredReady || failed; }) && ready == authoredReady + 1,
+              "M: establish current authored mapping with real validation");
+        const auto authoredIdentity = service.m_mappingIdentity;
+        const auto driftReady = ready, driftPromoted = promoted;
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-authored-raw.json").toUtf8());
+        autoCalls = 0; hits = 0; start();
+        check(spin([&] { return ready > driftReady || failed; }) && ready == driftReady + 1 &&
+              promoted == driftPromoted + 1 && hits == 0 && autoCalls == 0 &&
+              service.m_mappingIdentity != authoredIdentity && service.m_transaction->detailCaptureCalls == 2,
+              "M: stale content proof -> authored full validation -> fresh final detail -> new proof, no migration");
+        // The same recovery must not grant loading authority for an incorrect
+        // required descriptor, even with a previously verified cache/reference.
+        const auto brokenReady = ready, brokenPromoted = promoted;
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/broken-required-raw.json").toUtf8());
+        start();
+        check(spin([&] { return (service.m_dynamic && !service.m_process && !service.m_matchingState.isEmpty()) || failed; }) &&
+              !failed && ready == brokenReady && promoted == brokenPromoted && service.busy() &&
+              !service.m_matchingState.value("requiredComplete").toBool() && !service.m_unresolved.isEmpty(),
+              "N: missing required descriptor after cache failure never authorizes ready or promotion");
+        service.cancel();
         // Unsupported API is terminal, even when names/descriptors match a fixture.
         auto unsupportedPack=readObject(service.m_defaultPack);
         unsupportedPack["gameVersion"]="1.12.2";

@@ -84,6 +84,8 @@ void MappingProgressController::consume(const QJsonObject &e) {
         if (!m_matchingEnabled)
             m_status =
                 QStringLiteral("Attach waiting for mapping; resume to continue. Existing matches retained.");
+        else if (e.value("reason") == "manual-resume")
+            m_status = QStringLiteral("Resuming mapping · capturing fresh runtime evidence");
     } else if (kind == "waiting-for-runtime-change") {
         m_matchingEnabled = !e.value("paused").toBool();
         m_status =

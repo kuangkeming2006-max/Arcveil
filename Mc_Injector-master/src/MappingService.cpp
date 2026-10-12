@@ -109,6 +109,7 @@ void MappingService::event(QJsonObject value) {
     value["transactionId"] = transactionId();
     value["generation"] = double(m_generation);
     value["eventVersion"] = 1;
+    value["internalVersion"] = QString::fromLatin1(arcveil::build::internalBuild);
     value["time"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     if (!m_run.isEmpty()) {
         QFile log(logPath());
@@ -192,7 +193,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_runtimeBinding = {};
     m_finalCheck = false;
     m_upgradeCacheProof = false;
-    m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_forceAutomatic = false;
+    m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_skipCacheCandidates = false;
     m_stableAmbiguity = false;
     m_candidates.clear();
     m_candidateIndex = 0; m_candidateWarmed = false;
@@ -208,6 +209,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_unresolved.clear();
     m_dynamic = false;
     m_pendingChange = false;
+    m_refreshPending = false;
     m_watchEnabled = true;
     m_captureFailures = 0;
     m_snapshotGeneration = 0;
