@@ -68,6 +68,31 @@ try:
          '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'cached.json'])
     run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
          '--binding-identity','0'*64,'--out',folder/'bad-cache.json'],3)
+    # A valid installed-content Cache proof cannot supply missing runtime version authority.
+    # Convert the captured synthetic fixture back to raw transport data and let
+    # production inspect generate a new valid fingerprint; never forge that hash.
+    offline_data,offline_classes,chunks={},[],{}
+    for line in compact.read_text().splitlines()[1:]:
+        frame=json.loads(line);key=(frame['kind'],frame['index'])
+        chunks[key]=chunks.get(key,'')+frame['data']
+        if frame['last']:
+            value=json.loads(chunks.pop(key))
+            if frame['kind']=='class':offline_classes.append(value)
+            else:offline_data.update(value)
+    ids={'bootstrap':0};loaders=[]
+    for index,loader in enumerate(offline_data.pop('loaderInstances'),1):
+        ids[loader['loaderKey']]=index
+        loaders.append({'id':index,'type':loader['type'],'instance':loader['instance']})
+    for klass in offline_classes:
+        for ref in [klass,klass['super'],*klass['interfaces']]:
+            ref['loader']=ids[ref.pop('loaderKey')]
+    for key in ('normalizedVersion','fingerprint','runtimeEvidence'):offline_data.pop(key,None)
+    offline_data.update(loaders=loaders,classes=offline_classes)
+    offline_compact=folder/'no-runtime-version.jsonl'
+    run(['inspect','--snapshot',write('no-runtime-version-raw.json',offline_data),'--out',offline_compact])
+    run(['validate-cache','--pack',pack,'--snapshot',offline_compact,'--contracts',contracts,
+         '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'no-version-cache.json'],3)
+    assert read(folder/'no-version-cache.json')['reason']=='cached-runtime-version-evidence-unavailable-or-incompatible';checks+=1
     wrong=copy.deepcopy(read(pack));s=wrong['providers'][0]['dictionaries'][0]['symbols'];s['getBounds']=s['getEntityId']
     run(['validate','--pack',write('wrong-return-descriptor.json',wrong),'--snapshot',snapshot,
          '--contracts',contracts,'--out',folder/'bad-binding.json'],3)

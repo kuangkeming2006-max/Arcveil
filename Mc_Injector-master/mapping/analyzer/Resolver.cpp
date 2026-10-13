@@ -685,6 +685,8 @@ Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &c
     (void)bindings::parseMappingPack(pack);
     if (!supportedApi(pack)) return unsupportedApi(pack);
     const auto identity = mappingIdentity(pack, snapshot, contracts, true);
+    if(!identity.at("versionVerified").boolean())
+        return Json::Object{{"valid",false},{"injectionReady",false},{"reason","cached-runtime-version-evidence-unavailable-or-incompatible"}};
     // bindingIdentity covers metadata/content and the defining-loader partition.
     // Diagnostic metadataIdentity retains original session-specific method names.
     if (bindingIdentity.empty() ||
@@ -726,8 +728,9 @@ Json validateRuntime(const Json& pack,const Json& snapshot,const Json& contractB
         auto result=dictionaryValidation(d,model,contracts,{});attempts.push_back(result);
         if(result.at("valid").boolean()){
             if(events)for(const auto&e:result.at("symbols").array())events(e);
-            const auto scope=runtimeScope(model);
-            result["injectionReady"]=family!="Unknown" && !scope.ambiguous && (!scope.verified || scope.version==pack.at("gameVersion").string());result["level"]="live-members";result["fingerprint"]=model.snapshot.at("fingerprint");result["pack"]=retargetPack(selectedPack(pack,p,d),family);result["packDigest"]=sha256(result.at("pack").dump());return result;
+            result["injectionReady"]=family!="Unknown" && scope.verified && !scope.ambiguous && scope.version==pack.at("gameVersion").string();
+            result["reason"]=result.at("injectionReady").boolean()?"":"member metadata matches; independent runtime version/family evidence required before injection";
+            result["level"]="live-members";result["fingerprint"]=model.snapshot.at("fingerprint");result["pack"]=retargetPack(selectedPack(pack,p,d),family);result["packDigest"]=sha256(result.at("pack").dump());return result;
         }
     }
     return Json::Object{{"valid",false},{"injectionReady",false},{"level","live-members"},{"reason","no family-compatible dictionary passed required live bindings"},{"attempts",attempts},{"fingerprint",model.snapshot.at("fingerprint")}};
@@ -927,7 +930,7 @@ Json resolveMappings(const Json& pack,const Json* reference,const Json& target,c
             continue;
         }
         Json attempt=Json::Object{{"dictionary",dict.at("id")},{"symbols",results},{"complete",complete}};
-        if(complete){auto candidatePack=selectedPack(pack,p,dict);candidatePack["packVersion"]=pack.at("packVersion").integer()+1;auto validation=validateRuntime(candidatePack,target,contracts,{});bool allMappedValid=validation.at("valid").boolean();
+        if(complete){auto candidatePack=selectedPack(pack,p,dict);candidatePack["packVersion"]=pack.at("packVersion").integer()+1;auto validation=validateRuntime(candidatePack,target,contracts,{});bool allMappedValid=validation.at("valid").boolean() && validation.at("injectionReady").boolean();
             if(allMappedValid)for(const auto&result:validation.at("symbols").array()){
                 const auto authored=values(original.at("symbols").at(result.at("symbol").string()));
                 if(!result.at("accepted").boolean()&&std::any_of(authored.begin(),authored.end(),[](const auto&v){return !v.empty();}))allMappedValid=false;

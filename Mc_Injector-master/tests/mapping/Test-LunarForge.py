@@ -88,7 +88,9 @@ def main(build):
 
     raw = recorded_snapshot()
     good = validate('recorded', raw)
-    assert good['valid'] and good['injectionReady']
+    assert good['valid'] and not good['injectionReady']
+    assert not good['identity']['versionVerified']
+    assert 'independent runtime' in good['reason']
     assert good['dictionary'] == 'minecraft-1.8.9-lunar-srg'
     symbols = good['pack']['providers'][0]['dictionaries'][0]['symbols']
     specs = json.loads(contracts.read_text(encoding='utf-8'))['symbols']

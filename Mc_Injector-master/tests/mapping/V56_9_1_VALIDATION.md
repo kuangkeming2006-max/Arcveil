@@ -50,7 +50,7 @@ an empty ctest run is not counted.
 | Offline regression | Mapping pack parity 67; Provider tests; Analyzer 24; boundary/cache 32; Snapshot stream 7; source policy 201; full 257-key Resolver, VersionAdapters, TwoStage, Incremental scripts |
 | Unchanged real Minecraft Snapshot replay | RuntimeDetection 70 checks total, of which 9 directly replay three unchanged historical runs with SHA256 preservation; existing Lunar/Forge replay validates 70 hierarchy classes / 548 fields / 3124 methods |
 | Owned synthetic Java 8 and Java 17 JVMs | RuntimeEvidence 56 each, including parent resource delegation/colliding loaders, positive Vanilla, Forge brand, Unknown, unsupported version and malformed/conflicting evidence |
-| Owned synthetic modern game on Java 17 | Production Probe/Analyzer 38; production MappingService 9; production JNI bindings 32; metadata-only capture confirms zero bytecode/constant-pool bytes |
+| Owned synthetic modern game on Java 17 | Production Probe/Analyzer 41; production MappingService 9; production JNI bindings 32; metadata-only capture confirms zero bytecode/constant-pool bytes |
 | Real JVM hook / WGL infrastructure, synthetic objects | Logical pipeline 156 each on Java 8 and Java 17; real WGL core renderer 13 and renderer regression 5599; full Agent unified/split-thread core-context smoke receives BINDING_READY + RENDERER_READY and DETACH_COMPLETE |
 | Controller responsiveness | Five-second async scan retained 252 UI heartbeats; bounded IPC, split messages and teardown passed |
 | Actual Qt/QML controller UI | D3D11 smoke passed all40 phases, including silent Cache success, fallback opens once, close preserves state, duplicate fallback does not reopen, manual reopen and light/dark screenshots |
@@ -78,6 +78,9 @@ The three historical real snapshots did not contain the new independent evidence
 Their replay deliberately does not invent it or authorize injection. A fresh
 Probe-v14 capture in each running client is required for the final game acceptance.
 No running Minecraft JVM was available during this execution.
+Standalone full validation also separates valid member metadata from
+injectionReady: absent independent runtime version evidence cannot produce Ready
+or a fully validated structural export. Compact Cache validation requires it too.
 
 ## Next real-client acceptance
 
