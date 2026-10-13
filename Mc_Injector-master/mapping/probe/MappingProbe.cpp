@@ -81,6 +81,135 @@ std::string signature(jvmtiEnv *ti, jclass klass) {
     require(ti->GetClassSignature(klass, &value.data, nullptr), "GetClassSignature");
     return value.data ? value.data : "";
 }
+// These names are stable evidence APIs in the audited vanilla artifacts, not
+// candidate mapping symbols. A resource/getter alone never authorizes bindings.
+struct EvidenceFrame {
+    JNIEnv *env;
+    explicit EvidenceFrame(JNIEnv *value) : env(value) {
+        if (env->PushLocalFrame(64) != JNI_OK)
+            throw std::runtime_error("runtime evidence JNI frame unavailable");
+    }
+    ~EvidenceFrame() { if (env->ExceptionCheck()) env->ExceptionClear(); env->PopLocalFrame(nullptr); }
+};
+bool evidenceException(JNIEnv *env) {
+    if (!env->ExceptionCheck()) return false;
+    env->ExceptionClear(); return true;
+}
+std::string evidenceString(JNIEnv *env, jstring text, std::size_t limit) {
+    if (!text || env->GetStringUTFLength(text) > jint(limit)) return {};
+    const char *bytes = env->GetStringUTFChars(text, nullptr);
+    if (!bytes) { evidenceException(env); return {}; }
+    std::string out(bytes); env->ReleaseStringUTFChars(text, bytes); return out;
+}
+bool semanticVersion(const std::string &text) {
+    if (text.empty() || text.size() > 32) return false;
+    unsigned parts = 1, digits = 0;
+    for (unsigned char ch : text) {
+        if (ch == '.') { if (!digits || ++parts > 3) return false; digits = 0; }
+        else if (ch >= '0' && ch <= '9') { if (++digits > 4) return false; }
+        else return false;
+    }
+    return parts == 3 && digits;
+}
+jclass evidenceClass(JNIEnv *env, jvmtiEnv *ti, jobject loader, const char *name) {
+    auto type = env->FindClass("java/lang/Class");
+    auto load = type ? env->GetStaticMethodID(type, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
+    if (evidenceException(env) || !load) return nullptr;
+    auto text = env->NewStringUTF(name);
+    if (evidenceException(env) || !text) return nullptr;
+    auto klass = static_cast<jclass>(env->CallStaticObjectMethod(type, load, text, JNI_FALSE, loader));
+    if (evidenceException(env) || !klass) return nullptr;
+    jobject defining = nullptr;
+    countCall("GetClassLoader:runtime-evidence");
+    if (ti->GetClassLoader(klass, &defining) != JVMTI_ERROR_NONE || !defining || !env->IsSameObject(loader, defining)) return nullptr;
+    return klass;
+}
+struct VersionResource {
+    std::string version, diagnostic;
+    bool operator==(const VersionResource &) const = default;
+};
+VersionResource resourceVersion(JNIEnv *env, jobject loader) {
+    EvidenceFrame frame(env);
+    auto type = env->FindClass("java/lang/ClassLoader");
+    auto open = type ? env->GetMethodID(type, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;") : nullptr;
+    if (evidenceException(env) || !open) return {};
+    auto name = env->NewStringUTF("version.json");
+    auto input = name ? env->CallObjectMethod(loader, open, name) : nullptr;
+    if (evidenceException(env) || !input) return {};
+    auto inputType = env->FindClass("java/io/InputStream");
+    auto read = inputType ? env->GetMethodID(inputType, "read", "([B)I") : nullptr;
+    auto close = inputType ? env->GetMethodID(inputType, "close", "()V") : nullptr;
+    if (evidenceException(env) || !read || !close) return {{}, "runtime version resource reader unavailable"};
+    auto bytes = env->NewByteArray(4096);
+    std::string content;
+    bool valid = bytes && !evidenceException(env), eof = false;
+    for (int reads = 0; valid && reads < 32; ++reads) {
+        const auto size = env->CallIntMethod(input, read, bytes);
+        if (evidenceException(env)) { valid = false; break; }
+        if (size == -1) { eof = true; break; }
+        if (size <= 0 || size > 4096 || content.size() + std::size_t(size) > 65536) { valid = false; break; }
+        char buffer[4096]; env->GetByteArrayRegion(bytes, 0, size, reinterpret_cast<jbyte *>(buffer));
+        if (evidenceException(env)) { valid = false; break; }
+        content.append(buffer, std::size_t(size));
+    }
+    env->CallVoidMethod(input, close);
+    if (evidenceException(env) || !valid || !eof) return {{}, "runtime version resource unreadable or exceeds 65536 bytes"};
+    try {
+        const auto json = Json::parse(content); const auto id = json.at("id").string();
+        return semanticVersion(id) ? VersionResource{id, {}} : VersionResource{{}, "unsupported runtime version resource id"};
+    } catch (...) { return {{}, "malformed runtime version resource"}; }
+}
+std::string legacyRuntimeVersion(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+    EvidenceFrame frame(env);
+    auto klass = evidenceClass(env, ti, loader, "net.minecraft.realms.RealmsSharedConstants");
+    if (!klass) return {};
+    const auto field = env->GetStaticFieldID(klass, "VERSION_STRING", "Ljava/lang/String;");
+    if (evidenceException(env) || !field) return {};
+    auto value = static_cast<jstring>(env->GetStaticObjectField(klass, field));
+    if (evidenceException(env)) return {};
+    const auto text = evidenceString(env, value, 32);
+    return semanticVersion(text) ? text : "";
+}
+std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+    EvidenceFrame frame(env);
+    auto klass = evidenceClass(env, ti, loader, "net.minecraft.client.ClientBrandRetriever");
+    if (!klass) return {};
+    const auto getter = env->GetStaticMethodID(klass, "getClientModName", "()Ljava/lang/String;");
+    if (evidenceException(env) || !getter) return {};
+    auto value = static_cast<jstring>(env->CallStaticObjectMethod(klass, getter));
+    if (evidenceException(env)) return {};
+    auto text = evidenceString(env, value, 64);
+    for (auto &ch : text) {
+        const auto c = static_cast<unsigned char>(ch);
+        if (!std::isalnum(c) && c != '_' && c != '-' && c != '.') return "modified";
+        ch = char(std::tolower(c));
+    }
+    return text;
+}
+Json readRuntimeEvidence(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+    const auto resource = resourceVersion(env, loader);
+    const auto legacy = legacyRuntimeVersion(env, ti, loader), brand = runtimeBrand(env, ti, loader);
+    if (resource != resourceVersion(env, loader) || legacy != legacyRuntimeVersion(env, ti, loader) || brand != runtimeBrand(env, ti, loader))
+        throw RuntimeChanged("runtime version/brand evidence changed during capture");
+    Json result = Json::Object{{"evidenceVersion", 1}, {"version", ""}, {"versionSource", ""}, {"brand", brand},
+        {"brandSource", brand.empty() ? "" : "ClientBrandRetriever.getClientModName"}};
+    bool resourceWitness=false;
+    {
+        EvidenceFrame frame(env);
+        resourceWitness=evidenceClass(env,ti,loader,"net.minecraft.client.ClientBrandRetriever") ||
+            evidenceClass(env,ti,loader,"net.minecraft.client.main.Main");
+    }
+    if (!resource.diagnostic.empty()) result["diagnostic"] = resource.diagnostic;
+    else if (!resource.version.empty() && legacy.empty() && !resourceWitness)
+        result["diagnostic"] = "version resource has no independent game witness in anchor defining loader";
+    else if (!resource.version.empty() && !legacy.empty() && resource.version != legacy)
+        result["diagnostic"] = "conflicting runtime version evidence";
+    else if (!resource.version.empty() || !legacy.empty()) {
+        result["version"] = resource.version.empty() ? legacy : resource.version;
+        result["versionSource"] = resource.version.empty() ? "realms-shared-constants" : "loader-version-json";
+    } else result["diagnostic"] = "independent runtime version evidence unavailable";
+    return result;
+}
 struct Capture {
     JNIEnv *env;
     jvmtiEnv *ti;
@@ -91,6 +220,7 @@ struct Capture {
     const Json *selection = nullptr;
     const Json *liteScope = nullptr;
     bool bindingCheck = false;
+    const Json *runtimeAnchors = nullptr;
     ~Capture() {
         for (auto loader : loaders)
             env->DeleteLocalRef(loader);
@@ -282,6 +412,8 @@ struct Capture {
         std::size_t captured = 0;
         std::set<std::string> liteNames, observed;
         Json::Array evidence;
+        Json::Array runtimeEvidence;
+        std::map<int, Json> loaderEvidence;
         if (liteScope) for (const auto &name : liteScope->at("liteClasses").array()) {
             auto signature = name.string(); std::replace(signature.begin(), signature.end(), '.', '/');
             liteNames.insert("L" + signature + ";");
@@ -309,8 +441,8 @@ struct Capture {
             if (liteScope) {
                 for (const auto &hint : liteScope->at("classHints").array())
                     if ((hint.at("prefix").boolean() ? name.starts_with(hint.at("value").string()) : name == hint.at("value").string()) &&
-                        observed.insert(hint.at("family").string()).second) {
-                        evidence.push_back(Json::Object{{"family",hint.at("family")}, {"confidence",hint.at("confidence")}});
+                        observed.insert(hint.at("family").string() + ":" + std::to_string(loaderId(classes.data[i]))).second) {
+                        evidence.push_back(Json::Object{{"family",hint.at("family")}, {"confidence",hint.at("confidence")}, {"loader",loaderId(classes.data[i])}});
                         marker = true;
                     }
                 if (!liteNames.contains(name) && !marker && captured) continue;
@@ -337,6 +469,13 @@ struct Capture {
                                  candidate->at("type").string() == typeName;
                 if (!requested)
                     continue;
+            }
+            if (runtimeAnchors && std::any_of(runtimeAnchors->array().begin(), runtimeAnchors->array().end(),
+                    [&](const Json &anchor) { return anchor.string() == name; })) {
+                const auto id = loaderId(classes.data[i]);
+                if (!loaderEvidence.contains(id)) loaderEvidence.emplace(id, readRuntimeEvidence(env, ti, loaders.at(std::size_t(id - 1))));
+                auto receipt = loaderEvidence.at(id); receipt["anchor"] = name; receipt["loader"] = id;
+                runtimeEvidence.push_back(std::move(receipt));
             }
             jint status = 0;
             require(ti->GetClassStatus(classes.data[i], &status), "GetClassStatus");
@@ -395,7 +534,7 @@ struct Capture {
                              {"instance", double(static_cast<unsigned int>(identity))}});
             env->DeleteLocalRef(type);
         }
-        return Json::Object{{"loaders", loaderInfo}, {"classEvidence", evidence}};
+        return Json::Object{{"loaders", loaderInfo}, {"classEvidence", evidence}, {"runtimeEvidence", runtimeEvidence}};
     }
 };
 std::string decode(const char *options) {
@@ -544,7 +683,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                                                             : "full"}});
         Json snapshot;
         {
-            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr, request.contains("bindingCheck")};
+            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr, request.contains("bindingCheck"), request.contains("runtimeAnchors") ? &request.at("runtimeAnchors") : nullptr};
             stats["compactBindingCheck"] = capture.bindingCheck;
             if (request.contains("warmup")) {
                 progress(path, "authored-class-warmup");

@@ -77,5 +77,16 @@ boot=f'''public class FixtureBoot {{
 }}
 '''
 (out/'FixtureBoot.java').write_text(boot)
-(out/'sources.txt').write_text('\n'.join('"'+p.as_posix()+'"' for p in out.glob('*.java')))
-print('Synthetic modern fixture sources:',len(sources)+1)
+brand=out/'net/minecraft/client/ClientBrandRetriever.java';brand.parent.mkdir(parents=True,exist_ok=True)
+brand.write_text('''package net.minecraft.client;
+public class ClientBrandRetriever {
+ public static String getClientModName() {return System.getProperty("fixture.brand", "vanilla");}
+}
+''')
+main=out/'net/minecraft/client/main/Main.java';main.parent.mkdir(parents=True,exist_ok=True)
+main.write_text('package net.minecraft.client.main; public class Main {}\n')
+# Runtime evidence is independent of pack-declared gameVersion. This resource is
+# deliberately synthetic; production Probe reads it through the defining loader.
+(out/'version.json').write_text(json.dumps({'id':'1.20.1'}))
+(out/'sources.txt').write_text('\n'.join('"'+p.as_posix()+'"' for p in out.rglob('*.java')))
+print('Synthetic modern fixture sources:',len(sources)+3)

@@ -28,7 +28,7 @@ class MappingProgressController final : public QObject {
     QString status() const { return m_status; }
     bool matchingEnabled() const { return m_matchingEnabled; }
     bool successful() const { return m_successful; }
-    void begin(quint32 pid);
+    void begin(quint32 pid, const QString &transactionId = {});
     void consume(const QJsonObject &event);
     Q_INVOKABLE void open() { emit openRequested(); }
     Q_INVOKABLE void stopMatching();
@@ -53,6 +53,7 @@ class MappingProgressController final : public QObject {
     QVariantMap m_reference;
     QString m_transactionId;
     bool m_awaitingTransaction = false;
+    bool m_fallbackShown = false;
     QString m_status, m_snapshot;
     bool m_matchingEnabled = false, m_successful = false, m_stopRequested = false;
 };

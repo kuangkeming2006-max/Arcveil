@@ -65,6 +65,11 @@ static std::string snapshotDigest(const Json &snapshot) {
         for (auto &item : klass["interfaces"].array()) item["loaderKey"] = runtimeLoader(item.at("loaderKey"));
         for (const auto *kind : {"fields", "methods", "interfaces"}) canonicalSort(klass[kind].array());
     }
+    if (snapshot.contains("runtimeEvidence")) {
+        content["runtimeEvidence"] = snapshot.at("runtimeEvidence");
+        for (auto &item : content["runtimeEvidence"].array()) item["loaderKey"] = runtimeLoader(item.at("loaderKey"));
+        canonicalSort(content["runtimeEvidence"].array());
+    }
     canonicalSort(content["classes"].array());
     canonicalSort(content["launchEvidence"].array());
     return sha256(content.dump());
@@ -176,6 +181,19 @@ Json inspectSnapshot(Json snapshot) {
         ref["loaderKey"] = loaderKeys.at(id);
         ref.object().erase("loader");
     };
+    if (snapshot.contains("runtimeEvidence")) {
+        auto &evidence = snapshot["runtimeEvidence"].array();
+        if (evidence.size() > 128) throw std::runtime_error("oversize runtime environment evidence");
+        for (auto &item : evidence) {
+            if (item.at("evidenceVersion").integer() != 1 || item.at("anchor").string().size() > 1024 ||
+                item.at("version").string().size() > 32 || item.at("brand").string().size() > 64)
+                throw std::runtime_error("unsupported runtime environment evidence");
+            convert(item);
+        }
+        canonicalSort(evidence);
+    }
+    if (snapshot.contains("launchEvidence")) for (auto &item : snapshot["launchEvidence"].array())
+        if (item.contains("loader")) convert(item);
     std::set<std::string> ids;
     std::size_t methods = 0, fields = 0;
     for (auto &c : classes) {

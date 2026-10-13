@@ -597,28 +597,14 @@ bool MappingRegistry::healthy() const noexcept
 void MappingRegistry::observeClassSignature(const std::string_view signature,
                                             ClientEnvironment& environment) const noexcept
 {
+    // An anchor requests member validation; it does not identify a client.
+    // The registered pack set can be incomplete or contain colliding names.
+    if (isMinecraftAnchor(signature)) return;
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        provider->observeClassSignature(signature, environment);
-    }
-
-    // An unambiguous anchor is weak evidence. If multiple client families use
-    // the same anchor, launch/class markers decide; with no markers the
-    // resolver safely tries all exact-anchor candidates once.
-    ClientFamily anchorFamily = ClientFamily::Unknown;
-    bool ambiguous = false;
-    for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        for (const MappingDictionary& dictionary : provider->dictionaries()) {
-            if (dictionary.minecraftSignature == signature) {
-                if (anchorFamily == ClientFamily::Unknown) {
-                    anchorFamily = provider->family();
-                } else if (anchorFamily != provider->family()) {
-                    ambiguous = true;
-                }
-            }
-        }
-    }
-    if (!ambiguous && anchorFamily != ClientFamily::Unknown) {
-        environment.addEvidence(anchorFamily, 50U);
+        // Vanilla identity needs independent runtime brand evidence. Class
+        // names, even an exclusive authored match, cannot prove it.
+        if (provider->family() != ClientFamily::Vanilla)
+            provider->observeClassSignature(signature, environment);
     }
 }
 
@@ -626,7 +612,8 @@ void MappingRegistry::observeLaunchHint(const std::string_view hint,
                                         ClientEnvironment& environment) const noexcept
 {
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        provider->observeLaunchHint(hint, environment);
+        if (provider->family() != ClientFamily::Vanilla)
+            provider->observeLaunchHint(hint, environment);
     }
 }
 
@@ -656,8 +643,14 @@ MappingCandidates MappingRegistry::candidatesForAnchor(
 {
     MappingCandidates result;
     const ClientFamily selectedFamily = environment.family();
+    // An authored Vanilla dictionary is a conservative API candidate when
+    // identity evidence is absent. Its members cannot establish Vanilla
+    // identity, and a higher-priority modified-client provider must never
+    // acquire identity merely because it shares the same runtime names.
+    const ClientFamily candidateFamily = selectedFamily == ClientFamily::Unknown
+        ? ClientFamily::Vanilla : selectedFamily;
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        if (selectedFamily != ClientFamily::Unknown && provider->family() != selectedFamily) {
+        if (provider->family() != candidateFamily) {
             continue;
         }
         for (const MappingDictionary& dictionary : provider->dictionaries()) {

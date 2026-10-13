@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include <cstdio>
 #include <map>
+#include <set>
 using namespace mcoverlay::mapping;
 namespace {
 void event(std::string type, Json data) {
@@ -140,24 +141,24 @@ int main(int argc, char **argv) {
                                {"captureKind", result.at("captureKind")},
                                {"pid", result.at("pid")},
                                {"processStart", result.at("processStart")}});
+        } else if (command == "identity-proof") {
+            // Offline migration of an already verified full Cache snapshot.
+            // This command supplies proof material, never current runtime authority.
+            result=mappingIdentity(Json::read(filePath(option("--pack"))),
+                readSnapshot(filePath(option("--snapshot"))),contracts());
+            writeJson(filePath(option("--out")),result);
         } else if (command == "identify") {
-            auto selected=option("--pack");
             const auto snapshot=readSnapshot(filePath(option("--snapshot")));
+            Json::Array catalog;
+            std::set<std::string> seen;
+            Json::Array paths;
             if (options.contains("--identity-packs")) {
-                auto paths=Json::read(filePath(option("--identity-packs"))).at("packs").array();
-                paths.emplace_back(selected.toStdString());
-                std::map<std::string,QString> candidates;
-                for (const auto& path:paths) {
-                    const auto pack=Json::read(filePath(QString::fromStdString(path.string())));
-                    for (const auto& p:pack.at("providers").array()) for (const auto& d:p.at("dictionaries").array())
-                        for (const auto& c:snapshot.at("classes").array())
-                            if (c.at("name")==d.at("symbols").at("minecraftSignature")) candidates.try_emplace(pack.at("gameVersion").string(),QString::fromStdString(path.string()));
-                }
-                if (candidates.size()>1) throw std::runtime_error("ambiguous Minecraft API versions in live class loaders");
-                if (candidates.size()==1) selected=candidates.begin()->second;
+                paths=Json::read(filePath(option("--identity-packs"))).at("packs").array();
             }
-            result = mappingIdentity(Json::read(filePath(selected)), snapshot, contracts());
-            result["selectedPack"]=selected.toStdString();
+            paths.emplace_back(option("--pack").toStdString());
+            for(const auto& path:paths) if(seen.insert(path.string()).second)
+                catalog.push_back(Json::Object{{"path",path},{"pack",Json::read(filePath(QString::fromStdString(path.string())))}});
+            result = identifyRuntime(catalog, snapshot, contracts());
             writeJson(filePath(option("--out")), result);
             event("mapping-identity", result);
         } else if (command == "select") {
@@ -184,6 +185,12 @@ int main(int argc, char **argv) {
             writeJson(filePath(option("--out")), result);
             event("validation", result);
             if (!result.at("valid").boolean()) return 3;
+        } else if (command == "validate-authored") {
+            result=validateAuthoredRuntime(Json::read(filePath(option("--pack"))),
+                readSnapshot(filePath(option("--snapshot"))),contracts(),events);
+            writeJson(filePath(option("--out")),result);
+            event("validation",result);
+            if(!result.at("valid").boolean() || !result.at("injectionReady").boolean()) return 3;
         } else if (command == "validate") {
             const auto pack = Json::read(filePath(option("--pack")));
             result = options.contains("--snapshot")

@@ -1,4 +1,5 @@
 #include "MappingProvider.h"
+#include "MappingPack.h"
 
 #include <cstdio>
 #include <string>
@@ -108,6 +109,38 @@ int main()
     MappingRegistry builtins;
     passed &= expect(builtins.healthy(), "builtin registry is healthy");
     passed &= expect(builtins.freeze(), "builtin registry freezes");
+    ClientEnvironment unknown;
+    builtins.observeClassSignature("Lave;", unknown);
+    const auto unknownNotch = builtins.candidatesForAnchor("Lave;", unknown);
+    passed &= expect(unknown.family() == ClientFamily::Unknown,
+                     "anchor-name overlap does not establish runtime family");
+    passed &= expect(unknownNotch.count == 1U && unknownNotch.items[0] &&
+                         unknownNotch.items[0]->id == "minecraft-1.8.9-vanilla-notch",
+                     "Unknown tries audited Vanilla members before higher-priority Lunar names");
+    passed &= expect(unknown.family() == ClientFamily::Unknown &&
+                         unknown.confidence(ClientFamily::Vanilla) == 0U &&
+                         unknown.confidence(ClientFamily::Lunar) == 0U,
+                     "selecting an API candidate contributes no identity confidence");
+    passed &= expect(builtins.candidatesForAnchor("Lnet/minecraft/client/Minecraft;", unknown).empty(),
+                     "Unknown cannot select Forge or Lunar solely from a named anchor");
+    ClientEnvironment vanilla;
+    vanilla.addEvidence(ClientFamily::Vanilla, 200U);
+    const auto vanillaNotch = builtins.candidatesForAnchor("Lave;", vanilla);
+    passed &= expect(vanillaNotch.count == 1U && vanillaNotch.items[0] &&
+                         vanillaNotch.items[0]->family == ClientFamily::Vanilla,
+                     "positively identified Vanilla keeps its authored dictionary");
+    MappingRegistry modernBuiltins(defaultMappingPackPath().parent_path() / "vanilla-1.20.1.json");
+    passed &= expect(modernBuiltins.healthy() && modernBuiltins.freeze(),
+                     "modern authored registry is available");
+    ClientEnvironment modernUnknown;
+    modernBuiltins.observeClassSignature("Lenn;", modernUnknown);
+    const auto modernCandidate = modernBuiltins.candidatesForAnchor("Lenn;", modernUnknown);
+    passed &= expect(modernUnknown.family() == ClientFamily::Unknown &&
+                         modernUnknown.confidence(ClientFamily::Vanilla) == 0U,
+                     "a single-version Vanilla anchor and detection pattern are not identity evidence");
+    passed &= expect(modernCandidate.count == 1U && modernCandidate.items[0] &&
+                         modernCandidate.items[0]->minecraftVersion == MinecraftVersion{1, 20, 1},
+                     "Unknown still obtains the modern authored member candidate");
     ClientEnvironment forge;
     builtins.observeClassSignature("Lnet/minecraftforge/common/MinecraftForge;", forge);
     builtins.observeClassSignature("Lnet/minecraft/client/Minecraft;", forge);
@@ -347,6 +380,13 @@ int main()
     const MappingCandidates externalCandidates = external.candidatesForAnchor(
         "Lexample/lunar/Minecraft;", externalLunar);
     passed &= expect(externalCandidates.count == 1U, "external Lunar provider selection");
+    ClientEnvironment externalUnknown;
+    external.observeClassSignature("Lexample/lunar/Minecraft;", externalUnknown);
+    passed &= expect(external.candidatesForAnchor(
+                         "Lexample/lunar/Minecraft;", externalUnknown).empty(),
+                     "external modified-client mappings also require family evidence");
+    passed &= expect(externalUnknown.family() == ClientFamily::Unknown,
+                     "rejecting a modified-client candidate leaves Unknown unchanged");
 
     MappingDictionary lateMapping = testLunarDictionary();
     lateMapping.id = "test-lunar-late";

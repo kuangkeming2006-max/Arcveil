@@ -30,6 +30,14 @@ int main(int argc, char **argv) {
         raw["loaders"].array()[0]["instance"] = qEnvironmentVariableIntValue("ARCVEIL_TRANSACTION_LOADER");
         const auto family = qEnvironmentVariable("ARCVEIL_TRANSACTION_FAMILY", "Lunar").toStdString();
         raw["launchEvidence"] = Json::Array{Json::Object{{"family", family}, {"confidence", 250}}};
+        if (raw.contains("runtimeEvidence")) for (auto &evidence : raw["runtimeEvidence"].array()) {
+            evidence["loader"] = raw.at("loaders").array()[0].at("id");
+            evidence["versionSource"] = "synthetic-process-bound-capture";
+            const auto version = qEnvironmentVariable("ARCVEIL_TRANSACTION_VERSION");
+            if (!version.isEmpty()) evidence["version"] = version.toStdString();
+            evidence["brand"] = family == "Vanilla" ? "vanilla" : family == "Forge" ? "forge" : "lunar";
+            evidence["brandSource"] = "synthetic-process-bound-capture";
+        }
         if (qEnvironmentVariableIntValue("ARCVEIL_TRANSACTION_EXTRA")) {
             auto unrelated = raw.at("classes").array()[0];
             unrelated["name"] = "LUnrelatedLoadedClass;"; unrelated["fields"] = Json::Array{};

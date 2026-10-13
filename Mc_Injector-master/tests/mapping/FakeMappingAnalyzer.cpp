@@ -32,11 +32,14 @@ int main(int argc, char **argv) {
     if (mode == "flood")
         for (int i = 0; i < 1000; ++i)
             event({{"event", "symbol"}, {"symbol", QString::number(i)}, {"confidence", 0.99}});
-    const QJsonObject identity{{"family", "Forge"}, {"minecraftVersion", "1.8.9"},
+    const QJsonObject identity{{"family", mode.startsWith("vanilla") ? "Vanilla" : mode == "unknown-family" ? "Unknown" : "Forge"},
+        {"minecraftVersion", mode == "modern-forge" ? "1.20.1" : "1.8.9"},
+        {"versionVerified", mode != "unverified-version"}, {"selectedPack", get("--pack")},
+        {"mappingNamespace", "Notch"}, {"detectionReason", "explicit Mock identity fixture"},
         {"mappingIdentity", "fixture-mapping-identity"}, {"metadataIdentity", "fixture-metadata-identity"},
         {"bindingIdentity", QString(64, QLatin1Char('a'))},
-        {"runtimeBinding", QJsonObject{{"anchor", "net.minecraft.client.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}}}};
-    if (args[1] == "identify") { writeObject(get("--out"), identity); return 0; }
+        {"runtimeBinding", QJsonObject{{"anchor", "net.minecraft.client.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}, {"loaderKey", "fixture-loader"}}}};
+    if (args[1] == "identify" || args[1] == "identity-proof") { writeObject(get("--out"), identity); return 0; }
     if(args[1]=="select") {
         const auto snapshot=readObject(get("--snapshot"));
         writeObject(get("--out"),{{"identity", identity},{"relevantFingerprint",snapshot.value("fingerprint")},{"classes",QJsonArray{QJsonObject{{"name","Fixture"}}}}});
@@ -60,14 +63,18 @@ int main(int argc, char **argv) {
                 QString::number((quint64(c.dwHighDateTime) << 32) | c.dwLowDateTime)}});
         return 0;
     }
-    if (args[1] == "validate" || args[1] == "validate-cache") {
-        if (mode == "unresolved" || (mode == "changed" && args[1] == "validate-cache")) {
+    if (args[1] == "validate" || args[1] == "validate-cache" || args[1] == "validate-authored") {
+        if (mode == "unresolved" || mode == "vanilla-mismatch" || (mode == "changed" && args[1] == "validate-cache")) {
             writeObject(get("--out"), {{"valid", false}});
             event({{"event", "validation"}, {"valid", false}});
             return 3;
         }
         auto pack = readObject(get("--pack"));
         auto provider=pack.value("providers").toArray().first().toObject();
+        for(const auto& candidate:pack.value("providers").toArray())
+            if(candidate.toObject().value("family")==identity.value("family")) {
+                provider=candidate.toObject();break;
+            }
         auto dictionary=provider.value("dictionaries").toArray().first().toObject();
         provider["dictionaries"]=QJsonArray{dictionary};pack["providers"]=QJsonArray{provider};
         const auto contracts=readObject(get("--contracts")).value("symbols").toObject();
@@ -77,6 +84,8 @@ int main(int argc, char **argv) {
             symbols.append(QJsonObject{{"symbol",it.key()},{"accepted",true},{"mapping",values.value(it.key())},{"confidence",1.0}});
         writeObject(get("--out"), {{"identity",identity},{"valid", true},
                                    {"injectionReady", true},
+                                   {"validationMode", args[1] == "validate-authored" ? "authored-metadata" : "installed-runtime"},
+                                   {"selectedPack", pack},
                                    {"symbols", symbols},
                                    {"fingerprint", readObject(get("--snapshot")).value("fingerprint")},
                                    {"pack", pack}});

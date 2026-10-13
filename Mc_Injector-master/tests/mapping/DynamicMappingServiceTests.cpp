@@ -32,7 +32,7 @@ struct DynamicMappingServiceTests {
                                 {"symbols", specs},
                                 {"requiredAlternatives", QJsonArray{}},
                                 {"constructors", QJsonArray{}}});
-        writeObject(pack, {{"providers",
+        writeObject(pack, {{"gameVersion", "1.8.9"}, {"providers",
                             QJsonArray{QJsonObject{
                                 {"family", "Lunar"},
                                 {"dictionaries", QJsonArray{QJsonObject{{"family", "Lunar"},
@@ -70,7 +70,7 @@ struct DynamicMappingServiceTests {
             service.m_root = dir + "/cache";
             service.m_analyzer = worker;
             service.m_contracts = contracts;
-            service.m_defaultPack = pack;
+            service.m_defaultPack = service.m_legacyPack = pack;
             service.m_watchInterval = 20;
             service.m_maxWatchInterval = 60;
             service.m_debounceMs = 10;

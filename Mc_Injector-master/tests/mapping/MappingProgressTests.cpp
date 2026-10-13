@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     QObject::connect(&c, &MappingProgressController::openRequested, [&] { ++opened; });
     QObject::connect(&c, &MappingProgressController::matchingStopped, [&] { ++stopped; });
     c.begin(123);
-    check(opened == 1 && c.steps()[0] == "running", "Attach session requests opening");
+    check(opened == 0 && c.steps()[0] == "running", "normal Attach initializes presentation without opening");
     check(!c.reference().value("referenceAvailable").toBool(), "no reference explicit");
     auto queue = [&](QString s, bool required) {
         c.consume({{"event", "symbol-queued"}, {"symbol", s}, {"required", required}});
@@ -143,6 +143,52 @@ int main(int argc, char **argv) {
     c.consume({{"event", "session-start"}, {"transactionId", "B"}});
     c.consume({{"event", "symbol-queued"}, {"transactionId", "A"}, {"symbol", "old"}, {"required", true}});
     check(c.pendingCount() == 0, "old transaction cannot change new session symbol UI");
+    const int beforeFastPath = opened;
+    c.begin(1003, "fast-path");
+    const auto fastPathStatus = c.status();
+    c.consume({{"event", "session-start"}, {"transactionId", "B"}, {"pid", 1002}});
+    c.consume({{"event", "mapping-fallback"}, {"transactionId", "B"},
+               {"mode", "automatic"}, {"reason", "stale fallback"}});
+    check(opened == beforeFastPath && c.status() == fastPathStatus,
+          "new owner UUID rejects delayed prior session-start and fallback events");
+    c.consume({{"event", "session-start"}, {"transactionId", "fast-path"}, {"pid", 1003}});
+    c.consume({{"event", "CACHE_LOOKUP"}, {"transactionId", "fast-path"}, {"hit", true}});
+    c.consume({{"event", "symbol-queued"}, {"transactionId", "fast-path"}, {"symbol", "required"}, {"required", true}});
+    c.consume({{"event", "symbol-matched"}, {"transactionId", "fast-path"},
+               {"symbol", "required"}, {"runtimeName", "ave.f"}, {"verified", true}});
+    c.consume({{"event", "complete"}, {"transactionId", "fast-path"},
+               {"scope", "mapping"}, {"source", "verified-cache"}});
+    check(c.successful() && opened == beforeFastPath, "verified Cache fast path succeeds without automatic Mapping window");
+    c.begin(1004, "authored");
+    c.consume({{"event", "session-start"}, {"transactionId", "authored"}, {"pid", 1004}});
+    c.consume({{"event", "CACHE_LOOKUP"}, {"transactionId", "authored"}, {"hit", false}});
+    c.consume({{"event", "symbol-queued"}, {"transactionId", "authored"}, {"symbol", "required"}, {"required", true}});
+    c.consume({{"event", "symbol-matched"}, {"transactionId", "authored"},
+               {"symbol", "required"}, {"runtimeName", "ave.f"}, {"verified", true}});
+    c.consume({{"event", "complete"}, {"transactionId", "authored"},
+               {"scope", "mapping"}, {"source", "authored"}});
+    check(c.successful() && opened == beforeFastPath && c.status().startsWith("Mapping"),
+          "authored revalidation succeeds silently with validation status");
+    c.begin(1005, "fallback");
+    c.consume({{"event", "session-start"}, {"transactionId", "fallback"}, {"pid", 1005}});
+    const QJsonObject fallback{{"event", "mapping-fallback"}, {"transactionId", "fallback"},
+                               {"mode", "automatic"}, {"reason", "authored dictionaries did not match"}};
+    c.consume(fallback);
+    check(opened == beforeFastPath + 1 && c.status() == "authored dictionaries did not match",
+          "real automatic fallback requests the existing window");
+    c.stopMatching();
+    c.consume(fallback);
+    c.consume({{"event", "snapshot-update"}, {"transactionId", "fallback"}, {"fingerprint", "retry"}});
+    check(opened == beforeFastPath + 1 && !c.matchingEnabled(),
+          "fallback retry never reopens a user-hidden window or resumes paused matching");
+    c.open();
+    check(opened == beforeFastPath + 2, "manual presentation opt-in remains available");
+    c.begin(1006, "vanilla-diagnostic");
+    c.consume({{"event", "session-start"}, {"transactionId", "vanilla-diagnostic"}, {"pid", 1006}});
+    c.consume({{"event", "mapping-fallback"}, {"transactionId", "vanilla-diagnostic"},
+               {"mode", "diagnostic"}, {"reason", "Vanilla 1.8.9 required Entity descriptor differs"}});
+    check(opened == beforeFastPath + 3 && !c.matchingEnabled() && c.status().contains("descriptor"),
+          "Vanilla mapping mismatch shows diagnosis without enabling automatic matching");
     std::printf("MappingProgress: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

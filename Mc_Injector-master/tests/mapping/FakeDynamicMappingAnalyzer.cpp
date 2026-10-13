@@ -34,6 +34,9 @@ int main(int argc, char **argv) {
     const auto mode = qEnvironmentVariable("ARCVEIL_DYNAMIC_FIXTURE_MODE");
     const auto command = args[1];
     const QJsonObject identity{{"family", "Lunar"}, {"minecraftVersion", "1.8.9"},
+        {"versionVerified", true}, {"selectedPack", get("--pack")}, {"mappingNamespace", "Custom"},
+        {"runtimeBinding", QJsonObject{{"anchor", "fixture.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}, {"loaderKey", "fixture-loader"}}},
+        {"detectionReason", "explicit Mock dynamic identity fixture"},
         {"mappingIdentity", "fixture-target-identity"}, {"metadataIdentity", "fixture-target-metadata"}};
     if (command == "identify") { writeObject(get("--out"), identity); return 0; }
     if (command == "inspect") {

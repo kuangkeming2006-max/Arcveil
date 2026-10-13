@@ -10,6 +10,10 @@ Json partitionDetailReuse(Json selection, const Json &lite, const Json &prior);
 Json mergeDetailReuse(Json detail, const Json &selection, const Json &prior);
 Json requiredClassNames(const Json &contracts, const Json &symbols);
 Json mappingIdentity(const Json &pack, const Json &snapshot, const Json &contracts, bool bindingOnly = false);
+// Catalog entries carry {path, pack}; metadata candidates never authorize runtime identity.
+Json identifyRuntime(const Json::Array &catalog, const Json &snapshot, const Json &contracts);
+Json validateAuthoredRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
+                            const Events &events = {});
 Json validateRuntime(const Json &pack, const Json &snapshot, const Json &contracts,
                      const Events &events = {});
 Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contracts,

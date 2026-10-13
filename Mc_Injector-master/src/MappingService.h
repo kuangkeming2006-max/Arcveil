@@ -62,7 +62,7 @@ class MappingService final : public QObject {
     friend struct TransactionCacheTests;
     friend struct LiveMappingSmoke;
     friend struct DynamicMappingServiceTests;
-    enum class CapturePhase { Initial, Watch, Final, CacheWarmup, Refresh };
+    enum class CapturePhase { Initial, Watch, Final, CacheWarmup, Refresh, ContextFinal };
     void captureLite(CapturePhase phase);
     void selectDetail(CapturePhase phase);
     void captureDetail(CapturePhase phase);
@@ -76,6 +76,11 @@ class MappingService final : public QObject {
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void identifyTarget();
+    void captureAuthoredMetadata(bool finalCheck);
+    void verifyCapturedEnvironment(std::function<void()> verified);
+    bool matchesEnvironment(const QJsonObject &identity) const;
+    void publishRuntimeContext(const QString &validationMode);
+    void showFallback(const QString &mode, const QString &reason);
     void writeIdentityCatalog();
     QString activeContractDigest(const QString& gameVersion) const;
     void selectCacheCandidate();
@@ -125,6 +130,8 @@ class MappingService final : public QObject {
     bool m_finalCheck = false;
     bool m_upgradeCacheProof = false;
     QJsonObject m_runtimeBinding;
+    QJsonObject m_environment, m_authoredIdentity, m_authoredPack;
+    bool m_metadataFastPath = false, m_fallbackShown = false, m_referenceAuthoredTried = false;
     QString m_family, m_minecraftVersion, m_mappingIdentity, m_metadataIdentity, m_transport;
     QHash<QString, QString> m_transports; // pid + processStart; never reused for a recycled PID.
 

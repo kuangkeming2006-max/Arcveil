@@ -99,6 +99,11 @@ prevents shutdown callbacks from touching destroyed cached state.
 
 v55.8 adds MappingProgressController as a separate QML singleton. The composition
 root connects OverlayManager.mappingAttachRequested and MappingService.eventReceived.
+The Attach signal includes its UUID and initializes presentation silently. A
+transaction-scoped `mapping-fallback` service event opens the existing progress
+window once, for automatic resolution or a mapping diagnostic; verified cache and
+authored mapping paths never request it. UI events from a superseded UUID cannot
+replace the new presentation owner, including delayed session-start events.
 The independent ApplicationWindow consumes state only. Stop/close have no edge to
 cancel/detach/rollback; final preflight ready ordering is unchanged. Optional
 presentation receipts are emitted by MappingServiceProgress.cpp after recheck and

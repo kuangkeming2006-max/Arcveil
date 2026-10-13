@@ -49,7 +49,7 @@ struct MappingServiceTests {
         service.m_root = dir.path() + "/cache";
         service.m_analyzer = fake;
         service.m_contracts = contracts;
-        service.m_defaultPack = pack;
+        service.m_defaultPack = service.m_legacyPack = pack;
         const auto log = dir.path() + "/calls.log";
         qputenv("ARCVEIL_MAPPING_TEST_LOG", log.toUtf8());
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "success");
@@ -82,7 +82,7 @@ struct MappingServiceTests {
         before.open(QIODevice::ReadOnly);
         auto first = before.readAll();
         before.close();
-        check(first == "inspect\nidentify\nselect\ninspect-detail\nvalidate\ninspect\nselect\ninspect-detail\n", "preflight ordering");
+        check(first == "inspect\nidentify\nselect\ninspect-detail\nvalidate\ninspect\nidentify\nselect\ninspect-detail\n", "preflight ordering includes independent final environment check");
         start();
         progress.stopMatching();
         check(service.busy(),"stop matching leaves preflight running");
@@ -91,7 +91,7 @@ struct MappingServiceTests {
               "stopped observer still consumes cached results and injection ready");
         QFile after(log);
         after.open(QIODevice::ReadOnly);
-        check(after.readAll() == first + "inspect\nvalidate-cache\n",
+        check(after.readAll() == first + "inspect\nidentify\ninspect\nvalidate-cache\ninspect\nidentify\n",
               "cache hit performs compact binding validation without repeated detail");
         after.close();
         qputenv("ARCVEIL_MAPPING_TEST_MODE", "changed");
@@ -138,6 +138,37 @@ struct MappingServiceTests {
         QObject::disconnect(recoveryCancel);
         check(!service.busy() && service.status() == "Cancelled" && !service.m_process && ready == 5,
               "authored recovery event cancellation stops old generation before validation");
+        int windows = 0, automatic = 0;
+        QObject::connect(&progress, &MappingProgressController::openRequested, [&] { ++windows; });
+        QObject::connect(&service, &MappingService::eventReceived, [&](const QJsonObject &e) {
+            automatic += e.value("event") == "AUTO_RESOLVE";
+        });
+        service.m_root = dir.path() + "/vanilla";
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "vanilla");
+        start();
+        check(wait() && ready == 6 && failed == 0 && windows == 0 && automatic == 0 &&
+              service.m_transaction->detailCaptureCalls == 0 &&
+              service.m_transaction->verifiedRuntimeContext.value("validationMode") == "authored-metadata" &&
+              !mapping_cache::Cache(service.m_root).preferred(service.m_contractDigest).valid(),
+              "Mock Vanilla fast path publishes verified context with no detail/resolver/UI or Cache proof");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "vanilla-mismatch");
+        start();
+        check(wait() && ready == 6 && failed == 1 && windows == 1 && automatic == 0 &&
+              !service.m_watchTimer.isActive(), "Mock confirmed Vanilla mismatch opens diagnosis and refuses automatic guessing");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "modern-forge");
+        start();
+        check(wait() && ready == 6 && failed == 2 && service.m_minecraftVersion == "1.20.1" &&
+              service.m_family == "Forge" && service.status().contains("Unsupported") &&
+              automatic == 0 && !service.m_watchTimer.isActive(),
+              "Mock 1.20.1 Forge is detected accurately and safely rejected without 1.8.9 fallback/watch");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "unknown-family");
+        start();
+        check(wait() && ready == 6 && failed == 3 && automatic == 0 && !service.m_watchTimer.isActive(),
+              "Mock Unknown family cannot select a high-priority provider or infer Vanilla");
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "unverified-version");
+        start();
+        check(wait() && ready == 6 && failed == 4 && automatic == 0,
+              "Mock pack-declared version without verified runtime evidence never authorizes Attach");
         std::printf("MappingService: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }

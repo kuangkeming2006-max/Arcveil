@@ -5,6 +5,46 @@ P/ means Mc_Injector-master. This module owns pack interchange, standalone
 analysis, JSONL events and pre-injection mapping validation; Gameplay consumes
 only its existing BindingCache.
 
+## v56.9.1: independent environment and conditional recovery
+
+Current entry points: `Resolver.h::identifyRuntime/validateAuthoredRuntime`,
+`MappingServiceDynamic.cpp::identifyTarget/captureAuthoredMetadata/publishRuntimeContext`,
+and `AttachTransaction.h::verifiedRuntimeContext`.
+
+Probe-v14 reads bounded, twice-checked `runtimeEvidence` per defining loader:
+audited legacy RealmsSharedConstants.VERSION_STRING, modern version.json id,
+and ClientBrandRetriever.getClientModName. Modern resource evidence additionally
+needs Main or ClientBrandRetriever actually defined by that loader; parent
+resource delegation alone is insufficient. Only parsed values and loader receipts
+are persisted. Class-name/API candidates are diagnostic, never version authority.
+Absent evidence keeps versionVerified=false; Unknown never becomes Vanilla from
+an anchor or provider priority. Loader keys are snapshot-local; cross-capture
+continuity uses the exact anchor, loader type and current JVMTI object identity.
+
+Vanilla 1.8.9/1.20.1 uses its installed exact authored pack, required-only lite
+metadata capture/validation, then a second independent capture/validation. Exact
+members, descriptors, hierarchy and defining loader remain mandatory. The
+authored-metadata proof has a separate digest domain and no bindingIdentity;
+it is not promoted as installed-bytecode Cache/reference evidence. Success
+neither resolves structures nor opens the Mapping window. Vanilla mismatch
+fails with diagnosis rather than guessing a modified-client mapping.
+
+Modified clients first detect the current environment, then try compatible
+Cache, installed authored revalidation (including PR #9 recovery), compatible
+same-version authored data, and only then structural resolution/reference retry.
+Final capture rechecks independent environment as well as installed proof.
+`identity-proof` derives old verified Cache proof material offline; it cannot
+replace current `identify` evidence. Modern Forge remains terminal Unsupported.
+
+All paths publish one transaction-owned Verified Runtime Context containing
+transaction/PID/start identity, actual version/family, selected dictionary and
+namespace, pack hash, loader, proof mode and Adapter. Finalize checks this
+receipt. Existing readyForTransaction and Agent loader/hash boundary stay intact.
+The sole automatic UI trigger is transaction-scoped `mapping-fallback` with
+mode automatic/diagnostic; beginning a transaction is silent. Closing the window
+does not cancel it. See [audit](../V56_9_FAST_PATH_AUDIT.md) and
+[validation](../../../Mc_Injector-master/tests/mapping/V56_9_1_VALIDATION.md).
+
 ## v55.2 entry points
 
 - MappingAnalyzer inspect: offline snapshot inspection or --pid / --java live

@@ -1,8 +1,23 @@
-# Mapping pipeline — internal v55.9
+# Mapping pipeline — internal v56.9.1
 
 The controller validates mappings before loading the main Agent. Gameplay uses logical
 symbols; MappingRegistry remains the final registration boundary and freezes once.
 Default packs are external, versioned JSON. Missing or invalid packs fail closed.
+
+Supported Vanilla 1.8.9 and 1.20.1 now take a deterministic authored path:
+independent runtime version/brand evidence, exact required metadata validation,
+then a second independent live validation. No automatic resolver/window or
+installed-bytecode Cache promotion is involved. Confirmed Vanilla mismatch opens
+diagnosis and fails. Forge/Lunar retain compatible Cache -> authored recovery ->
+necessary structural fallback, without inferring their version from a pack.
+Minecraft 1.20.1 Forge is detected independently but remains Unsupported.
+
+`identify --identity-packs CATALOG` reports actual evidence, versionVerified,
+family, namespace candidates and the defining-loader receipt. Without independent
+evidence, an API candidate is diagnostic only. `validate-authored` accepts lite
+metadata only in the exact authored Vanilla proof mode; its proof cannot be used
+as installed-bytecode evidence. `identity-proof` is for offline migration of an
+already verified full Cache snapshot, never live environment authorization.
 
 ## Developer console
 Open Settings → Open Mapping Console, or Ctrl+Shift+M. It is hidden during normal

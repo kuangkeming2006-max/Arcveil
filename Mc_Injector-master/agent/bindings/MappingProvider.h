@@ -442,12 +442,17 @@ public:
     [[nodiscard]] bool healthy() const noexcept;
     [[nodiscard]] const std::string& loadError() const noexcept { return m_loadError; }
 
+    // Modified-client markers/launch hints are evidence; anchors and Vanilla
+    // naming patterns never establish client identity on their own.
     void observeClassSignature(std::string_view signature,
                                ClientEnvironment& environment) const noexcept;
     void observeLaunchHint(std::string_view hint,
                            ClientEnvironment& environment) const noexcept;
     [[nodiscard]] bool hasMappingsForFamily(ClientFamily family) const noexcept;
     [[nodiscard]] bool isMinecraftAnchor(std::string_view signature) const noexcept;
+    // Unknown admits only authored Vanilla member candidates and remains
+    // Unknown. Candidates never establish runtime family/version identity;
+    // known families retain their registered provider-priority ordering.
     [[nodiscard]] MappingCandidates candidatesForAnchor(
         std::string_view signature,
         const ClientEnvironment& environment) const noexcept;

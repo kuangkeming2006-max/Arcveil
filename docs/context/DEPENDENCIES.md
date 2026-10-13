@@ -145,8 +145,10 @@ registration/freeze, Gameplay and control IPC remain unchanged.
 
 ## Mapping progress v55.8
 qml-ui → MappingProgressController → MappingProgressModel/filter models is a
-presentation-only boundary. OverlayManager.mappingAttachRequested opens a new
-session; no progress-window action reaches Agent registry, detach, rollback or
+presentation-only boundary. OverlayManager.mappingAttachRequested(pid, UUID)
+initializes a new hidden presentation session; MappingService's scoped
+`mapping-fallback` event opens the existing window once for that owner. No
+progress-window action reaches Agent registry, detach, rollback or
 preflight cancel. Closing the separate window does not destroy the controller.
 
 MappingService.eventReceived → MappingProgressController is one-way structured

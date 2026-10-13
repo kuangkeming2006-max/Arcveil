@@ -1,7 +1,155 @@
 #include "MappingService.h"
+#include "../agent/bindings/VersionAdapter.h"
 #include <QFile>
 #include <QDir>
 using namespace mapping_cache;
+
+namespace {
+bool sameRuntimeBinding(const QJsonObject &left, const QJsonObject &right) {
+    if (left.value("anchor").toString().isEmpty() || left.value("type").toString().isEmpty() ||
+        left.value("instance").isUndefined() || right.value("instance").isUndefined()) return false;
+    for (const auto &key : {"anchor", "type", "instance"})
+        if (left.value(key) != right.value(key)) return false;
+    // loaderKey is a per-snapshot structural lookup key; warmup/scoped captures
+    // may change it. The actual current-process loader type + JVMTI object
+    // identity and exact anchor remain the authority across captures.
+    return true;
+}
+}
+
+bool MappingService::matchesEnvironment(const QJsonObject &identity) const {
+    return m_environment.value("versionVerified").toBool() && identity.value("versionVerified").toBool() &&
+        !m_family.isEmpty() && m_family != "Unknown" &&
+        identity.value("family").toString() == m_family &&
+        identity.value("minecraftVersion").toString() == m_minecraftVersion &&
+        sameRuntimeBinding(identity.value("runtimeBinding").toObject(),
+                           m_environment.value("runtimeBinding").toObject());
+}
+void MappingService::showFallback(const QString &mode, const QString &reason) {
+    if (m_fallbackShown || !m_busy || !current()) return;
+    m_fallbackShown = true;
+    event({{"event", "mapping-fallback"}, {"mode", mode}, {"reason", reason},
+           {"family", m_family}, {"minecraftVersion", m_minecraftVersion}});
+}
+void MappingService::publishRuntimeContext(const QString &validationMode) {
+    if (!current() || !matchesEnvironment(m_validation.value("identity").toObject()) ||
+        m_mappingIdentity.isEmpty() || m_metadataIdentity.isEmpty() || m_pack.isEmpty())
+        throw std::runtime_error("Cannot publish Verified Runtime Context from inconsistent live evidence");
+    const auto *adapter = mcoverlay::bindings::selectVersionAdapter(
+        mcoverlay::bindings::MinecraftVersion::parse(m_minecraftVersion.toStdString()));
+    if (!adapter) throw std::runtime_error("No verified Version Adapter for runtime version");
+    auto context = m_environment;
+    context["transactionId"] = transactionId();
+    context["pid"] = double(m_pid);
+    context["processStart"] = m_start;
+    context["pack"] = m_pack;
+    context["selectedPack"] = m_pack;
+    context["mappingHash"] = fileDigest(m_pack, 2 * 1024 * 1024);
+    context["mappingIdentity"] = m_mappingIdentity;
+    context["metadataIdentity"] = m_metadataIdentity;
+    context["runtimeBinding"] = m_runtimeBinding;
+    context["liveValidated"] = true;
+    context["finalChecked"] = true;
+    context["validationMode"] = validationMode;
+    const auto validatedPack = readObject(m_pack);
+    if (validatedPack.value("gameVersion").toString() != m_minecraftVersion)
+        throw std::runtime_error("Validated pack API version disagrees with the live runtime");
+    const auto providers = validatedPack.value("providers").toArray();
+    if (providers.size() != 1) throw std::runtime_error("Verified context requires one validated provider");
+    const auto dictionaries = providers.first().toObject().value("dictionaries").toArray();
+    if (dictionaries.size() != 1) throw std::runtime_error("Verified context requires one validated dictionary");
+    const auto dictionary = dictionaries.first().toObject();
+    const auto providerFamily = dictionary.value("family").toString();
+    if (providerFamily != m_family && providerFamily != "Vanilla")
+        throw std::runtime_error("Validated dictionary is not compatible with the detected client family");
+    context["mappingNamespace"] = dictionary.value("mappingNamespace").toString("Unknown");
+    context["dictionaryId"] = dictionary.value("id");
+    context["mappingProviderFamily"] = providerFamily;
+    context["adapter"] = QString::fromLatin1(adapter->id.data(), qsizetype(adapter->id.size()));
+    m_transaction->verifiedRuntimeContext = context;
+}
+void MappingService::verifyCapturedEnvironment(std::function<void()> verified) {
+    const auto path = m_run + QString("/environment-%1.json").arg(m_captureSerial);
+    launch({"identify", "--pack", m_defaultPack, "--snapshot", m_litePath,
+            "--identity-packs", m_identityPacksFile, "--contracts", m_contracts,
+            "--out", path}, [this, path, verified = std::move(verified)](int code) {
+        if (code || !matchesEnvironment(readObject(path))) {
+            fail("Runtime version, family or defining ClassLoader changed during mapping validation");
+            return;
+        }
+        verified();
+    });
+}
+void MappingService::captureAuthoredMetadata(bool finalCheck) {
+    if (!identityValid()) { fail("Target JVM exited during Vanilla mapping validation"); return; }
+    m_metadataFastPath = true;
+    m_finalCheck = finalCheck;
+    m_capture = {};
+    ++m_captureSerial;
+    const auto output = m_run + QString("/authored-metadata-%1.jsonl").arg(m_captureSerial);
+    QStringList args{"inspect", "--lite", "--identity-lite", "--required-only",
+        "--identity-packs", m_identityPacksFile, "--pid", QString::number(m_pid),
+        "--java", m_java, "--helper", m_helper, "--probe", m_probe,
+        "--native-loader", m_tools + "/McOverlayNativeLoader.exe", "--pack", m_defaultPack,
+        "--contracts", m_contracts, "--out", output};
+    if (m_transport == "NativeLoader") args << "--transport" << "native";
+    if (!m_modular) args << "--tools-jar" << m_toolsJar;
+    m_status = finalCheck ? "Final independent Vanilla mapping validation" : "Validating built-in Vanilla mapping";
+    emit changed();
+    launch(args, [this, finalCheck, output](int code) {
+        if (code || !identityValid() || m_capture.value("pid").toDouble() != m_pid ||
+            m_capture.value("processStart").toString() != m_start) {
+            fail("Vanilla mapping metadata capture failed or target JVM changed"); return;
+        }
+        m_litePath = output;
+        m_fingerprint = m_capture.value("fingerprint").toString();
+        m_snapshot = output;
+        const auto receipt = m_run + (finalCheck ? "/authored-final.json" : "/authored-first.json");
+        launch({"validate-authored", "--pack", m_defaultPack, "--snapshot", output,
+                "--contracts", m_contracts, "--out", receipt},
+               [this, finalCheck, receipt](int validationCode) {
+            m_validation = readObject(receipt);
+            const auto identity = m_validation.value("identity").toObject();
+            auto selected = m_validation.value("selectedPack").toObject();
+            if (selected.isEmpty()) selected = m_validation.value("pack").toObject();
+            if (validationCode || !m_validation.value("valid").toBool() ||
+                !m_validation.value("injectionReady").toBool() ||
+                m_validation.value("validationMode").toString() != "authored-metadata" ||
+                !matchesEnvironment(identity) || selected.isEmpty() ||
+                selected.value("gameVersion").toString() != m_minecraftVersion) {
+                const auto reason = QString("Vanilla %1 built-in mapping mismatch: %2; details: %3")
+                    .arg(m_minecraftVersion, m_validation.value("reason").toString("required bindings or runtime identity differ"), receipt);
+                showFallback("diagnostic", reason);
+                fail(reason); return;
+            }
+            if (identity.value("mappingIdentity").toString().isEmpty() ||
+                identity.value("metadataIdentity").toString().isEmpty()) {
+                fail("Vanilla mapping validator omitted stable metadata identity"); return;
+            }
+            if (!finalCheck) {
+                m_authoredIdentity = identity;
+                m_authoredPack = selected;
+            } else if (identity.value("mappingIdentity") != m_authoredIdentity.value("mappingIdentity") ||
+                       identity.value("metadataIdentity") != m_authoredIdentity.value("metadataIdentity") ||
+                       selected != m_authoredPack ||
+                       !sameRuntimeBinding(identity.value("runtimeBinding").toObject(),
+                                           m_authoredIdentity.value("runtimeBinding").toObject())) {
+                showFallback("diagnostic", "Vanilla mapping changed between independent runtime validations");
+                fail("Vanilla mapping changed between independent runtime validations"); return;
+            }
+            m_mappingIdentity = identity.value("mappingIdentity").toString();
+            m_metadataIdentity = identity.value("metadataIdentity").toString();
+            m_runtimeBinding = identity.value("runtimeBinding").toObject();
+            m_pack = m_run + "/validated-pack.json";
+            writeObject(m_pack, selected);
+            if (!finalCheck) captureAuthoredMetadata(true);
+            else {
+                publishRuntimeContext("authored-metadata");
+                finalize();
+            }
+        });
+    });
+}
 
 void MappingService::stopMatching() {
     if (!m_busy || !current()) return;
@@ -106,7 +254,7 @@ bool MappingService::captureFailed(int code) {
     return true;
 }
 void MappingService::captureLite(CapturePhase phase) {
-    m_finalCheck = phase == CapturePhase::Final;
+    m_finalCheck = phase == CapturePhase::Final || phase == CapturePhase::ContextFinal;
     if (!identityValid()) {
         fail("Target JVM exited or changed identity");
         return;
@@ -160,6 +308,7 @@ void MappingService::captureLite(CapturePhase phase) {
             const auto reference = Cache(m_root).reference(m_contractDigest, m_family, m_minecraftVersion, m_mappingIdentity);
             if (reference.revision != m_reference.revision && reference.valid()) {
                 m_reference = reference;
+                m_referenceAuthoredTried = false;
                 m_scopePack = reference.pack;
                 m_matchingState = {};
                 m_statePath.clear();
@@ -181,7 +330,12 @@ void MappingService::captureLite(CapturePhase phase) {
         }
         m_observedLite = fingerprint;
         if (phase == CapturePhase::Initial) identifyTarget();
-        else selectDetail(phase == CapturePhase::CacheWarmup ? CapturePhase::Initial : phase);
+        else verifyCapturedEnvironment([this, phase] {
+            if (phase == CapturePhase::ContextFinal) {
+                publishRuntimeContext("verified-cache");
+                finalize();
+            } else selectDetail(phase == CapturePhase::CacheWarmup ? CapturePhase::Initial : phase);
+        });
     });
 }
 void MappingService::selectDetail(CapturePhase phase) {
@@ -300,6 +454,7 @@ void MappingService::captureDetail(CapturePhase phase) {
             return;
         }
         if (phase == CapturePhase::Final && fp == m_finalFingerprint) {
+            publishRuntimeContext("installed-runtime");
             finalize();
             return;
         }
@@ -347,21 +502,46 @@ void MappingService::identifyTarget() {
     launch({"identify", "--pack", m_defaultPack, "--snapshot", m_litePath,
             "--identity-packs", m_identityPacksFile,
             "--contracts", m_contracts, "--out", m_run + "/identity.json"}, [this](int code) {
-        if (code) { fail("Cannot identify target family"); return; }
+        if (code) { fail("Cannot identify runtime version/family: " + m_analyzerFailure.value("reason").toString()); return; }
         const auto identity = readObject(m_run + "/identity.json");
-        if (identity.value("minecraftVersion").toString()=="1.20.1" && QFile::exists(m_modernPack)) {
-            m_defaultPack=m_modernPack;m_scopePack=m_modernPack;
-            m_contractDigest=activeContractDigest("1.20.1");
-            writeIdentityCatalog();
-            progressSchema();
-            event({{"event","API_ADAPTER_SELECTED"},{"minecraftVersion","1.20.1"},
-                {"adapter","modern-1.20.1-readonly-v1"},{"versionAuthority","loaded anchor candidate; exact runtime check required by Agent"}});
+        const auto family = identity.value("family").toString();
+        const auto version = identity.value("minecraftVersion").toString();
+        if (!identity.value("versionVerified").toBool() || version.isEmpty() ||
+            family.isEmpty() || family == "Unknown" ||
+            !sameRuntimeBinding(identity.value("runtimeBinding").toObject(), identity.value("runtimeBinding").toObject())) {
+            fail("Unsupported runtime identity: version/family/defining ClassLoader could not be verified: " +
+                 identity.value("detectionReason").toString()); return;
         }
-        m_family = identity.value("family").toString();
-        m_minecraftVersion = identity.value("minecraftVersion").toString();
+        if (!m_environment.isEmpty() && !matchesEnvironment(identity)) {
+            fail("Runtime identity changed while recovering a mapping candidate"); return;
+        }
+        m_family = family;
+        m_minecraftVersion = version;
+        m_environment = identity;
+        const auto *adapter = mcoverlay::bindings::selectVersionAdapter(
+            mcoverlay::bindings::MinecraftVersion::parse(version.toStdString()));
+        if (!adapter) { fail("Unsupported Minecraft API version: no verified Version Adapter: " + version); return; }
         if (m_minecraftVersion=="1.20.1" && m_family!="Vanilla") {
-            fail("Unsupported 1.20.1 client family: "+m_family+"; a verified family-specific mapping is required");return;
+            const auto reason = "Unsupported 1.20.1 client family: "+m_family+"; a verified family-specific mapping is required";
+            showFallback("diagnostic", reason); fail(reason); return;
         }
+        // The installed authored pack remains the recovery baseline after a
+        // stale Cache fails. Catalog/Cache candidates cannot replace it.
+        const auto selected = version == "1.20.1" ? m_modernPack : m_legacyPack;
+        if (selected.isEmpty() || !QFile::exists(selected) ||
+            readObject(selected).value("gameVersion").toString() != version) {
+            fail("Unsupported runtime: no trusted authored mapping for " + version + " " + family); return;
+        }
+        m_defaultPack = selected;
+        m_scopePack = selected;
+        m_contractDigest = activeContractDigest(version);
+        writeIdentityCatalog();
+        progressSchema();
+        event({{"event", "API_ADAPTER_SELECTED"}, {"minecraftVersion", version}, {"family", family},
+               {"adapter", QString::fromLatin1(adapter->id.data(), qsizetype(adapter->id.size()))},
+               {"versionAuthority", "independent live runtime evidence"}});
+        if (!current()) return;
+        if (m_family == "Vanilla") { captureAuthoredMetadata(false); return; }
         m_candidates = m_skipCacheCandidates ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
         m_candidateIndex = 0;
         selectCacheCandidate();
@@ -395,7 +575,7 @@ void MappingService::checkCached(const Entry &entry) {
         // proof offline once; repeating live detail would add no evidence.
         auto source = Cache(m_root).lookup(entry.mappingIdentity, m_contractDigest);
         if (!source.valid()) { fallbackFromCache("legacy-verified-source-invalid"); return; }
-        launch({"identify", "--pack", source.pack, "--snapshot", source.snapshot, "--contracts", m_contracts,
+        launch({"identity-proof", "--pack", source.pack, "--snapshot", source.snapshot, "--contracts", m_contracts,
                 "--out", m_run + "/legacy-binding-proof.json"}, [this, source](int code) mutable {
             if (code) { fallbackFromCache("legacy-binding-proof-unavailable"); return; }
             const auto identity = readObject(m_run + "/legacy-binding-proof.json");
@@ -410,8 +590,10 @@ void MappingService::checkCached(const Entry &entry) {
         });
         return;
     }
+    if (entry.family != m_family || entry.minecraftVersion != m_minecraftVersion) {
+        fallbackFromCache("cached-runtime-family-version-mismatch"); return;
+    }
     m_hit = entry; m_reference = entry; m_cachePath = true;
-    m_family = entry.family; m_minecraftVersion = entry.minecraftVersion;
     m_status = "Checking cached required classes and members";
     emit changed();
     if (generation != m_generation || !m_busy || !current()) return;
@@ -437,7 +619,7 @@ void MappingService::checkCached(const Entry &entry) {
             const auto identity = m_validation.value("identity").toObject();
             if (!m_validation.value("valid").toBool() || !m_validation.value("injectionReady").toBool() ||
                 m_validation.value("fingerprint").toString() != m_fingerprint ||
-                identity.value("family").toString() != m_hit.family ||
+                !matchesEnvironment(identity) ||
                 identity.value("bindingIdentity").toString() != m_hit.bindingIdentity) {
                 fallbackFromCache("cached-required-binding-receipt-mismatch"); return;
             }
@@ -454,7 +636,7 @@ void MappingService::checkCached(const Entry &entry) {
                 fail("Target or verified pack changed before Agent loading"); return;
             }
             performance("final check", finalElapsed.elapsed());
-            if (generation == m_generation && current()) finalize();
+            if (generation == m_generation && current()) captureLite(CapturePhase::ContextFinal);
         });
     });
 }
@@ -477,6 +659,8 @@ void MappingService::fallbackFromCache(const QString &reason) {
 }
 void MappingService::writeIdentityCatalog() {
     auto paths=Cache(m_root).knownPacks(m_contractDigest);
+    if (QFile::exists(m_defaultPack)) paths.append(m_defaultPack);
+    if (QFile::exists(m_legacyPack)) paths.append(m_legacyPack);
     // Installed authored packs are candidates only. No mapping confidence or
     // loader authority is granted until current runtime validation completes.
     const auto bundle=readObject(m_contracts);
@@ -516,7 +700,7 @@ void MappingService::validate(const QString &pack, bool automatic) {
     event({{"event", "pack"}, {"path", pack}, {"automatic", automatic}});
     launch({"validate", "--pack", pack, "--snapshot", m_snapshot, "--contracts", m_contracts,
             "--out", m_run + "/validation.json"},
-           [this, automatic](int code) {
+           [this, automatic, pack](int code) {
                if (code != 0 && code != 3) {
                    fail("Live validation cannot continue");
                    return;
@@ -552,6 +736,12 @@ void MappingService::validate(const QString &pack, bool automatic) {
                        if (m_cachePath) { fallbackFromCache("cached-pack-live-validation-failed"); return; }
                        if (!m_authoredWarmup) { m_authoredWarmup = true; captureLite(CapturePhase::Initial); return; }
                        if (m_reference.valid() && !m_fullLite) { m_fullLite = true; captureLite(CapturePhase::Initial); return; }
+                       if (!m_referenceAuthoredTried && m_reference.valid() && m_reference.pack != pack) {
+                           m_referenceAuthoredTried = true;
+                           event({{"event", "AUTHORED_REVALIDATE"}, {"reason", "same-family-version-compatible-candidate"},
+                                  {"pack", m_reference.pack}});
+                           validate(m_reference.pack, false); return;
+                       }
                        resolve();
                        return;
                    }
@@ -563,6 +753,10 @@ void MappingService::validate(const QString &pack, bool automatic) {
                }
                if (m_validation.value("fingerprint").toString() != m_fingerprint) {
                    fail("Invalid validation receipt identity");
+                   return;
+               }
+               if (!matchesEnvironment(m_validation.value("identity").toObject())) {
+                   fail("Live mapping validation disagrees with the independently detected version/family/ClassLoader");
                    return;
                }
                if (automatic) {
@@ -615,6 +809,15 @@ void MappingService::invalidate(const QString &symbol, const QString &reason) {
     event({{"event", "symbol-invalidated"}, {"symbol", symbol}, {"reason", reason}});
 }
 void MappingService::resolve() {
+    if (!m_busy || !current()) return;
+    if (!m_environment.value("versionVerified").toBool() || m_family.isEmpty() || m_family == "Unknown") {
+        fail("Automatic resolver requires a verified runtime version and client family"); return;
+    }
+    if (m_family == "Vanilla") {
+        const auto reason = "Vanilla " + m_minecraftVersion + " authored mapping failed; automatic guessing is disabled";
+        showFallback("diagnostic", reason); fail(reason); return;
+    }
+    showFallback("automatic", "Known client mappings did not match; automatic structural fallback is required");
     if (!m_busy || !current()) return;
     m_dynamic = true;
     m_transaction->state = m_watchEnabled ? AttachTransaction::State::MappingResolving : AttachTransaction::State::MappingPaused;

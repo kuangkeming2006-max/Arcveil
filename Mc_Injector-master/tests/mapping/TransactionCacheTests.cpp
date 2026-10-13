@@ -21,11 +21,12 @@ struct TransactionCacheTests {
         QTemporaryDir temp;
         MappingService service;
         service.m_root = temp.path() + "/cache"; service.m_analyzer = worker;
-        service.m_defaultPack = fixture + "/lunar-pack.json"; service.m_contracts = contracts;
+        service.m_defaultPack = service.m_legacyPack = fixture + "/lunar-pack.json"; service.m_contracts = contracts;
         service.m_watchInterval = 20; service.m_maxWatchInterval = 60; service.m_debounceMs = 5;
         MappingProgressController progress;
         QObject::connect(&service, &MappingService::eventReceived, &progress, &MappingProgressController::consume);
-        int ready = 0, failed = 0, autoCalls = 0, hits = 0, promoted = 0;
+        int ready = 0, failed = 0, autoCalls = 0, hits = 0, promoted = 0, opened = 0;
+        QObject::connect(&progress, &MappingProgressController::openRequested, [&] { ++opened; });
         QObject::connect(&service, &MappingService::ready, [&](const auto &, const auto &) { ++ready; });
         QObject::connect(&service, &MappingService::failed, [&](const auto &s) { ++failed; std::printf("FAILURE %s\n", s.toUtf8().constData()); });
         QObject::connect(&service, &MappingService::eventReceived, [&](const QJsonObject &e) {
@@ -45,10 +46,12 @@ struct TransactionCacheTests {
         start();
         check(spin([&] { return ready || failed; }) && ready == 1 && failed == 0 && autoCalls == 1 && promoted == 1,
               "A: cache miss -> real automatic resolver -> real validate -> atomic promote -> ready");
+        check(opened == 1, "A: actual automatic fallback requests the Mapping window once");
         const auto firstIdentity = service.m_mappingIdentity;
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 2 || failed; }) && ready == 2 && autoCalls == 0 && hits == 1,
               "B: second same-build attach uses scoped real validation with zero automatic resolve calls");
+        check(opened == 1, "B: verified Cache success does not request a Mapping window");
         check(progress.successful() && progress.status().contains("Cache HIT"),
               "B: fresh live validation retains Cache HIT -> Live validation -> Ready presentation");
         check(service.m_transaction->detailCaptureCalls == 0 && !service.m_hit.bindingIdentity.isEmpty(),
@@ -58,6 +61,7 @@ struct TransactionCacheTests {
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 3 || failed; }) && ready == 3 && autoCalls == 0 && hits == 1 && service.m_mappingIdentity == firstIdentity,
               "C: class count/order/loader instance do not affect reusable mapping identity");
+        check(opened == 1, "C: restarted loader Cache validation remains silent");
         check(service.m_transaction->detailCaptureCalls == 0 && service.m_runtimeBinding.value("instance").toDouble() == 98765,
               "C: restart fast check pins current loader and performs zero detail captures");
         check(!Cache(service.m_root).reference(fileDigest(contracts), "Badlion", "1.8.9").valid(),
@@ -133,10 +137,11 @@ struct TransactionCacheTests {
         // the authored dictionary and recapture before publishing a new proof.
         service.m_root = temp.path() + "/authored-drift";
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/lunar-raw.json").toUtf8());
-        const auto authoredReady = ready;
+        const auto authoredReady = ready, beforeAuthoredWindows = opened;
         start();
         check(spin([&] { return ready > authoredReady || failed; }) && ready == authoredReady + 1,
               "M: establish current authored mapping with real validation");
+        check(opened == beforeAuthoredWindows, "M: first authored mapping validation succeeds without Mapping window");
         const auto authoredIdentity = service.m_mappingIdentity;
         const auto driftReady = ready, driftPromoted = promoted;
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-authored-raw.json").toUtf8());
@@ -145,21 +150,25 @@ struct TransactionCacheTests {
               promoted == driftPromoted + 1 && hits == 0 && autoCalls == 0 &&
               service.m_mappingIdentity != authoredIdentity && service.m_transaction->detailCaptureCalls == 2,
               "M: stale content proof -> authored full validation -> fresh final detail -> new proof, no migration");
+        check(opened == beforeAuthoredWindows,
+              "M: stale Cache followed by successful authored revalidation never opens automatic Mapping UI");
         // The same recovery must not grant loading authority for an incorrect
         // required descriptor, even with a previously verified cache/reference.
-        const auto brokenReady = ready, brokenPromoted = promoted;
+        const auto brokenReady = ready, brokenPromoted = promoted, beforeBrokenWindows = opened;
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/broken-required-raw.json").toUtf8());
         start();
         check(spin([&] { return (service.m_dynamic && !service.m_process && !service.m_matchingState.isEmpty()) || failed; }) &&
               !failed && ready == brokenReady && promoted == brokenPromoted && service.busy() &&
               !service.m_matchingState.value("requiredComplete").toBool() && !service.m_unresolved.isEmpty(),
               "N: missing required descriptor after cache failure never authorizes ready or promotion");
+        check(opened == beforeBrokenWindows + 1, "N: failed authored mapping opens fallback UI once while preserving pending Attach");
         service.cancel();
         // Unsupported API is terminal, even when names/descriptors match a fixture.
         auto unsupportedPack=readObject(service.m_defaultPack);
         unsupportedPack["gameVersion"]="1.12.2";
         service.m_defaultPack=temp.path()+"/unsupported-pack.json";
         writeObject(service.m_defaultPack,unsupportedPack);
+        qputenv("ARCVEIL_TRANSACTION_VERSION", "1.12.2"); // Explicit synthetic runtime evidence, independent of pack metadata.
         service.m_root=temp.path()+"/unsupported-cache";
         const auto unsupportedReady=ready, unsupportedPromoted=promoted;
         start();

@@ -38,16 +38,31 @@ try:
     assert process.stdout.readline().strip()=='FIXTURE_READY'
     snapshot=folder/'installed.jsonl'
     run(['inspect','--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
-         '--probe',build/'tools/MappingProbe-v13.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
+         '--probe',build/'tools/MappingProbe-v14.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
          '--pack',pack,'--contracts',contracts,'--out',snapshot])
     validation=folder/'validation.json'
     run(['validate','--pack',pack,'--contracts',contracts,'--snapshot',snapshot,'--out',validation])
     receipt=read(validation)
     assert receipt['injectionReady'] and receipt['identity']['bindingIdentity'] and receipt['identity']['runtimeBinding']['instance'];checks+=1
+    assert receipt['identity']['versionVerified'] and receipt['identity']['minecraftVersion']=='1.20.1';checks+=1
+    assert receipt['identity']['family']=='Vanilla';checks+=1
+    # Positively identified Vanilla uses exact authored metadata without installed
+    # bytecode capture, structural resolution, or structural-cache authorization.
+    metadata=folder/'authored-metadata.jsonl'
+    capture=run(['inspect','--lite','--required-only','--identity-lite','--pid',process.pid,
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v14.dll',
+         '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',metadata])
+    stats=[json.loads(line) for line in capture.stdout.splitlines() if json.loads(line).get('event')=='SNAPSHOT_STATS']
+    assert stats and all(event['jvmtiBytecodeBytes']==0 and event['jvmtiConstantPoolBytes']==0 for event in stats);checks+=1
+    run(['validate-authored','--pack',pack,'--snapshot',metadata,'--contracts',contracts,'--out',folder/'authored.json'])
+    authored=read(folder/'authored.json')
+    assert authored['valid'] and authored['injectionReady'] and authored['validationMode']=='authored-metadata';checks+=1
+    assert authored['identity']['versionVerified'] and authored['identity']['family']=='Vanilla';checks+=1
+    assert authored['identity']['bindingIdentity']=='';checks+=1
     # A cache proof never replaces a fresh compact capture from this JVM.
     compact=folder/'compact.jsonl'
     run(['inspect','--lite','--binding-check','--required-only','--identity-lite','--pid',process.pid,
-         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v13.dll',
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v14.dll',
          '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',compact])
     run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
          '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'cached.json'])
@@ -62,6 +77,7 @@ try:
     run(['identify','--pack',root/'mapping/packs/default-v2.json','--snapshot',snapshot,
          '--contracts',contracts,'--identity-packs',catalog,'--out',folder/'identity.json'])
     assert read(folder/'identity.json')['minecraftVersion']=='1.20.1';checks+=1
+    assert read(folder/'identity.json')['versionVerified'] and read(folder/'identity.json')['family']=='Vanilla';checks+=1
     # Family evidence must not be lost merely because only Vanilla ships in this pack.
     run(['inspect','--snapshot',snapshot,'--out',folder/'offline-family.json'])
     records=[json.loads(line) for line in (folder/'offline-family.json').read_text().splitlines()]
@@ -70,6 +86,10 @@ try:
     header['data']=json.dumps(forge)
     forge_path=folder/'forge-evidence.jsonl'
     forge_path.write_bytes(('\n'.join(json.dumps(record,separators=(',',':')) for record in records)+'\n').encode())
+    run(['identify','--pack',root/'mapping/packs/default-v2.json','--snapshot',forge_path,
+         '--contracts',contracts,'--identity-packs',catalog,'--out',folder/'forge-identity.json'])
+    forge_identity=read(folder/'forge-identity.json')
+    assert forge_identity['versionVerified'] and forge_identity['minecraftVersion']=='1.20.1' and forge_identity['family']=='Forge';checks+=1
     run(['validate','--pack',pack,'--snapshot',forge_path,
          '--contracts',contracts,'--out',folder/'forge-rejected.json'],3)
     assert not read(folder/'forge-rejected.json')['injectionReady'];checks+=1

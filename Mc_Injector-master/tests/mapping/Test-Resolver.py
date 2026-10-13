@@ -46,7 +46,12 @@ for ci,(name,c) in enumerate(sorted(classes.items())):
         for f,ref in zip(c['fields'],refs):code+=bytes([0xb2 if f['modifiers']&8 else 0xb4])+struct.pack('>H',ref)+bytes([0x57])
         m['bytecode']=(code+bytes([0xb1])).hex()
     c['constantPool']=b''.join(entries).hex();c['constantPoolCount']=len(entries)+1
-raw={'snapshotVersion':1,'complete':True,'captureKind':'jvmti-installed-double-read','pid':1,'processStart':'fixture','requestId':'fixture','loaders':[{'id':1,'type':'LFixtureLoader;'}],'classes':list(classes.values())}
+raw={'snapshotVersion':1,'complete':True,'captureKind':'jvmti-installed-double-read','pid':1,'processStart':'fixture','requestId':'fixture','loaders':[{'id':1,'type':'LFixtureLoader;','instance':123}],'classes':list(classes.values()),
+     # Explicitly simulated authority, independent of the pack-selection path.
+     # These offline fixtures are not observations from a Minecraft JVM.
+     'runtimeEvidence':[{'evidenceVersion':1,'anchor':sym['minecraftSignature'],'loader':1,
+                         'version':'1.8.9','versionSource':'synthetic-fixture',
+                         'brand':'vanilla','brandSource':'synthetic-fixture'}]}
 folder=build/'resolver-fixtures';folder.mkdir(exist_ok=True)
 def write(n,obj):(folder/n).write_text(json.dumps(obj,separators=(',',':')),encoding='utf-8')
 write('pack.json',p);write('raw.json',raw)
@@ -60,6 +65,8 @@ run(['validate','--pack',str(folder/'pack.json'),'--snapshot',str(folder/'refere
 # Rename every application class and member, including CP symbolic references; retain structure.
 renamed=copy.deepcopy(raw)
 classmap={n:'Lrenamed/C'+str(i)+';' for i,n in enumerate(sorted(classes))}
+for evidence in renamed['runtimeEvidence']:
+    evidence['anchor']=classmap[evidence['anchor']]
 membermap={}
 for c in renamed['classes']:
     old=c['name'];c['name']=classmap[old]

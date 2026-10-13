@@ -109,12 +109,13 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v13.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v14.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     Json request = Json::Object{{"requestId", requestId},
                                 {"mode", options.contains("--lite") ? "lite" : "full"}};
+    Json::Array runtimeAnchors{"Lnet/minecraft/client/main/Main;", "Lnet/minecraft/client/Minecraft;", "Lave;", "Lenn;"};
     if (options.contains("--binding-check")) request["bindingCheck"] = true;
     if (options.contains("--candidates"))
         request["selectionPath"] =
@@ -126,6 +127,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
         Json::Array warmup, detection;
         for (const auto &p : authored.at("providers").array())
             for (const auto &d : p.at("dictionaries").array()) {
+                runtimeAnchors.push_back(d.at("symbols").at("minecraftSignature"));
                 Json::Array names;
                 for (const auto &[key, spec] : authoredContracts.at("symbols").object())
                     if (spec.at("kind").string() == "class" &&
@@ -135,7 +137,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
                 warmup.push_back(Json::Object{{"anchor", d.at("symbols").at("minecraftSignature")},
                                               {"classes", names}});
                 for (const auto &pattern : d.at("detection").array())
-                    if (pattern.at("match").integer() == 2)
+                    if (pattern.at("match").integer() == 2 && d.at("family").string() != "Vanilla")
                         detection.push_back(Json::Object{{"family", d.at("family")},
                                                          {"value", pattern.at("value")},
                                                          {"confidence", pattern.at("confidence")}});
@@ -157,13 +159,14 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             const auto& authoredContracts=contractsForPack(pack,contracts);
             for (const auto &provider : pack.at("providers").array())
                 for (const auto &dict : provider.at("dictionaries").array()) {
+                    runtimeAnchors.push_back(dict.at("symbols").at("minecraftSignature"));
                     if (options.contains("--required-only")) {
                         const auto required = requiredClassNames(authoredContracts, dict.at("symbols"));
                         for (const auto &name : required.array()) names.push_back(name);
                     } else for (const auto &[key, spec] : authoredContracts.at("symbols").object())
                         if (spec.at("kind").string() == "class" && !dict.at("symbols").at(key).string().empty())
                             names.push_back(dict.at("symbols").at(key));
-                    for (const auto &hint : dict.at("detection").array()) if (hint.at("match").integer() <= 1)
+                    for (const auto &hint : dict.at("detection").array()) if (hint.at("match").integer() <= 1 && dict.at("family").string() != "Vanilla")
                         classHints.push_back(Json::Object{{"family",dict.at("family")}, {"value",hint.at("value")},
                             {"prefix",hint.at("match").integer()==1}, {"confidence",hint.at("confidence")}});
                 }
@@ -175,6 +178,16 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     if (!request.contains("classHints")) request["classHints"]=Json::Array{};
     request["classHints"].array().push_back(Json::Object{{"family","Forge"},{"value","Lnet/minecraftforge/"},{"prefix",true},{"confidence",200}});
     request["classHints"].array().push_back(Json::Object{{"family","Lunar"},{"value","Lcom/lunarclient/"},{"prefix",true},{"confidence",250}});
+    std::sort(runtimeAnchors.begin(), runtimeAnchors.end(), [](const Json &a, const Json &b) { return a.string() < b.string(); });
+    runtimeAnchors.erase(std::unique(runtimeAnchors.begin(), runtimeAnchors.end()), runtimeAnchors.end());
+    request["runtimeAnchors"] = runtimeAnchors;
+    if (request.contains("liteClasses")) for (const auto &anchor : runtimeAnchors) {
+        auto binary = anchor.string();
+        if (binary.size() > 2 && binary.front() == 'L' && binary.back() == ';') {
+            binary = binary.substr(1, binary.size() - 2); std::replace(binary.begin(), binary.end(), '/', '.');
+            request["liteClasses"].array().push_back(binary);
+        }
+    }
     Json paths =
         Json::Object{{"event", "CAPTURE_PATH"},
                      {"standardAttach", Json::Object{{"status", "pending"},
