@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < args.size(); ++i) {
             if (!args[i].startsWith("--") || options.contains(args[i]))
                 throw std::runtime_error("invalid/duplicate option");
-            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only" || args[i]=="--binding-check") {
+            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only" || args[i]=="--binding-check" || args[i]=="--plan-capture") {
                 options[args[i]] = "true";
                 continue;
             }
@@ -86,7 +86,14 @@ int main(int argc, char **argv) {
             data.object().erase("event");
             event(type, data);
         };
-        if (command == "inspect" || command == "inspect-detail") {
+        if(command=="inspect" && options.contains("--plan-capture")) {
+            const auto request=planCaptureRequest(options,contracts());
+            const auto stats=captureRequestStats(request);
+            event("CAPTURE_REQUEST_PLAN",Json::Object{{"request",request},{"stats",stats}});
+            if(request.dump().size()>probeRequestBytes)
+                throw SnapshotLimit("file","probe-request-json",request.dump().size(),probeRequestBytes);
+            if(options.contains("--out")) writeJson(filePath(option("--out")),Json::Object{{"request",request},{"stats",stats}});
+        } else if (command == "inspect" || command == "inspect-detail") {
             Json snapshot;
             if (options.contains("--pid")) {
                 if (command == "inspect-detail") {

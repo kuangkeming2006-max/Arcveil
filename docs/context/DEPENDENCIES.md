@@ -218,3 +218,22 @@ Snapshot/marker rotation and enumeration truncation are process-local values;
 no new IPC ownership. Renderer selects GL2/GL3 by actual context and still consumes
 GameSnapshot, never mapping names or version numbers. WorldProjection and modern
 unsupported gameplay are gated by VersionCapabilities at the binding boundary.
+
+## v56.9.2 Snapshot-tier request boundary
+
+MappingService -> Analyzer `inspect --capture-tier` -> `CaptureClient.h` pure
+`planCaptureRequest/captureRequestStats` -> MappingProbe-v16 retains the same
+bounded request-file transport and normal Attach/NativeLoader tools. Detection
+uses fixed independent environment witnesses; installed authored packs enter
+offline `identify`, and Cache candidates enter only after current version/family
+are established. `Cache::knownPacks()` does not feed an environment Probe request.
+
+The `detection`, `vanilla-validation`, `modded-validation` and `structural` tiers
+control capture scope, not validation authority. Current environment loader
+type/instance pins later captures; every path still publishes a coherent
+transaction-owned Verified Runtime Context before normal Agent loading.
+`CAPTURE_REQUEST`/`SNAPSHOT_STATS` expose actual request/class/work sizes, and
+`mapping-fallback` remains the sole automatic Mapping-window trigger. No new
+Agent control IPC, game-module dependency or JNI ownership boundary is introduced.
+See [mapping-pipeline](modules/mapping-pipeline.md) and
+[Snapshot review](V56_9_2_SNAPSHOT_REVIEW.md).

@@ -207,6 +207,91 @@ for family, selected, namespace in (
     check(identity["versionVerified"], identity)
     check(identity["mappingNamespace"] == namespace, identity)
 
+# Official legacy Forge emits exactly fml,forge. An unaudited additional token
+# cannot be accepted just because its text contains the known forge substring.
+canonical_forge = metadata(legacy, dictionary(legacy, "Forge"), brand="fml,forge",
+                           launch=[{"family": "Forge", "confidence": 250}])
+identity, _ = identify("forge-canonical-brand", normalize("forge-canonical-brand", canonical_forge))
+check(identity["family"] == "Forge" and identity["minecraftVersion"] == "1.8.9" and
+      identity["versionVerified"] and identity["mappingNamespace"] == "SRG", identity)
+unrecognized_forge = copy.deepcopy(canonical_forge)
+unrecognized_forge["runtimeEvidence"][0]["brand"] = "fml,forge,unknown"
+unrecognized_snapshot = normalize("forge-extra-brand-token", unrecognized_forge)
+identity, _ = identify("forge-extra-brand-token", unrecognized_snapshot)
+check(identity["family"] == "Unknown" and identity["versionVerified"], identity)
+check(not authored("forge-extra-brand-token", unrecognized_snapshot, legacy_path)["injectionReady"], identity)
+
+# A class-marker receipt belongs to its defining loader. An unrelated loader
+# must not turn positive Vanilla into Lunar, or override current Forge brand.
+def lunar_marker(raw, loader):
+    result = copy.deepcopy(raw)
+    if loader == 2:
+        result["loaders"].append({"id": 2, "type": "LUnrelatedMarkerLoader;", "instance": 202})
+    result["classes"].append({
+        "name": "Lcom/lunarclient/UnrelatedMarker;", "loader": loader,
+        "super": {"name": "Ljava/lang/Object;", "loader": 0},
+        "interfaces": [], "fields": [], "methods": [], "modifiers": 0,
+        "major": 52, "minor": 0,
+    })
+    result["launchEvidence"] = [{"family": "Lunar", "confidence": 250, "loader": loader}]
+    return result
+
+
+foreign_vanilla = normalize("vanilla-foreign-lunar", lunar_marker(legacy_raw, 2))
+identity, _ = identify("vanilla-foreign-lunar", foreign_vanilla)
+check(identity["family"] == "Unknown" and identity["versionVerified"], identity)
+check(not authored("vanilla-foreign-lunar", foreign_vanilla, legacy_path)["injectionReady"], identity)
+
+forge_current = metadata(legacy, dictionary(legacy, "Forge"), brand="forge")
+identity, _ = identify("forge-foreign-lunar", normalize("forge-foreign-lunar", lunar_marker(forge_current, 2)))
+check(identity["family"] == "Forge" and identity["minecraftVersion"] == "1.8.9", identity)
+check(identity["mappingNamespace"] == "SRG", identity)
+
+identity, _ = identify("same-loader-lunar", normalize("same-loader-lunar", lunar_marker(legacy_raw, 1)))
+check(identity["family"] == "Lunar" and identity["minecraftVersion"] == "1.8.9", identity)
+check(identity["mappingNamespace"] == "Notch", identity)
+
+# Detection intentionally contains no API members or hierarchy. Independent
+# loader evidence may choose a candidate, but it cannot validate that mapping.
+def detection_only(raw, extra_anchor=None):
+    result = copy.deepcopy(raw)
+    anchors = {item["anchor"] for item in result["runtimeEvidence"]}
+    result["classes"] = [item for item in result["classes"] if item["name"] in anchors]
+    for item in result["classes"]:
+        item.update(fields=[], methods=[], interfaces=[],
+                    super={"name": "", "loader": 0}, modifiers=0)
+    result["captureTier"] = "detection"
+    if extra_anchor:
+        stub = copy.deepcopy(result["classes"][0])
+        stub["name"] = extra_anchor
+        result["classes"].append(stub)
+        receipt = copy.deepcopy(result["runtimeEvidence"][0])
+        receipt["anchor"] = extra_anchor
+        result["runtimeEvidence"].append(receipt)
+    return result
+
+
+minimal_modern = detection_only(modern_raw, "Lnet/minecraft/client/main/Main;")
+minimal_snapshot = normalize("minimal-modern-detection", minimal_modern)
+identity, _ = identify("minimal-modern-detection", minimal_snapshot)
+check(identity["family"] == "Vanilla" and identity["minecraftVersion"] == "1.20.1" and
+      identity["versionVerified"], identity)
+check(Path(identity["selectedPack"]).resolve() == modern_path.resolve() and
+      identity["mappingNamespace"] == "Notch", identity)
+check(not authored("minimal-modern-detection", minimal_snapshot, modern_path)["injectionReady"], identity)
+
+main_only = copy.deepcopy(minimal_modern)
+main_only["classes"] = [item for item in main_only["classes"]
+                        if item["name"] == "Lnet/minecraft/client/main/Main;"]
+main_only["runtimeEvidence"] = [item for item in main_only["runtimeEvidence"]
+                                if item["anchor"] == "Lnet/minecraft/client/main/Main;"]
+main_snapshot = normalize("main-only-detection", main_only)
+identity, _ = identify("main-only-detection", main_snapshot)
+check(identity["family"] == "Vanilla" and identity["minecraftVersion"] == "1.20.1" and
+      identity["versionVerified"], identity)
+check(not identity.get("selectedPack") and identity["mappingNamespace"] == "Unknown", identity)
+check(not authored("main-only-detection", main_snapshot, modern_path)["injectionReady"], identity)
+
 # Runtime version authority is not the version of the closest installed pack.
 forge_modern = copy.deepcopy(modern_raw)
 forge_anchor = "Lnet/minecraft/client/Minecraft;"
@@ -223,6 +308,10 @@ identity, _ = identify("forge-1201", snapshot)
 check(identity["family"] == "Forge" and identity["minecraftVersion"] == "1.20.1", identity)
 check(identity["versionVerified"] and not identity.get("selectedPack"), identity)
 check(not authored("forge-1201", snapshot, modern_path)["injectionReady"], identity)
+identity, _ = identify("minimal-forge-1201", normalize("minimal-forge-1201", detection_only(forge_modern)))
+check(identity["family"] == "Forge" and identity["minecraftVersion"] == "1.20.1" and
+      identity["versionVerified"], identity)
+check(not identity.get("selectedPack") and identity["mappingNamespace"] == "Unknown", identity)
 
 unsupported = copy.deepcopy(modern_raw)
 unsupported["runtimeEvidence"][0]["version"] = "1.20.4"

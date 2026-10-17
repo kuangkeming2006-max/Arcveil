@@ -27,6 +27,11 @@ int main(int argc, char **argv) {
     log.open(QIODevice::Append);
     log.write(args[1].toUtf8() + '\n');
     log.close();
+    if (mode == "oversized-request" && args[1] == "inspect") {
+        event({{"event", "failure"}, {"limitName", "probe-request-json"},
+               {"reason", "snapshot size limit: layer=file limit=probe-request-json observed=45913 configured=32768"}});
+        return 1;
+    }
     if (mode == "slow")
         QThread::msleep(5000);
     if (mode == "flood")
@@ -53,8 +58,14 @@ int main(int argc, char **argv) {
             return 1;
         CloseHandle(h);
         QString fp = args[1]=="inspect"?"fixture-lite":"fixture-fingerprint";
-        if (mode == "changed" && args[1]=="inspect-detail" && get("--candidates").endsWith("selection-2.json"))
-            fp = "changed-fingerprint";
+        if (mode == "changed" && get("--out").endsWith("authored-metadata-3.jsonl"))
+            fp = "unrelated-metadata-fingerprint";
+        const auto tier=get("--capture-tier");
+        int dictionaryCount=0;
+        if(!get("--pack").isEmpty()) for(const auto &provider:readObject(get("--pack")).value("providers").toArray())
+            dictionaryCount+=provider.toObject().value("dictionaries").toArray().size();
+        event({{"event","CAPTURE_REQUEST"},{"captureTier",tier},{"scopedDictionaryCount",dictionaryCount},
+               {"evidenceKind","Mock capture transport; no actual JVMTI request"}});
         writeObject(get("--out"), {{"testSnapshot", true},{"fingerprint",fp}});
         event({{"event", "fingerprint"},
                {"fingerprint", fp},
@@ -64,7 +75,9 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (args[1] == "validate" || args[1] == "validate-cache" || args[1] == "validate-authored") {
-        if (mode == "unresolved" || mode == "vanilla-mismatch" || (mode == "changed" && args[1] == "validate-cache")) {
+        if (mode == "unresolved" || mode == "vanilla-mismatch" ||
+            (mode == "vanilla-final-mismatch" && get("--out").endsWith("authored-final.json")) ||
+            (mode == "changed" && args[1] == "validate-cache")) {
             writeObject(get("--out"), {{"valid", false}});
             event({{"event", "validation"}, {"valid", false}});
             return 3;

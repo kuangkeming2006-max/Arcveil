@@ -37,9 +37,24 @@ process=subprocess.Popen([str(java),'-Xcheck:jni','-cp',str(fixture),'FixtureBoo
 try:
     assert process.stdout.readline().strip()=='FIXTURE_READY'
     snapshot=folder/'installed.jsonl'
-    run(['inspect','--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
-         '--probe',build/'tools/MappingProbe-v14.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
+    installed_capture=run(['inspect','--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
+         '--probe',build/'tools/MappingProbe-v16.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
          '--pack',pack,'--contracts',contracts,'--out',snapshot])
+    requests=[json.loads(line) for line in installed_capture.stdout.splitlines()
+              if json.loads(line).get('event')=='CAPTURE_REQUEST']
+    assert len(requests)==2 and all(event['runtimeAnchorCount']>0 for event in requests);checks+=1
+    # Internal selected-detail capture has no --pack. It must retain independently
+    # observed runtime identity without adding those fixed anchors to its scope.
+    assert requests[-1]['runtimeAnchorCount']==4;checks+=1
+    captured,selected,chunks=set(),set(),{}
+    for line in snapshot.read_text().splitlines()[1:]:
+        frame=json.loads(line);key=(frame['kind'],frame['index'])
+        chunks[key]=chunks.get(key,'')+frame['data']
+        if frame['last']:
+            value=json.loads(chunks.pop(key))
+            if frame['kind']=='class':captured.add(value['name'])
+            elif 'captureScope' in value:selected={item['name'] for item in value['captureScope']['classes']}
+    assert captured and captured==selected;checks+=1
     validation=folder/'validation.json'
     run(['validate','--pack',pack,'--contracts',contracts,'--snapshot',snapshot,'--out',validation])
     receipt=read(validation)
@@ -50,7 +65,7 @@ try:
     # bytecode capture, structural resolution, or structural-cache authorization.
     metadata=folder/'authored-metadata.jsonl'
     capture=run(['inspect','--lite','--required-only','--identity-lite','--pid',process.pid,
-         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v14.dll',
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v16.dll',
          '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',metadata])
     stats=[json.loads(line) for line in capture.stdout.splitlines() if json.loads(line).get('event')=='SNAPSHOT_STATS']
     assert stats and all(event['jvmtiBytecodeBytes']==0 and event['jvmtiConstantPoolBytes']==0 for event in stats);checks+=1
@@ -62,7 +77,7 @@ try:
     # A cache proof never replaces a fresh compact capture from this JVM.
     compact=folder/'compact.jsonl'
     run(['inspect','--lite','--binding-check','--required-only','--identity-lite','--pid',process.pid,
-         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v14.dll',
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v16.dll',
          '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',compact])
     run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
          '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'cached.json'])

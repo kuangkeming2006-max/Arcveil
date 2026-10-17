@@ -376,12 +376,56 @@ Start at `mapping/analyzer/Resolver::contractsForPack`, `CaptureClient.cpp`,
 contracts-v2.json selects unchanged standalone 1.8.9 or new 1.20.1 contract by the
 pack's exact gameVersion. The separate vanilla-1.20.1.json is official-artifact
 derived and offline checked; it has no authority before current live verification.
-Identity-lite catalogs installed modern and known cached packs. A loaded anchor
-selects a candidate API, multiple declared versions are rejected as ambiguous;
-actual version is independently checked in modern Agent before BINDING_READY.
+The identity catalog now contains only installed supported authored packs; see
+v56.9.2 below. Independent version/brand evidence in the exact defining loader
+establishes the environment before Mapping selection. Class/API-name candidates
+are diagnostic and cannot establish actual version or family. The modern Agent
+also checks its actual version before BINDING_READY.
 Family evidence is detected independently of provider support, so Forge/Lunar
 cannot silently become Vanilla. Modern non-Vanilla is unsupported in this release.
 Semantically unchanged sub-contracts keep their original standalone byte digest,
 preserving legacy cache keys; changed sub-contracts invalidate previous proofs.
 Cache format, confidence, final check and v56.8 recovery rules are unchanged.
 See [audit](../MINECRAFT_1_20_REVIEW.md), generator/provenance and V56_9_VALIDATION.
+
+## v56.9.2 unified, demand-scoped Snapshot validation (current)
+
+Start at `P/mapping/analyzer/CaptureClient.h::planCaptureRequest/captureRequestStats`,
+then `main.cpp`'s `inspect --plan-capture` and
+`P/src/MappingServiceDynamic.cpp::runtimeScopeArguments/beginAuthoredValidation/beginStructuralFallback`.
+The four `--capture-tier` values define one Probe/Analyzer pipeline:
+
+| Tier | Current scope and authority |
+| --- | --- |
+| `detection` | Fixed supported environment anchors, loader identity and independent audited version/brand receipts. Emits anchor stubs with no API fields, methods or hierarchy; no authored warmup, bytecode or constant pool. Cache history is not read into the request. |
+| `vanilla-validation` | One selected exact-version authored dictionary's required classes/members and hierarchy, in the detected live loader. Metadata only, followed by a fresh independent validation; no automatic structural matching. |
+| `modded-validation` | One compatible Cache or authored dictionary at a time, with exact descriptors/hierarchy and compact installed-code proof. Code/pool are hashed in the target JVM, not transported as structural graphs. Authored recovery uses a second independent capture. |
+| `structural` | Broad metadata inventory and selected structural detail only after verified non-Vanilla existing mappings fail. Existing reference, confidence, provisional/export and final recheck gates remain mandatory. |
+
+`Cache::knownPacks()` is offline history enumeration, not an environment catalog.
+`writeIdentityCatalog()` writes only the two installed supported pack paths.
+`identity-packs` remains an offline identity-candidate input, but never expands a
+Probe request. `liteClasses`, runtime anchors and warmup classes are deduplicated;
+warmup is merged by anchor and restricted to the selected mapping. Cache candidates
+are queried only after actual version/family detection. Recovery order remains
+Cache -> installed authored -> compatible same-version mapping -> Automatic Resolver.
+Unknown cannot inherit a family from provider priority; foreign-loader family
+markers cannot overwrite current-loader brand evidence. Conflicting Vanilla/foreign
+modified-client evidence remains conservative Unknown.
+
+The native resident protocol is `MappingProbe-v16.dll`, preventing reuse of an old
+resident Probe that lacks tier semantics. `ProbeProtocol.h::probeRequestBytes`
+remains 32768. `CAPTURE_REQUEST` reports actual request bytes, section sizes,
+requested class/anchor/hint/warmup counts and transport before enforcing that cap.
+`SNAPSHOT_STATS` reports capture tier, emitted classes/members, warmup work, Probe
+duration and transported/JVMTI bytecode/pool bytes. A deterministic request-size
+failure terminates instead of retrying an unchanged oversized request.
+
+All success paths continue through Mapping Validation -> transaction-owned
+Verified Runtime Context -> VersionAdapter -> normal Agent loading. MappingVerified
+does not imply Agent/Renderer Ready or Active. Only genuine fallback/diagnosis emits
+the automatic `mapping-fallback` presentation event; successful known mappings remain
+silent. See [review and measured tiers](../V56_9_2_SNAPSHOT_REVIEW.md),
+`P/tests/mapping/ModernMappingServiceTests.cpp`, `Test-RuntimeDetection.py`,
+`Test-CaptureRequestStress.py` and `TransactionCacheTests.cpp` for separately scoped
+synthetic, recorded Snapshot and real-runtime evidence.

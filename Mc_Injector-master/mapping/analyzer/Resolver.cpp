@@ -239,15 +239,20 @@ Json selectedPack(const Json& pack,const Json& provider,const Json& dictionary){
 std::string detectedFamily(const Json& pack,const Model& model){
     bindings::ClientEnvironment environment;
     const auto parsed=bindings::parseMappingPack(pack);
+    const auto scope=runtimeScope(model);
+    if(scope.ambiguous) return "Unknown";
+    bool foreignModifiedMarker=false;
+    const auto add=[&](bindings::ClientFamily family,int confidence,const std::string& loader) {
+        if(scope.verified && !loader.empty() && loader!=scope.loader) {foreignModifiedMarker=true;return;}
+        environment.addEvidence(family,confidence);
+    };
     // Family evidence is independent of which versions/families a pack supports.
     if (model.snapshot.contains("launchEvidence")) for (const auto& evidence:model.snapshot.at("launchEvidence").array())
         for (auto family:{bindings::ClientFamily::Forge,bindings::ClientFamily::Lunar,bindings::ClientFamily::Badlion})
-            if (evidence.at("family").string()==bindings::clientFamilyName(family)) environment.addEvidence(family,evidence.at("confidence").integer());
-    for(const auto&p:parsed.providers)for(const auto&d:p.dictionaries)if(d.family!=bindings::ClientFamily::Vanilla)for(const auto&pattern:d.detection)for(const auto&c:model.classes){const auto&name=c.json->at("name").string();if((pattern.match==bindings::DetectionMatch::ExactClassSignature&&name==pattern.value)||(pattern.match==bindings::DetectionMatch::ClassSignaturePrefix&&name.starts_with(pattern.value)))environment.addEvidence(d.family,pattern.confidence);}
+            if (evidence.at("family").string()==bindings::clientFamilyName(family)) add(family,evidence.at("confidence").integer(),evidence.contains("loaderKey")?evidence.at("loaderKey").string():"");
+    for(const auto&p:parsed.providers)for(const auto&d:p.dictionaries)if(d.family!=bindings::ClientFamily::Vanilla)for(const auto&pattern:d.detection)for(const auto&c:model.classes){const auto&name=c.json->at("name").string();if((pattern.match==bindings::DetectionMatch::ExactClassSignature&&name==pattern.value)||(pattern.match==bindings::DetectionMatch::ClassSignaturePrefix&&name.starts_with(pattern.value)))add(d.family,pattern.confidence,c.json->at("loaderKey").string());}
     for (const auto &c : model.classes) if (c.json->at("name").string().starts_with("Lnet/badlion/") ||
-        c.json->at("name").string().starts_with("Lcom/badlion/")) environment.addEvidence(bindings::ClientFamily::Badlion, 250);
-    const auto scope=runtimeScope(model);
-    if (scope.ambiguous) return "Unknown";
+        c.json->at("name").string().starts_with("Lcom/badlion/")) add(bindings::ClientFamily::Badlion,250,c.json->at("loaderKey").string());
     std::set<std::string> brands;
     if (model.snapshot.contains("runtimeEvidence")) for (const auto& e:model.snapshot.at("runtimeEvidence").array()) {
         if (!scope.verified || e.at("loaderKey").string()!=scope.loader ||
@@ -259,11 +264,11 @@ std::string detectedFamily(const Json& pack,const Model& model){
     if (brands.size()>1) return "Unknown";
     if (brands.size()==1) {
         const auto& brand=*brands.begin();
-        if (brand=="forge") environment.addEvidence(bindings::ClientFamily::Forge,250);
+        if (brand=="forge" || brand=="fml,forge") environment.addEvidence(bindings::ClientFamily::Forge,250);
         else if (brand=="lunar" || brand=="lunarclient") environment.addEvidence(bindings::ClientFamily::Lunar,250);
         else if (brand=="badlion") environment.addEvidence(bindings::ClientFamily::Badlion,250);
         else if (brand=="vanilla" && environment.family()==bindings::ClientFamily::Unknown)
-            return "Vanilla";
+            return foreignModifiedMarker?"Unknown":"Vanilla";
         else if (brand!="vanilla") return "Unknown";
     }
     return bindings::clientFamilyName(environment.family());
@@ -642,23 +647,28 @@ Json validateAuthoredRuntime(const Json& pack,const Json& snapshot,const Json& c
     Model model(snapshot);
     const auto scope=runtimeScope(model);
     const auto family=detectedFamily(pack,model);
+    if(pack.at("gameVersion").string()=="1.20.1" && family!="Vanilla")
+        return Json::Object{{"valid",false},{"injectionReady",false},{"validationMode","authored-metadata"},
+            {"reason","Unsupported: Minecraft 1.20.1 modified-client Mapping has not been audited"}};
     Json::Array attempts;
     Json accepted;
     for(const auto& p:pack.at("providers").array()) for(const auto& d:p.at("dictionaries").array()) {
-        if(d.at("family").string()!="Vanilla") continue;
+        if(!familyCompatible(family,d) || family=="Unknown") continue;
         auto validation=dictionaryValidation(d,model,contracts,{});
         attempts.push_back(validation);
         if (!validation.at("valid").boolean()) continue;
-        auto selected=selectedPack(pack,p,d);
+        auto selected=retargetPack(selectedPack(pack,p,d),family);
         auto identity=mappingIdentity(selected,model.snapshot,contractBundle);
         // Separate proof domain: authored exact metadata is not installed bytecode proof
         // and must never be promoted as a structural resolver/cache reference.
+        const bool codeProof=family=="Vanilla" || !identity.at("bindingIdentity").string().empty();
         const bool ready=scope.verified && scope.version==pack.at("gameVersion").string() &&
-            family=="Vanilla" && identity.at("runtimeBinding").contains("instance");
+            family!="Unknown" && codeProof && identity.at("runtimeBinding").contains("instance");
         identity["mappingIdentity"]=sha256(Json(Json::Object{{"domain","authored-metadata-v1"},
             {"pack",sha256(selected.dump())},{"metadata",identity.at("metadataIdentity")},
-            {"version",scope.version},{"family",family},{"binding",identity.at("runtimeBinding")}}).dump());
-        identity["bindingIdentity"]="";
+            {"version",scope.version},{"family",family},{"binding",identity.at("runtimeBinding")},
+            {"installedBinding",family=="Vanilla"?Json(""):identity.at("bindingIdentity")}}).dump());
+        if(family=="Vanilla") identity["bindingIdentity"]="";
         identity["validationMode"]="authored-metadata";
         validation["injectionReady"]=ready;
         validation["validationMode"]="authored-metadata";
@@ -667,7 +677,7 @@ Json validateAuthoredRuntime(const Json& pack,const Json& snapshot,const Json& c
         validation["pack"]=selected;
         validation["selectedPack"]=selected;
         validation["fingerprint"]=model.snapshot.at("fingerprint");
-        validation["reason"]=ready?"":"independent matching version and positive Vanilla identity required";
+        validation["reason"]=ready?"":"independent version/family, loader and (for modded clients) compact installed-code proof required";
         if(events)for(const auto& row:validation.at("symbols").array())events(row);
         accepted=validation;
         if(ready) return accepted;
@@ -675,7 +685,7 @@ Json validateAuthoredRuntime(const Json& pack,const Json& snapshot,const Json& c
     if (accepted!=Json()) return accepted;
     if(events) for(const auto& attempt:attempts) for(const auto& row:attempt.at("symbols").array()) events(row);
     return Json::Object{{"valid",false},{"injectionReady",false},{"validationMode","authored-metadata"},
-        {"reason","Vanilla authored Mapping required descriptor, hierarchy or defining loader mismatch"},
+        {"reason","Authored Mapping required descriptor, hierarchy or defining loader mismatch"},
         {"minecraftVersion",scope.version},{"family",family},{"attempts",attempts}};
 }
 Json validateCachedRuntime(const Json &pack, const Json &snapshot, const Json &contractBundle,

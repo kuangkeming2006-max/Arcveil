@@ -110,7 +110,7 @@ def capture(name, scopes, brand_value=None, boot='EvidenceBoot'):
         result = subprocess.run([str(build / 'MappingAnalyzer.exe'), 'inspect', '--lite', '--identity-lite',
                                  '--required-only', '--detect-only', '--pid', str(process.pid),
                                  '--java', str(attach_java), '--helper', str(build / 'tools/McOverlayAttachHelper.jar'),
-                                 '--probe', str(build / 'tools/MappingProbe-v14.dll'),
+                                 '--probe', str(build / 'tools/MappingProbe-v16.dll'),
                                  '--native-loader', str(build / 'tools/McOverlayNativeLoader.exe'),
                                  '--pack', str(root / 'mapping/packs/default-v2.json'),
                                  '--contracts', str(root / 'mapping/contracts-v2.json'), '--out', str(output)],
@@ -147,6 +147,14 @@ checks += 3
 forge = capture('forge', [folder / 'modern'], 'forge')
 assert {item['version'] for item in forge} == {'1.20.1'} and {item['brand'] for item in forge} == {'forge'}
 checks += 1
+legacy_forge = capture('legacy-forge-canonical-brand', [folder / 'legacy'], 'fml,forge')
+assert {item['version'] for item in legacy_forge} == {'1.8.9'}
+assert {item['brand'] for item in legacy_forge} == {'fml,forge'}
+checks += 2
+unrecognized_forge = capture('legacy-forge-extra-brand-token', [folder / 'legacy'], 'fml,forge,unknown')
+assert {item['version'] for item in unrecognized_forge} == {'1.8.9'}
+assert {item['brand'] for item in unrecognized_forge} == {'modified'}
+checks += 2
 unknown = capture('unknown-family', [folder / 'unknown'])
 assert all(item['brand'] == '' for item in unknown)
 checks += 1

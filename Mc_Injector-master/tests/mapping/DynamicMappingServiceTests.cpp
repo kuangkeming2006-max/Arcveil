@@ -199,8 +199,9 @@ struct DynamicMappingServiceTests {
             check(ready == 1 && !failed && !premature,
                   "only full validation and final recheck emit ready");
             const auto calls = readLog(dir + "/calls.log");
-            check(calls.indexOf(("select-pack " + pack).toUtf8()) >= 0,
-                  "authored bootstrap selects default target pack even with another reference");
+            check(calls.contains("authored source=source.Type0 dictionaries=1") &&
+                      calls.indexOf("authored source=")<calls.indexOf("select-pack "),
+                  "scoped installed authored dictionary is validated before structural reference selection");
             check(calls.contains("resolve A started=100 revalidated=0 matched=70"),
                   "snapshot A matches 70/100");
             check(calls.contains("resolve C started=30 revalidated=70 matched=90"),

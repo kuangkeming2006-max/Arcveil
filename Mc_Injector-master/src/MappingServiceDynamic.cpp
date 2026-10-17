@@ -2,6 +2,10 @@
 #include "../agent/bindings/VersionAdapter.h"
 #include <QFile>
 #include <QDir>
+#include <QJsonDocument>
+#include <QSet>
+#include <algorithm>
+#include <vector>
 using namespace mapping_cache;
 
 namespace {
@@ -15,6 +19,15 @@ bool sameRuntimeBinding(const QJsonObject &left, const QJsonObject &right) {
     // identity and exact anchor remain the authority across captures.
     return true;
 }
+bool sameEnvironmentLoader(const QJsonObject &binding, const QJsonObject &environment) {
+    if (environment.value("anchor") != "Lnet/minecraft/client/main/Main;")
+        return sameRuntimeBinding(binding, environment);
+    // Main is an independent environment witness, not an API mapping anchor.
+    // A recovered Minecraft anchor must still be in that exact live loader.
+    return !binding.value("anchor").toString().isEmpty() &&
+        !environment.value("type").toString().isEmpty() && environment.contains("instance") &&
+        binding.value("type")==environment.value("type") && binding.value("instance")==environment.value("instance");
+}
 }
 
 bool MappingService::matchesEnvironment(const QJsonObject &identity) const {
@@ -22,8 +35,83 @@ bool MappingService::matchesEnvironment(const QJsonObject &identity) const {
         !m_family.isEmpty() && m_family != "Unknown" &&
         identity.value("family").toString() == m_family &&
         identity.value("minecraftVersion").toString() == m_minecraftVersion &&
-        sameRuntimeBinding(identity.value("runtimeBinding").toObject(),
+        sameEnvironmentLoader(identity.value("runtimeBinding").toObject(),
                            m_environment.value("runtimeBinding").toObject());
+}
+QStringList MappingService::runtimeScopeArguments(const QString &tier) const {
+    QStringList args{"--capture-tier",tier};
+    const auto binding=m_environment.value("runtimeBinding").toObject();
+    if(!binding.isEmpty()) args << "--runtime-anchor" << binding.value("anchor").toString()
+        << "--runtime-loader-type" << binding.value("type").toString()
+        << "--runtime-loader-instance" << QString::number(quint32(binding.value("instance").toDouble()));
+    return args;
+}
+void MappingService::beginAuthoredValidation() {
+    m_metadataFastPath=true;
+    m_authoredCandidates.clear(); m_authoredCandidateIndex=0;
+    QSet<QByteArray> seen;
+    const auto append=[&](const QString& path,bool base) {
+        const auto pack=readObject(path);
+        if(pack.value("gameVersion").toString()!=m_minecraftVersion) return;
+        std::vector<QJsonObject> providers;
+        for(const auto& value:pack.value("providers").toArray()) providers.push_back(value.toObject());
+        std::stable_sort(providers.begin(),providers.end(),[](const auto& a,const auto& b){
+            return a.value("priority").toInt()>b.value("priority").toInt();
+        });
+        for(const auto& value:providers) {
+            auto provider=value;
+            if(provider.value("family").toString()!=(base?QString("Vanilla"):m_family)) continue;
+            for(const auto& item:provider.value("dictionaries").toArray()) {
+                const auto dictionary=item.toObject();
+                const auto key=QJsonDocument(dictionary.value("symbols").toObject()).toJson(QJsonDocument::Compact)+
+                    dictionary.value("mappingNamespace").toString().toUtf8();
+                if(seen.contains(key)) continue;
+                seen.insert(key);
+                auto scoped=pack; provider["dictionaries"]=QJsonArray{dictionary};
+                scoped["providers"]=QJsonArray{provider};
+                const auto output=m_run+QString("/authored-candidate-%1.json").arg(m_authoredCandidates.size());
+                writeObject(output,scoped); m_authoredCandidates.append(output);
+            }
+        }
+    };
+    append(m_defaultPack,false);
+    if(m_family!="Vanilla") {
+        append(m_defaultPack,true);
+        // Compatible history is consulted only after independently scoped detection
+        // and installed authored mappings. It never expands a Probe request catalog.
+        if(m_reference.valid() && m_reference.minecraftVersion==m_minecraftVersion) append(m_reference.pack,false);
+        for(const auto& entry:m_candidates) if(entry.family==m_family && entry.minecraftVersion==m_minecraftVersion)
+            append(entry.pack,false);
+    }
+    if(m_authoredCandidates.isEmpty()) {nextAuthoredCandidate("No same-version authored mapping candidate");return;}
+    m_validationPack=m_authoredCandidates.first();
+    captureAuthoredMetadata(false);
+}
+void MappingService::nextAuthoredCandidate(const QString& reason) {
+    if(m_family=="Vanilla") {
+        showFallback("diagnostic",reason); fail(reason); return;
+    }
+    ++m_authoredCandidateIndex;
+    m_authoredIdentity={};m_authoredPack={};
+    if(m_authoredCandidateIndex<m_authoredCandidates.size()) {
+        m_validationPack=m_authoredCandidates.at(m_authoredCandidateIndex);
+        event({{"event","AUTHORED_REVALIDATE"},{"reason","next-compatible-same-version-dictionary"},
+               {"pack",m_validationPack}});
+        if(current()) captureAuthoredMetadata(false);
+        return;
+    }
+    beginStructuralFallback();
+}
+void MappingService::beginStructuralFallback() {
+    if(!current() || !m_busy) return;
+    if(m_family=="Vanilla" || m_family=="Unknown" || !m_environment.value("versionVerified").toBool()) {
+        fail("Structural fallback requires a verified non-Vanilla environment");return;
+    }
+    m_metadataFastPath=false; m_dynamic=true; m_fullLite=true;
+    m_scopePack=m_reference.valid()?m_reference.pack:m_defaultPack;
+    showFallback("automatic","Authored mappings failed; collecting structural evidence for Automatic Resolver");
+    if(!current() || !m_busy) return;
+    captureLite(CapturePhase::Refresh);
 }
 void MappingService::showFallback(const QString &mode, const QString &reason) {
     if (m_fallbackShown || !m_busy || !current()) return;
@@ -81,31 +169,33 @@ void MappingService::verifyCapturedEnvironment(std::function<void()> verified) {
     });
 }
 void MappingService::captureAuthoredMetadata(bool finalCheck) {
-    if (!identityValid()) { fail("Target JVM exited during Vanilla mapping validation"); return; }
+    if (!identityValid()) { fail("Target JVM exited during authored mapping validation"); return; }
     m_metadataFastPath = true;
     m_finalCheck = finalCheck;
     m_capture = {};
     ++m_captureSerial;
     const auto output = m_run + QString("/authored-metadata-%1.jsonl").arg(m_captureSerial);
-    QStringList args{"inspect", "--lite", "--identity-lite", "--required-only",
-        "--identity-packs", m_identityPacksFile, "--pid", QString::number(m_pid),
+    QStringList args{"inspect", "--lite", "--required-only",
+        "--pid", QString::number(m_pid),
         "--java", m_java, "--helper", m_helper, "--probe", m_probe,
-        "--native-loader", m_tools + "/McOverlayNativeLoader.exe", "--pack", m_defaultPack,
+        "--native-loader", m_tools + "/McOverlayNativeLoader.exe", "--pack", m_validationPack,
         "--contracts", m_contracts, "--out", output};
+    args << runtimeScopeArguments(m_family=="Vanilla"?"vanilla-validation":"modded-validation");
+    if(m_family!="Vanilla") args << "--binding-check";
     if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular) args << "--tools-jar" << m_toolsJar;
-    m_status = finalCheck ? "Final independent Vanilla mapping validation" : "Validating built-in Vanilla mapping";
+    m_status = finalCheck ? "Final independent authored mapping validation" : "Validating scoped authored mapping";
     emit changed();
     launch(args, [this, finalCheck, output](int code) {
         if (code || !identityValid() || m_capture.value("pid").toDouble() != m_pid ||
             m_capture.value("processStart").toString() != m_start) {
-            fail("Vanilla mapping metadata capture failed or target JVM changed"); return;
+            fail("Authored mapping metadata capture failed or target JVM changed"); return;
         }
         m_litePath = output;
         m_fingerprint = m_capture.value("fingerprint").toString();
         m_snapshot = output;
         const auto receipt = m_run + (finalCheck ? "/authored-final.json" : "/authored-first.json");
-        launch({"validate-authored", "--pack", m_defaultPack, "--snapshot", output,
+        launch({"validate-authored", "--pack", m_validationPack, "--snapshot", output,
                 "--contracts", m_contracts, "--out", receipt},
                [this, finalCheck, receipt](int validationCode) {
             m_validation = readObject(receipt);
@@ -117,10 +207,14 @@ void MappingService::captureAuthoredMetadata(bool finalCheck) {
                 m_validation.value("validationMode").toString() != "authored-metadata" ||
                 !matchesEnvironment(identity) || selected.isEmpty() ||
                 selected.value("gameVersion").toString() != m_minecraftVersion) {
-                const auto reason = QString("Vanilla %1 built-in mapping mismatch: %2; details: %3")
-                    .arg(m_minecraftVersion, m_validation.value("reason").toString("required bindings or runtime identity differ"), receipt);
-                showFallback("diagnostic", reason);
-                fail(reason); return;
+                const auto reason = QString("%1 %2 authored mapping mismatch: %3; details: %4")
+                    .arg(m_family,m_minecraftVersion,m_validation.value("reason").toString("required bindings or runtime identity differ"),receipt);
+                if(validationCode!=0 && validationCode!=3) {fail(reason);return;}
+                if(finalCheck || (m_validation.value("valid").toBool() && !matchesEnvironment(identity))) {
+                    if(m_family=="Vanilla") showFallback("diagnostic",reason);
+                    fail(reason);return;
+                }
+                nextAuthoredCandidate(reason); return;
             }
             if (identity.value("mappingIdentity").toString().isEmpty() ||
                 identity.value("metadataIdentity").toString().isEmpty()) {
@@ -242,6 +336,11 @@ bool MappingService::captureFailed(int code) {
         fail("Target JVM exited during capture");
         return true;
     }
+    if (m_analyzerFailure.value("limitName").toString() == "probe-request-json") {
+        fail("Capture request exceeds its bounded metadata scope: " +
+             m_analyzerFailure.value("reason").toString("probe-request-json limit exceeded"));
+        return true;
+    }
     m_pendingChange = true;
     if (code == 5 || m_analyzerFailure.value("retryable").toBool()) {
         event({{"event", "snapshot-changed"}, {"reason", "Runtime changed during capture"}});
@@ -280,11 +379,13 @@ void MappingService::captureLite(CapturePhase phase) {
         "--java",  m_java,    "--helper",        m_helper,
         "--probe", m_probe,   "--native-loader", m_tools + "/McOverlayNativeLoader.exe",
         "--out",   m_litePath};
+    args << runtimeScopeArguments(m_dynamic?"structural":"detection");
     {
         args << "--pack" << (phase == CapturePhase::CacheWarmup ? m_hit.pack : m_defaultPack) << "--contracts" << m_contracts;
         if (phase == CapturePhase::CacheWarmup) args << "--required-only";
         else if (phase != CapturePhase::Initial || (!m_fullLite && !m_authoredWarmup)) args << "--detect-only";
-        if (!m_fullLite) args << "--identity-lite" << "--identity-packs" << m_identityPacksFile;
+        // Detection is fixed-scope. Structural inventory is requested only once
+        // authored candidates have actually failed, never from a history catalog.
     }
     if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular)
@@ -433,6 +534,7 @@ void MappingService::captureDetail(CapturePhase phase) {
                         m_selectionPath,
                         "--out",
                         output};
+    args << runtimeScopeArguments("structural");
     if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular)
         args << "--tools-jar" << m_toolsJar;
@@ -541,7 +643,7 @@ void MappingService::identifyTarget() {
                {"adapter", QString::fromLatin1(adapter->id.data(), qsizetype(adapter->id.size()))},
                {"versionAuthority", "independent live runtime evidence"}});
         if (!current()) return;
-        if (m_family == "Vanilla") { captureAuthoredMetadata(false); return; }
+        if (m_family == "Vanilla") { beginAuthoredValidation(); return; }
         m_candidates = m_skipCacheCandidates ? QList<Entry>{} : Cache(m_root).candidates(m_family, m_minecraftVersion, m_contractDigest);
         m_candidateIndex = 0;
         selectCacheCandidate();
@@ -565,7 +667,7 @@ void MappingService::selectCacheCandidate() {
            {"reason", m_reference.valid() ? m_reference.referenceReason : "no-family-compatible-reference"}});
     m_scopePack = m_reference.valid() ? m_reference.pack : m_defaultPack;
     progressReference(m_reference);
-    selectDetail(CapturePhase::Initial);
+    beginAuthoredValidation();
 }
 void MappingService::checkCached(const Entry &entry) {
     if (!m_busy || !identityValid()) return;
@@ -602,6 +704,7 @@ void MappingService::checkCached(const Entry &entry) {
         "--pid", QString::number(m_pid), "--java", m_java, "--helper", m_helper,
         "--probe", m_probe, "--native-loader", m_tools + "/McOverlayNativeLoader.exe",
         "--pack", entry.pack, "--contracts", m_contracts, "--out", m_litePath};
+    args << runtimeScopeArguments("modded-validation");
     if (m_transport == "NativeLoader") args << "--transport" << "native";
     if (!m_modular) args << "--tools-jar" << m_toolsJar;
     m_capture = {};
@@ -651,21 +754,19 @@ void MappingService::fallbackFromCache(const QString &reason) {
     m_hit = {}; m_cachePath = false; m_validation = {};
     m_runtimeBinding = {};
     m_upgradeCacheProof = false;
-    writeIdentityCatalog();
-    // Recapture the structural candidate scope; cached validation scope is too narrow
-    // to supply incoming-reference evidence to automatic matching.
-    m_fullLite = true;
-    captureLite(CapturePhase::Initial);
+    // A failed installed-code proof invalidates Cache reuse, not the current
+    // authored names. Revalidate one candidate at a time before structural work.
+    event({{"event","AUTHORED_REVALIDATE"},{"reason","cached-proof-rejected"}});
+    if(current() && m_busy) selectCacheCandidate();
 }
 void MappingService::writeIdentityCatalog() {
-    auto paths=Cache(m_root).knownPacks(m_contractDigest);
-    if (QFile::exists(m_defaultPack)) paths.append(m_defaultPack);
+    QStringList paths;
     if (QFile::exists(m_legacyPack)) paths.append(m_legacyPack);
     // Installed authored packs are candidates only. No mapping confidence or
     // loader authority is granted until current runtime validation completes.
     const auto bundle=readObject(m_contracts);
     if (bundle.value("contractVersion").toInt()==2 && QFile::exists(m_modernPack)) paths.append(m_modernPack);
-    paths.removeDuplicates();
+    paths.removeDuplicates(); // Installed supported contracts only; independent of history size.
     m_identityPacksFile=m_run+"/identity-packs.json";
     writeObject(m_identityPacksFile,{{"packs",QJsonArray::fromStringList(paths)}});
 }

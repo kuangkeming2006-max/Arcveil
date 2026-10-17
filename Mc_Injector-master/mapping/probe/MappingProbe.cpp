@@ -179,6 +179,10 @@ std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
     auto value = static_cast<jstring>(env->CallStaticObjectMethod(klass, getter));
     if (evidenceException(env)) return {};
     auto text = evidenceString(env, value, 64);
+    // Audited Forge 1.8.9 FMLCommonHandler.getModName(): Joiner.on(',')
+    // joins the canonical fml + forge tokens. Do not accept arbitrary comma lists.
+    std::transform(text.begin(),text.end(),text.begin(),[](unsigned char ch){return char(std::tolower(ch));});
+    if (text=="fml,forge") return text;
     for (auto &ch : text) {
         const auto c = static_cast<unsigned char>(ch);
         if (!std::isalnum(c) && c != '_' && c != '-' && c != '.') return "modified";
@@ -221,6 +225,20 @@ struct Capture {
     const Json *liteScope = nullptr;
     bool bindingCheck = false;
     const Json *runtimeAnchors = nullptr;
+    bool detectionOnly = false;
+    const Json *runtimeLoader = nullptr;
+    std::map<int, bool> loaderMatches;
+    bool acceptsLoader(jclass klass) {
+        if (!runtimeLoader) return true;
+        const auto id=loaderId(klass);
+        if (!id) return false;
+        if (loaderMatches.contains(id)) return loaderMatches.at(id);
+        auto loader=loaders.at(std::size_t(id-1));
+        jint identity=0; require(ti->GetObjectHashCode(loader,&identity),"GetObjectHashCode:pinned-loader");
+        auto type=env->GetObjectClass(loader); const auto typeName=signature(ti,type); env->DeleteLocalRef(type);
+        const bool matches=runtimeLoader->at("instance").number()==double(static_cast<unsigned int>(identity)) && runtimeLoader->at("type").string()==typeName;
+        loaderMatches.emplace(id,matches); return matches;
+    }
     ~Capture() {
         for (auto loader : loaders)
             env->DeleteLocalRef(loader);
@@ -349,8 +367,12 @@ struct Capture {
                     env->DeleteLocalRef(values[i]);
             }
         } locals{env, classes.data, count};
+        std::set<std::string> attempted, warmed;
         for (int i = 0; i < count; ++i) {
             const auto name = signature(ti, classes.data[i]);
+            if (std::none_of(requests.array().begin(), requests.array().end(),
+                    [&](const Json &request) { return request.at("anchor").string()==name; })) continue;
+            if (!acceptsLoader(classes.data[i])) continue;
             for (const auto &request : requests.array())
                 if (name == request.at("anchor").string()) {
                     jobject loader = nullptr;
@@ -364,12 +386,16 @@ struct Capture {
                             env->ExceptionClear();
                         if (load)
                             for (const auto &binary : request.at("classes").array()) {
+                                const auto key=std::to_string(loaderId(classes.data[i]))+":"+binary.string();
+                                if (!attempted.insert(key).second) continue;
+                                (*stats)["warmupAttemptCount"]=double(attempted.size());
                                 jstring text = env->NewStringUTF(binary.string().c_str());
                                 if (text) {
                                     auto loaded = env->CallStaticObjectMethod(type, load, text, JNI_FALSE, loader);
                                     if (env->ExceptionCheck())
                                         env->ExceptionClear();
                                     if (loaded) {
+                                        warmed.insert(key); (*stats)["warmedClassCount"]=double(warmed.size());
                                         // Reflection links metadata without running the target's
                                         // initializer; loadClass/forName(false) may leave it unprepared.
                                         auto members = env->GetMethodID(type, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
@@ -414,13 +440,14 @@ struct Capture {
         Json::Array evidence;
         Json::Array runtimeEvidence;
         std::map<int, Json> loaderEvidence;
-        if (liteScope) for (const auto &name : liteScope->at("liteClasses").array()) {
+        const bool scoped=liteScope && liteScope->contains("liteClasses");
+        if (scoped) for (const auto &name : liteScope->at("liteClasses").array()) {
             auto signature = name.string(); std::replace(signature.begin(), signature.end(), '.', '/');
             liteNames.insert("L" + signature + ";");
         }
         const auto contentNames = liteNames;
         // Resolve scope hierarchy before metadata capture; unrelated classes remain signature-only.
-        if (liteScope) for (int i = 0; i < count; ++i) if (liteNames.contains(signature(ti, classes.data[i]))) {
+        if (scoped && !detectionOnly) for (int i = 0; i < count; ++i) if (liteNames.contains(signature(ti, classes.data[i])) && acceptsLoader(classes.data[i])) {
             jint status = 0;
             require(ti->GetClassStatus(classes.data[i], &status), "scope class status");
             if (!(status & JVMTI_CLASS_STATUS_PREPARED)) continue;
@@ -437,19 +464,22 @@ struct Capture {
         for (int i = 0; i < count; ++i) {
             const auto name = signature(ti, classes.data[i]);
             if (name.empty() || name.front() != 'L') continue;
-            bool marker = false;
+            if (selection && !wanted.contains(name)) continue;
+            if (scoped && !liteNames.contains(name) && std::none_of(liteScope->at("classHints").array().begin(),
+                    liteScope->at("classHints").array().end(), [&](const Json &hint) {
+                        return hint.at("prefix").boolean() ? name.starts_with(hint.at("value").string()) : name==hint.at("value").string();
+                    })) continue;
+            if (!acceptsLoader(classes.data[i])) continue;
             if (liteScope) {
                 for (const auto &hint : liteScope->at("classHints").array())
                     if ((hint.at("prefix").boolean() ? name.starts_with(hint.at("value").string()) : name == hint.at("value").string()) &&
                         observed.insert(hint.at("family").string() + ":" + std::to_string(loaderId(classes.data[i]))).second) {
                         evidence.push_back(Json::Object{{"family",hint.at("family")}, {"confidence",hint.at("confidence")}, {"loader",loaderId(classes.data[i])}});
-                        marker = true;
                     }
-                if (!liteNames.contains(name) && !marker && captured) continue;
+                if (scoped && !liteNames.contains(name)) continue;
             }
             // Scope filters precede loader registration. Unrelated loaded classes
             // must not introduce unrequested loaders into a selected snapshot.
-            if (selection && !wanted.contains(name)) continue;
             if (!loaderId(classes.data[i])) continue;
             if (selection) {
                 auto matches = wanted.find(name);
@@ -476,6 +506,19 @@ struct Capture {
                 if (!loaderEvidence.contains(id)) loaderEvidence.emplace(id, readRuntimeEvidence(env, ti, loaders.at(std::size_t(id - 1))));
                 auto receipt = loaderEvidence.at(id); receipt["anchor"] = name; receipt["loader"] = id;
                 runtimeEvidence.push_back(std::move(receipt));
+            }
+            if (detectionOnly) {
+                // Identity collection has no game API/member/hierarchy dependency.
+                // Empty anchors locate only the independently observed defining loader.
+                if (signature(ti, classes.data[i])!=name) throw RuntimeChanged("detection anchor changed during capture");
+                const Json anchor=Json::Object{{"name",name},{"loader",loaderId(classes.data[i])},
+                    {"super",Json::Object{{"name",""},{"loader",0}}},{"interfaces",Json::Array{}},
+                    {"modifiers",0},{"fields",Json::Array{}},{"methods",Json::Array{}}};
+                stream->object("class",captured++,anchor);
+                (*stats)["capturedClassCount"]=double(captured);
+                (*stats)["classMetadataBytes"]=(*stats).at("classMetadataBytes").number()+double(anchor.dump().size());
+                (*stats)["totalBytes"]=double(stream->bytes);
+                continue;
             }
             jint status = 0;
             require(ti->GetClassStatus(classes.data[i], &status), "GetClassStatus");
@@ -507,6 +550,8 @@ struct Capture {
                     method.object().erase("bytecode");
                 }
             }
+            (*stats)["fieldCount"]=(*stats).at("fieldCount").number()+double(first.at("fields").array().size());
+            (*stats)["methodCount"]=(*stats).at("methodCount").number()+double(first.at("methods").array().size());
             const auto classBytes = first.dump().size();
             if (classBytes > (*stats).at("largestClassBytes").number()) {
                 (*stats)["largestClass"] = name;
@@ -601,7 +646,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         {"jvmtiCalls", 0}, {"jvmtiCallsByOperation", Json::Object{}},
         {"jvmtiBytecodeBytes", 0}, {"jvmtiConstantPoolBytes", 0},
         {"loadedClassCount", 0},
-        {"capturedClassCount", 0},
+        {"capturedClassCount", 0}, {"fieldCount",0}, {"methodCount",0},
+        {"warmupAttemptCount",0}, {"warmedClassCount",0},
         {"classMetadataBytes", 0},
         {"constantPoolBytes", 0},
         {"bytecodeBytes", 0},
@@ -634,7 +680,20 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         }
     };
     try {
+        const auto captureStarted=GetTickCount64();
         const auto request = readRequest(options);
+        const auto tier=request.contains("captureTier")?request.at("captureTier").string():"structural";
+        const bool detection=tier=="detection";
+        stats["captureTier"]=tier; stats["requestBytes"]=double(request.dump().size());
+        stats["requestedClassCount"]=request.contains("liteClasses")?double(request.at("liteClasses").array().size()):0.;
+        stats["runtimeAnchorCount"]=request.contains("runtimeAnchors")?double(request.at("runtimeAnchors").array().size()):0.;
+        stats["warmupClassCount"]=0;
+        if (request.contains("warmup")) for (const auto &group:request.at("warmup").array())
+            stats["warmupClassCount"]=stats.at("warmupClassCount").number()+double(group.at("classes").array().size());
+        if (detection && (request.contains("warmup") || request.contains("bindingCheck") || request.at("mode").string()!="lite"))
+            throw std::runtime_error("invalid detection capture scope");
+        if (tier=="vanilla-validation" && (request.contains("bindingCheck") || request.at("mode").string()!="lite"))
+            throw std::runtime_error("Vanilla validation must remain metadata-only");
         const auto path = std::filesystem::path(std::u8string(
             reinterpret_cast<const char8_t *>(request.at("output").string().c_str())));
         if (!path.is_absolute())
@@ -683,7 +742,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
                                                             : "full"}});
         Json snapshot;
         {
-            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, request.contains("liteClasses") ? &request : nullptr, request.contains("bindingCheck"), request.contains("runtimeAnchors") ? &request.at("runtimeAnchors") : nullptr};
+            Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, &request, request.contains("bindingCheck"), request.contains("runtimeAnchors") ? &request.at("runtimeAnchors") : nullptr, detection, request.contains("runtimeLoader") ? &request.at("runtimeLoader") : nullptr, {}};
             stats["compactBindingCheck"] = capture.bindingCheck;
             if (request.contains("warmup")) {
                 progress(path, "authored-class-warmup");
@@ -725,6 +784,8 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         }
         snapshot["launchEvidence"] =
             evidence; // Never persist raw command lines, paths or property values.
+        snapshot["captureTier"] = tier;
+        stats["durationMs"]=double(GetTickCount64()-captureStarted);
         snapshot["snapshotVersion"] = 1;
         snapshot["captureKind"] = lite     ? "jvmti-metadata-double-read"
                                   : detail ? "jvmti-selected-detail-double-read"

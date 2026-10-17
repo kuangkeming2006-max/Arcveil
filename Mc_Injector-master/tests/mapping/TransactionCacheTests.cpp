@@ -48,6 +48,7 @@ struct TransactionCacheTests {
               "A: cache miss -> real automatic resolver -> real validate -> atomic promote -> ready");
         check(opened == 1, "A: actual automatic fallback requests the Mapping window once");
         const auto firstIdentity = service.m_mappingIdentity;
+        const auto firstStrongEntry = service.m_hit;
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 2 || failed; }) && ready == 2 && autoCalls == 0 && hits == 1,
               "B: second same-build attach uses scoped real validation with zero automatic resolve calls");
@@ -112,17 +113,18 @@ struct TransactionCacheTests {
         check(spin([&] { return service.m_captureSerial > earlySerial; }), "H: early-pause Resume actually starts the next capture");
         service.cancel();
         // Client update that preserves metadata but changes installed constants: reject cached
-        // identity before resolving against a new verified same-family reference.
+        // identity before revalidating a compatible same-family dictionary.
         service.m_root = temp.path() + "/cache";
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-raw.json").toUtf8());
         const auto updatedPack = fixture + "/updated-pack.json", updatedReference = fixture + "/updated-reference.json";
         Cache(service.m_root).promote(updatedPack, updatedReference, "updated-source", fileDigest(contracts),
             {{"valid", true}, {"injectionReady", true}, {"fingerprint", "updated-source"}}, "updated-source-id", "different-source-meta", "Lunar", "1.8.9");
         const auto previousReady = ready, previousPromote = promoted; autoCalls = 0; hits = 0; start();
-        check(spin([&] { return ready > previousReady || failed; }) && ready == previousReady + 1 && autoCalls == 1 && promoted == previousPromote + 1 && service.m_mappingIdentity != firstIdentity,
-              "J: cached live structural identity rejected -> automatic resolve -> new atomic promotion");
-        const auto legacySource = service.m_hit;
+        check(spin([&] { return ready > previousReady || failed; }) && ready == previousReady + 1 && autoCalls == 0 && promoted == previousPromote && service.m_mappingIdentity != firstIdentity && service.m_metadataFastPath && service.m_transaction->detailCaptureCalls == 0,
+              "J: stale installed proof -> compatible dictionary revalidated twice without structural migration or promotion");
+        const auto legacySource = firstStrongEntry;
         service.m_root = temp.path() + "/legacy";
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/renamed-raw.json").toUtf8());
         Cache(service.m_root).promote(legacySource.pack, legacySource.snapshot, legacySource.fingerprint, fileDigest(contracts),
             {{"valid", true}, {"injectionReady", true}, {"fingerprint", legacySource.fingerprint}},
             legacySource.mappingIdentity, legacySource.metadataIdentity, legacySource.family, legacySource.minecraftVersion);
@@ -142,14 +144,25 @@ struct TransactionCacheTests {
         check(spin([&] { return ready > authoredReady || failed; }) && ready == authoredReady + 1,
               "M: establish current authored mapping with real validation");
         check(opened == beforeAuthoredWindows, "M: first authored mapping validation succeeds without Mapping window");
+        check(service.m_transaction->detailCaptureCalls==0 && service.m_metadataFastPath &&
+              !Cache(service.m_root).preferred(fileDigest(contracts)).valid(),
+              "M: authored compact validation is not mislabeled as a structural Cache reference");
+        // Seed a genuine full reference/proof from the prevalidated synthetic
+        // source, not from the metadata-only authored receipt.
+        const auto fullAuthored=readObject(fixture+"/lunar-validation.json");
+        const auto fullIdentity=fullAuthored.value("identity").toObject();
+        Cache(service.m_root).promote(service.m_defaultPack,fixture+"/lunar-reference.json",
+            fullAuthored.value("fingerprint").toString(),fileDigest(contracts),fullAuthored,
+            fullIdentity.value("mappingIdentity").toString(),fullIdentity.value("metadataIdentity").toString(),"Lunar","1.8.9");
         const auto authoredIdentity = service.m_mappingIdentity;
         const auto driftReady = ready, driftPromoted = promoted;
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-authored-raw.json").toUtf8());
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready > driftReady || failed; }) && ready == driftReady + 1 &&
-              promoted == driftPromoted + 1 && hits == 0 && autoCalls == 0 &&
-              service.m_mappingIdentity != authoredIdentity && service.m_transaction->detailCaptureCalls == 2,
-              "M: stale content proof -> authored full validation -> fresh final detail -> new proof, no migration");
+              promoted == driftPromoted && hits == 0 && autoCalls == 0 &&
+              service.m_mappingIdentity != authoredIdentity && service.m_transaction->detailCaptureCalls == 0 &&
+              !service.m_validation.value("identity").toObject().value("bindingIdentity").toString().isEmpty(),
+              "M: stale Cache -> authored compact installed-code revalidation twice, no structural capture/promotion/migration");
         check(opened == beforeAuthoredWindows,
               "M: stale Cache followed by successful authored revalidation never opens automatic Mapping UI");
         // The same recovery must not grant loading authority for an incorrect

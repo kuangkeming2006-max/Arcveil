@@ -30,7 +30,7 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
-    m_probe = m_tools + "/MappingProbe-v14.dll";
+    m_probe = m_tools + "/MappingProbe-v16.dll";
     m_contracts = m_tools + "/contracts-v2.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
     m_legacyPack=m_defaultPack;
@@ -196,6 +196,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_runtimeBinding = {};
     m_transaction->verifiedRuntimeContext = {};
     m_environment = {}; m_authoredIdentity = {}; m_authoredPack = {};
+    m_authoredCandidates.clear(); m_authoredCandidateIndex = 0; m_validationPack.clear();
     m_metadataFastPath = false; m_fallbackShown = false; m_referenceAuthoredTried = false;
     m_finalCheck = false;
     m_upgradeCacheProof = false;

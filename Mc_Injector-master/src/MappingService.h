@@ -77,6 +77,10 @@ class MappingService final : public QObject {
     void inspect(bool finalCheck);
     void identifyTarget();
     void captureAuthoredMetadata(bool finalCheck);
+    void beginAuthoredValidation();
+    void nextAuthoredCandidate(const QString &reason);
+    void beginStructuralFallback();
+    QStringList runtimeScopeArguments(const QString &tier) const;
     void verifyCapturedEnvironment(std::function<void()> verified);
     bool matchesEnvironment(const QJsonObject &identity) const;
     void publishRuntimeContext(const QString &validationMode);
@@ -131,6 +135,9 @@ class MappingService final : public QObject {
     bool m_upgradeCacheProof = false;
     QJsonObject m_runtimeBinding;
     QJsonObject m_environment, m_authoredIdentity, m_authoredPack;
+    QStringList m_authoredCandidates;
+    QString m_validationPack;
+    int m_authoredCandidateIndex = 0;
     bool m_metadataFastPath = false, m_fallbackShown = false, m_referenceAuthoredTried = false;
     QString m_family, m_minecraftVersion, m_mappingIdentity, m_metadataIdentity, m_transport;
     QHash<QString, QString> m_transports; // pid + processStart; never reused for a recycled PID.
