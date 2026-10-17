@@ -1,4 +1,5 @@
 #include "MappingService.h"
+#include "../agent/bindings/VersionAdapter.h"
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -29,9 +30,11 @@ MappingService::MappingService(QObject *parent) : QObject(parent) {
              "/mapping-cache-v1";
     m_tools = QCoreApplication::applicationDirPath() + "/tools";
     m_analyzer = m_tools + "/MappingAnalyzer.exe";
-    m_probe = m_tools + "/MappingProbe-v13.dll";
-    m_contracts = m_tools + "/contracts-v1.json";
+    m_probe = m_tools + "/MappingProbe-v16.dll";
+    m_contracts = m_tools + "/contracts-v2.json";
     m_defaultPack = QCoreApplication::applicationDirPath() + "/agent/mappings/default-v2.json";
+    m_legacyPack=m_defaultPack;
+    m_modernPack=QCoreApplication::applicationDirPath()+"/agent/mappings/vanilla-1.20.1.json";
     m_watchTimer.setSingleShot(true);
     m_timeout.setSingleShot(true);
 }
@@ -108,6 +111,7 @@ void MappingService::event(QJsonObject value) {
     value["transactionId"] = transactionId();
     value["generation"] = double(m_generation);
     value["eventVersion"] = 1;
+    value["internalVersion"] = QString::fromLatin1(arcveil::build::internalBuild);
     value["time"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     if (!m_run.isEmpty()) {
         QFile log(logPath());
@@ -140,7 +144,7 @@ void MappingService::stopProcess() {
 }
 void MappingService::cancel() {
     ++m_generation;
-    if (m_busy && m_transaction) m_transaction->invalidate();
+    if (m_busy && m_transaction) { m_transaction->invalidate(); m_transaction->verifiedRuntimeContext = {}; }
     m_watchTimer.stop();
     m_watchEnabled = false;
     stopProcess();
@@ -157,7 +161,7 @@ void MappingService::cancel() {
 }
 void MappingService::fail(const QString &reason) {
     ++m_generation;
-    if (m_busy && m_transaction) m_transaction->invalidate();
+    if (m_busy && m_transaction) { m_transaction->invalidate(); m_transaction->verifiedRuntimeContext = {}; }
     m_watchTimer.stop();
     m_watchEnabled = false;
     stopProcess();
@@ -181,6 +185,7 @@ void MappingService::fail(const QString &reason) {
 void MappingService::prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
                              const QString &toolsJar, std::shared_ptr<AttachTransaction> transaction) {
     cancel();
+    if (m_defaultPack==m_modernPack) m_defaultPack=m_legacyPack;
     m_events.clear();
     m_progress = -1;
     m_pid = pid;
@@ -189,9 +194,13 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     if (!m_transaction->elapsed.isValid()) m_transaction->elapsed.start();
     m_transaction->state = AttachTransaction::State::MappingFastPath;
     m_runtimeBinding = {};
+    m_transaction->verifiedRuntimeContext = {};
+    m_environment = {}; m_authoredIdentity = {}; m_authoredPack = {};
+    m_authoredCandidates.clear(); m_authoredCandidateIndex = 0; m_validationPack.clear();
+    m_metadataFastPath = false; m_fallbackShown = false; m_referenceAuthoredTried = false;
     m_finalCheck = false;
     m_upgradeCacheProof = false;
-    m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_forceAutomatic = false;
+    m_cachePath = false; m_fullLite = false; m_authoredWarmup = false; m_skipCacheCandidates = false;
     m_stableAmbiguity = false;
     m_candidates.clear();
     m_candidateIndex = 0; m_candidateWarmed = false;
@@ -207,6 +216,7 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     m_unresolved.clear();
     m_dynamic = false;
     m_pendingChange = false;
+    m_refreshPending = false;
     m_watchEnabled = true;
     m_captureFailures = 0;
     m_snapshotGeneration = 0;
@@ -237,16 +247,12 @@ void MappingService::prepare(quint32 pid, const QString &java, const QString &he
     try {
         if (m_start.isEmpty() || !QFile::exists(m_analyzer) || !QDir().mkpath(m_run))
             throw std::runtime_error("mapping analyzer/runtime unavailable");
-        m_contractDigest = fileDigest(m_contracts);
+        m_contractDigest = activeContractDigest(readObject(m_defaultPack).value("gameVersion").toString());
         progressSchema();
         Cache(m_root).candidate(m_run, {}, "inspecting");
-        QElapsedTimer lookupElapsed; lookupElapsed.start();
-        const auto preferred = Cache(m_root).preferred(m_contractDigest);
-        performance("cache lookup", lookupElapsed.elapsed());
-        if (!current()) return;
-        if (preferred.valid()) { checkCached(preferred); return; }
-        m_identityPacksFile = m_run + "/identity-packs.json";
-        writeObject(m_identityPacksFile, {{"packs", QJsonArray::fromStringList(Cache(m_root).knownPacks(m_contractDigest))}});
+        // Establish live version/family before reading a scoped cache candidate.
+        // A preferred entry is a hint, never runtime identity authority.
+        writeIdentityCatalog();
         event({{"event", "step"},
                {"index", 0},
                {"state", "success"},
@@ -413,10 +419,17 @@ void MappingService::finalize() {
         throw std::runtime_error("target JVM exited before injection");
     if (!m_validation.value("valid").toBool() || !m_validation.value("injectionReady").toBool())
         throw std::runtime_error("finalize requires current live validation");
-    if (m_mappingIdentity.isEmpty() || m_family.isEmpty() || m_family == "Unknown")
-        throw std::runtime_error("stable mapping identity/family unavailable");
-    if (!m_hit.valid() || m_upgradeCacheProof || (m_hit.bindingIdentity.isEmpty() &&
-        !m_validation.value("identity").toObject().value("bindingIdentity").toString().isEmpty())) {
+    const auto context = m_transaction->verifiedRuntimeContext;
+    if (!context.value("versionVerified").toBool() || !context.value("liveValidated").toBool() ||
+        context.value("transactionId").toString() != transactionId() ||
+        context.value("pid").toDouble() != m_pid || context.value("processStart").toString() != m_start ||
+        !context.value("finalChecked").toBool() || !matchesEnvironment(context) ||
+        context.value("mappingIdentity").toString().isEmpty() ||
+        context.value("metadataIdentity").toString().isEmpty() ||
+        context.value("mappingHash").toString() != fileDigest(m_pack, 2 * 1024 * 1024))
+        throw std::runtime_error("Verified Runtime Context is incomplete or changed before Agent loading");
+    if (!m_metadataFastPath && (!m_hit.valid() || m_upgradeCacheProof || (m_hit.bindingIdentity.isEmpty() &&
+        !m_validation.value("identity").toObject().value("bindingIdentity").toString().isEmpty()))) {
         m_hit = Cache(m_root).promote(m_pack, m_snapshot, m_fingerprint, m_contractDigest,
                                       m_validation, m_mappingIdentity, m_metadataIdentity,
                                       m_family, m_minecraftVersion);
@@ -429,8 +442,9 @@ void MappingService::finalize() {
            {"valid", true},
            {"stage", "verified"},
            {"fingerprint", m_fingerprint},
-           {"pack", m_hit.pack},
-           {"digest", m_hit.digest}});
+           {"pack", m_metadataFastPath ? m_pack : m_hit.pack},
+           {"digest", m_metadataFastPath ? context.value("mappingHash").toString() : m_hit.digest},
+           {"verifiedRuntimeContext", context}});
     if (owner != m_transaction || generation != m_generation || !current()) return;
     m_watchEnabled = false;
     m_watchTimer.stop();
@@ -440,8 +454,13 @@ void MappingService::finalize() {
     m_progress = 1;
     emit changed();
     if (owner != m_transaction || generation != m_generation || !current()) return;
-    emit readyForTransaction(transactionId(), m_hit.pack, m_hit.digest);
-    if (owner == m_transaction && generation == m_generation && current()) emit ready(m_hit.pack, m_hit.digest);
+    const auto readyPack = m_metadataFastPath ? m_pack : m_hit.pack;
+    const auto readyDigest = m_metadataFastPath ? context.value("mappingHash").toString() : m_hit.digest;
+    m_transaction->verifiedRuntimeContext["pack"] = readyPack;
+    m_transaction->verifiedRuntimeContext["selectedPack"] = readyPack;
+    m_transaction->verifiedRuntimeContext["selectedPack"] = readyPack;
+    emit readyForTransaction(transactionId(), readyPack, readyDigest);
+    if (owner == m_transaction && generation == m_generation && current()) emit ready(readyPack, readyDigest);
 }
 bool MappingService::rollback() {
     if (m_busy)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameVersion.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -56,9 +58,19 @@ struct MappingDictionary final {
     std::string id;
     std::string label;
     ClientFamily family = ClientFamily::Unknown;
+    MinecraftVersion minecraftVersion{};
+    MappingNamespace mappingNamespace = MappingNamespace::Unknown;
     std::vector<DetectionPattern> detection;
 
     std::string minecraftName;
+    // Modern-only structure; common logical operations reuse the existing fields.
+    std::string sharedConstantsName, sharedConstantsSignature;
+    std::string worldVersionName, worldVersionSignature;
+    std::string mouseHandlerName, mouseHandlerSignature;
+    std::array<std::string, 3U> positionMethods{};
+    std::array<std::string, 2U> rotationMethods{};
+    std::string isAlive, isRemoved, getCurrentVersion, getVersionName;
+    std::string mouseHandlerField, grabMouse, releaseMouse, isMouseGrabbed;
     std::string minecraftSignature;
     std::string playerName;
     std::string playerSignature;
@@ -73,6 +85,7 @@ struct MappingDictionary final {
     // PlayerControllerMP::attackEntity accepts EntityPlayer rather than the
     // client-only EntityPlayerSP subclass stored in playerSignature.
     std::string entityPlayerSignature;
+    std::string entityPlayerName; // Modern Player base, distinct from LocalPlayer.
     std::string fireballName;
     std::string fireballSignature;
     std::string aabbName;
@@ -427,13 +440,19 @@ public:
     // it returns.
     [[nodiscard]] bool freeze() noexcept;
     [[nodiscard]] bool healthy() const noexcept;
+    [[nodiscard]] const std::string& loadError() const noexcept { return m_loadError; }
 
+    // Modified-client markers/launch hints are evidence; anchors and Vanilla
+    // naming patterns never establish client identity on their own.
     void observeClassSignature(std::string_view signature,
                                ClientEnvironment& environment) const noexcept;
     void observeLaunchHint(std::string_view hint,
                            ClientEnvironment& environment) const noexcept;
     [[nodiscard]] bool hasMappingsForFamily(ClientFamily family) const noexcept;
     [[nodiscard]] bool isMinecraftAnchor(std::string_view signature) const noexcept;
+    // Unknown admits only authored Vanilla member candidates and remains
+    // Unknown. Candidates never establish runtime family/version identity;
+    // known families retain their registered provider-priority ordering.
     [[nodiscard]] MappingCandidates candidatesForAnchor(
         std::string_view signature,
         const ClientEnvironment& environment) const noexcept;
@@ -446,6 +465,7 @@ private:
     std::vector<std::unique_ptr<MappingProvider>> m_providers;
     bool m_frozen = false;
     bool m_healthy = true;
+    std::string m_loadError; // Constructor-only diagnostic; immutable afterward.
 };
 
 } // namespace mcoverlay::bindings

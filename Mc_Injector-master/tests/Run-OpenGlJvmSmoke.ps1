@@ -9,6 +9,9 @@ param(
     [string] $JavaHome = $env:JAVA_HOME,
 
     [switch] $SplitThreads,
+    [switch] $CoreProfile,
+    [string] $FixturePath = '',
+    [string] $MappingPack = '',
 
     [ValidateRange(10, 120)]
     [int] $TimeoutSeconds = 45
@@ -290,6 +293,12 @@ try {
         '--token', $token,
         '--thread-mode', $threadMode
     )
+    if ($CoreProfile.IsPresent) {
+        $startInfo.Arguments += ' ' + (Join-NativeArguments -ArgumentList @('--gl-profile','core'))
+    }
+    if ($FixturePath.Length -gt 0) {
+        $startInfo.Arguments += ' ' + (Join-NativeArguments -ArgumentList @('--fixture-path',$FixturePath,'--mapping-pack',$MappingPack))
+    }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -372,7 +381,8 @@ try {
     $writer.WriteLine('STATE 1 1')
     $stateAppliedSeen = $false
     $rendererReadySeen = $false
-    while (-not ($stateAppliedSeen -and $rendererReadySeen)) {
+    $bindingReadySeen = $FixturePath.Length -eq 0 -or (@($received | Where-Object { $_.StartsWith('BINDING_READY ') }).Count -gt 0)
+    while (-not ($stateAppliedSeen -and $rendererReadySeen -and $bindingReadySeen)) {
         $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
             -LimitSeconds $TimeoutSeconds -Operation 'waiting for the first ImGui frame' `
             -Received $received
@@ -382,6 +392,7 @@ try {
         elseif ($line -ceq 'RENDERER_READY OpenGL') {
             $rendererReadySeen = $true
         }
+        elseif ($line.StartsWith('BINDING_READY ')) {$bindingReadySeen=$true}
     }
 
     # Typography is independent of the positional feature protocol. Exercise

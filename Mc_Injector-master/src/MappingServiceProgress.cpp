@@ -35,7 +35,10 @@ void MappingService::progressSchema() {
     m_progressContracts = {};
     m_progressSymbols = {};
     try {
-        m_progressContracts = readObject(m_contracts).value("symbols").toObject();
+        auto contract=readObject(m_contracts);
+        if (contract.value("contractVersion").toInt()==2)
+            contract=contract.value("versions").toObject().value(readObject(m_defaultPack).value("gameVersion").toString()).toObject();
+        m_progressContracts = contract.value("symbols").toObject();
         for (auto it = m_progressContracts.begin(); it != m_progressContracts.end(); ++it) {
             const auto spec = it.value().toObject();
             event({{"event", "symbol-queued"},
@@ -103,14 +106,16 @@ void MappingService::progressAnalyzer(const QJsonObject &input) {
         invalidate(input.value("symbol").toString(), input.value("reason").toString());
     } else if (kind == "validation" && input.value("injectionReady").toBool()) {
         event({{"event", "reference"},
-               {"targetClientFamily", dictionary(input.value("pack").toObject()).value("family")}});
+               {"targetClientFamily", m_family},
+               {"mappingProviderFamily", dictionary(input.value("pack").toObject()).value("family")}});
     }
 }
 void MappingService::progressVerified() {
-    // Called only after final fingerprint/identity recheck and successful cache promotion.
+    // Called only after independent final runtime verification. Metadata-only
+    // authored results have no installed-code cache proof and are never promoted.
     // This optional display receipt cannot authorize an injection or modify a registry.
     try {
-        const auto selected = dictionary(readObject(m_hit.pack));
+        const auto selected = dictionary(readObject(m_metadataFastPath ? m_pack : m_hit.pack));
         const auto values = selected.value("symbols").toObject();
         auto results = m_validation.value("symbols").toArray();
         const bool cache = m_cachePath;
@@ -159,7 +164,8 @@ void MappingService::progressVerified() {
                 e["source"] = "verified-cache";
             event(e);
         }
-        event({{"event", "reference"}, {"targetClientFamily", selected.value("family")}});
+        event({{"event", "reference"}, {"targetClientFamily", m_family},
+               {"mappingProviderFamily", selected.value("family")}});
         event({{"event", "complete"},
                {"scope", "mapping"},
                {"success", true},

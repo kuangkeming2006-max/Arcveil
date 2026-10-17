@@ -145,8 +145,10 @@ registration/freeze, Gameplay and control IPC remain unchanged.
 
 ## Mapping progress v55.8
 qml-ui → MappingProgressController → MappingProgressModel/filter models is a
-presentation-only boundary. OverlayManager.mappingAttachRequested opens a new
-session; no progress-window action reaches Agent registry, detach, rollback or
+presentation-only boundary. OverlayManager.mappingAttachRequested(pid, UUID)
+initializes a new hidden presentation session; MappingService's scoped
+`mapping-fallback` event opens the existing window once for that owner. No
+progress-window action reaches Agent registry, detach, rollback or
 preflight cancel. Closing the separate window does not destroy the controller.
 
 MappingService.eventReceived → MappingProgressController is one-way structured
@@ -192,3 +194,46 @@ runtimeBinding -> pinned Agent GameBindings JNI lookup -> BINDING_READY -> Contr
 Active (also requires renderer readiness). Cold/miss/drift retains full validation and
 atomic cache publication. Immutable installed-content proof never contains loader
 instance authority; each attach supplies a fresh current-process loader pin.
+
+
+## v56.7 version / API boundary
+
+MappingService → `agent/bindings/VersionAdapter.h` is a pure-value API support
+policy dependency (no JNI, Qt or BindingCache access). Cold-start default packs
+are checked before missing-class watching; Analyzer receipts remain authoritative
+for live validation. Analyzer → the same policy gates full/cache/resolve;
+GameBindingsResolve selects it before profile-specific JNI lookup.
+`GameBindings::versionCapabilities()` is a published-cache support ceiling,
+not a replacement for optional live IDs or hook readiness.
+`BindingCache::gameApi()` and InventoryView remain private binding access views,
+with no new JNI ownership, IPC or AttachTransaction boundary. See
+[MULTIVERSION_REVIEW](MULTIVERSION_REVIEW.md).
+
+## v56.9 modern boundary
+
+MappingService → authored pack catalog/versioned contract → existing Probe/Analyzer
+→ fresh runtimeBinding → existing Agent publication/READY boundary remains intact.
+Modern GameBindings additionally verifies actual game version and defining loader.
+Snapshot/marker rotation and enumeration truncation are process-local values;
+no new IPC ownership. Renderer selects GL2/GL3 by actual context and still consumes
+GameSnapshot, never mapping names or version numbers. WorldProjection and modern
+unsupported gameplay are gated by VersionCapabilities at the binding boundary.
+
+## v56.9.2 Snapshot-tier request boundary
+
+MappingService -> Analyzer `inspect --capture-tier` -> `CaptureClient.h` pure
+`planCaptureRequest/captureRequestStats` -> MappingProbe-v16 retains the same
+bounded request-file transport and normal Attach/NativeLoader tools. Detection
+uses fixed independent environment witnesses; installed authored packs enter
+offline `identify`, and Cache candidates enter only after current version/family
+are established. `Cache::knownPacks()` does not feed an environment Probe request.
+
+The `detection`, `vanilla-validation`, `modded-validation` and `structural` tiers
+control capture scope, not validation authority. Current environment loader
+type/instance pins later captures; every path still publishes a coherent
+transaction-owned Verified Runtime Context before normal Agent loading.
+`CAPTURE_REQUEST`/`SNAPSHOT_STATS` expose actual request/class/work sizes, and
+`mapping-fallback` remains the sole automatic Mapping-window trigger. No new
+Agent control IPC, game-module dependency or JNI ownership boundary is introduced.
+See [mapping-pipeline](modules/mapping-pipeline.md) and
+[Snapshot review](V56_9_2_SNAPSHOT_REVIEW.md).

@@ -124,11 +124,9 @@ void GameBindings::publishDebugChat(JNIEnv* const env, const bool enabled) noexc
         return;
     }
 
-    jobject minecraft = cache->minecraftInstanceField != nullptr
-        ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-        : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+    jobject minecraft = cache->gameApi().minecraft(env);
     jobject player = minecraft == nullptr ? nullptr :
-        env->GetObjectField(minecraft, cache->playerField);
+        cache->gameApi().player(env, minecraft);
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr) {
         clearException(env);
         env->PopLocalFrame(nullptr);

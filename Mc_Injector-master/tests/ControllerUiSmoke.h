@@ -11,6 +11,7 @@
 #include <QImage>
 #include <functional>
 #include "../src/MappingProgressController.h"
+#include "../src/BuildInfo.h"
 
 // Explicit --smoke-test only. Delivers events to this owned QQuickWindow;
 // never moves the system pointer or sends input to another application.
@@ -96,7 +97,7 @@ private:
         } else if(phase==20) {
             auto* build=find(m_window->contentItem(),"aboutBuildLabel");
             if(m_window->property("activeRoute").toString()!="about"||!build||
-               !build->property("text").toString().contains("v56.6")||!capture("about-light")) {
+               !build->property("text").toString().contains(QString::fromLatin1(arcveil::build::internalVersion))||!capture("about-light")) {
                 finish(false);return;
             }
             if(m_setTheme) m_setTheme(true);
@@ -129,10 +130,16 @@ private:
             if(m_popup->property("visible").toBool() || !m_progress || !m_overlay) {finish(false);return;}
             m_progressWindow=m_window->findChild<QQuickWindow*>("mappingProgressWindow");
             if(!m_progressWindow || m_progressWindow->isVisible()) {finish(false);return;}
-            m_progress->begin(42); // Presentation begins without a target JVM/Attach transaction.
+            m_progress->begin(42, "ui-fast-path");
+            m_progress->consume({{"event","session-start"},{"transactionId","ui-fast-path"},{"pid",42}});
+            m_progress->consume({{"event","CACHE_LOOKUP"},{"transactionId","ui-fast-path"},{"hit",true}});
         } else if(phase==33) {
+            if(m_progressWindow->isVisible()) {finish(false);return;}
+            m_progress->begin(42, "ui-fallback");
+            m_progress->consume({{"event","session-start"},{"transactionId","ui-fallback"},{"pid",42}});
+            m_progress->consume({{"event","mapping-fallback"},{"transactionId","ui-fallback"},
+                {"mode","automatic"},{"reason","UI fixture: authored mapping mismatch"}});
             if(!m_progressWindow->isVisible()) {finish(false);return;}
-            m_progress->begin(42);
             m_progress->consume({{"event","step"},{"index",0},{"state","success"}});
             m_progress->consume({{"event","step"},{"index",1},{"state","success"}});
             m_progress->consume({{"event","step"},{"index",2},{"state","running"}});
@@ -160,6 +167,9 @@ private:
             if(m_progress->matchingEnabled() || m_overlay->state()!=state) {finish(false);return;}
             m_progressWindow->close();
         } else if(phase==37) {
+            if(m_progressWindow->isVisible()) {finish(false);return;}
+            m_progress->consume({{"event","mapping-fallback"},{"transactionId","ui-fallback"},
+                {"mode","automatic"},{"reason","UI fixture: retry while hidden"}});
             if(m_progressWindow->isVisible()) {finish(false);return;}
             m_progress->consume({{"event","symbol-matched"},{"symbol","World.players"},{"runtimeName","bdb.j"},{"verified",false},{"provisional",true},{"confidence",0.99}});
             if(m_progress->successful()) {finish(false);return;}

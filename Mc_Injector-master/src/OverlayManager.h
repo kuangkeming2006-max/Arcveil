@@ -375,7 +375,7 @@ public slots:
     void publishMediaSpectrum(const QByteArray &bands);
 
 signals:
-    void mappingAttachRequested(quint32 pid);
+    void mappingAttachRequested(quint32 pid, const QString &transactionId);
     void stateChanged();
     void attachedChanged();
     void busyChanged();

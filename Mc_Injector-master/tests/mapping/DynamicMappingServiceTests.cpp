@@ -32,7 +32,7 @@ struct DynamicMappingServiceTests {
                                 {"symbols", specs},
                                 {"requiredAlternatives", QJsonArray{}},
                                 {"constructors", QJsonArray{}}});
-        writeObject(pack, {{"providers",
+        writeObject(pack, {{"gameVersion", "1.8.9"}, {"providers",
                             QJsonArray{QJsonObject{
                                 {"family", "Lunar"},
                                 {"dictionaries", QJsonArray{QJsonObject{{"family", "Lunar"},
@@ -59,7 +59,7 @@ struct DynamicMappingServiceTests {
         };
         int scenario = 0;
         for (const auto &mode : QStringList{"normal", "drift", "validation-reject", "capture-drift",
-                                            "stop", "cancel", "capture-fatal"}) {
+                                            "stop", "cancel", "capture-fatal", "stable-resume", "stable-unchanged", "stable-inflight", "stable-refresh-drift"}) {
             const auto dir = temp.path() + QString("/scenario-%1").arg(++scenario);
             QDir().mkpath(dir);
             qputenv("ARCVEIL_DYNAMIC_FIXTURE_STATE", (dir + "/worker.json").toUtf8());
@@ -70,7 +70,7 @@ struct DynamicMappingServiceTests {
             service.m_root = dir + "/cache";
             service.m_analyzer = worker;
             service.m_contracts = contracts;
-            service.m_defaultPack = pack;
+            service.m_defaultPack = service.m_legacyPack = pack;
             service.m_watchInterval = 20;
             service.m_maxWatchInterval = 60;
             service.m_debounceMs = 10;
@@ -87,7 +87,7 @@ struct DynamicMappingServiceTests {
                              &MappingService::stopMatching);
             QObject::connect(&progress, &MappingProgressController::resumeMatchingRequested,
                              &service, &MappingService::resumeMatching);
-            int ready = 0, failed = 0, watchEvents = 0, drift = 0, invalidated = 0;
+            int ready = 0, failed = 0, watchEvents = 0, drift = 0, invalidated = 0, stablePauses = 0;
             bool paused = false, premature = false;
             QObject::connect(&service, &MappingService::ready,
                              [&](const auto &, const auto &) { ++ready; });
@@ -95,11 +95,20 @@ struct DynamicMappingServiceTests {
             QObject::connect(&service, &MappingService::eventReceived, [&](const QJsonObject &e) {
                 const auto event = e.value("event").toString();
                 watchEvents += event == "snapshot-watch";
+                stablePauses += event == "STABLE_AMBIGUITY";
                 invalidated += event == "symbol-invalidated";
                 drift +=
                     event == "snapshot-changed" && e.value("reason") == "final-fingerprint-drift";
                 if (event == "symbol-matched" && e.value("verified").toBool() && service.busy())
                     premature = true;
+                if (mode == "stable-inflight" && event == "symbol-started" && !paused) {
+                    paused = true;
+                    auto workerState = readObject(dir + "/worker.json");
+                    workerState["resumeEvidence"] = true;
+                    writeObject(dir + "/worker.json", workerState);
+                    progress.stopMatching();
+                    progress.resumeMatching();
+                }
                 if (event == "waiting-for-runtime-change" && !paused &&
                     (mode == "stop" || mode == "cancel")) {
                     paused = true;
@@ -111,7 +120,52 @@ struct DynamicMappingServiceTests {
             });
             service.prepare(quint32(QCoreApplication::applicationPid()), "fixture-java",
                             "fixture-helper", true, {});
-            if (mode == "stop") {
+            if (mode == "stable-inflight") {
+                check(spin([&] { return ready || failed; }) && paused && ready == 1 && !failed,
+                      "Resume while resolve is in flight queues a fresh follow-up generation");
+                const auto calls = readLog(dir + "/calls.log");
+                check(!stablePauses && calls.contains("resolve D") && calls.contains("validate D success") &&
+                          !calls.contains("evidence reused"),
+                      "old ambiguous result cannot overwrite an in-flight Resume request");
+                continue;
+            } else if (mode.startsWith("stable-")) {
+                check(spin([&] { return stablePauses == 1 && !service.m_process; }),
+                      "stable ambiguity pauses an incomplete real service transaction");
+                check(service.busy() && !service.matchingEnabled() && !ready && !failed &&
+                          service.m_provisional.size() == 70,
+                      "stable ambiguity retains evidence without granting injection");
+                const auto calls = readLog(dir + "/calls.log");
+                delay(150);
+                check(readLog(dir + "/calls.log") == calls,
+                      "stable ambiguity stops automatic subprocess polling");
+                auto workerState = readObject(dir + "/worker.json");
+                workerState["resumeEvidence"] = true;
+                writeObject(dir + "/worker.json", workerState);
+                progress.resumeMatching();
+                check(spin([&] { return ready || failed || stablePauses == 2; }),
+                      "explicit Resume retries even when lite metadata fingerprint is unchanged");
+                const auto resumed = readLog(dir + "/calls.log").mid(calls.size());
+                check(resumed.contains("select-evidence fresh") &&
+                          resumed.contains("detail-evidence fresh") &&
+                          !resumed.contains("evidence reused"),
+                      "Resume recollects installed detail instead of reusing paused bytecode evidence");
+                if (mode != "stable-unchanged") {
+                    check(ready == 1 && !failed && resumed.contains("resolve D") &&
+                              resumed.contains("validate D success"),
+                          "fresh Resume evidence completes only after independent live validation");
+                    delay(800);
+                    check(progress.successful(), "verified Resume completion upgrades the progress model");
+                    if (mode == "stable-refresh-drift")
+                        check(resumed.contains("detail refresh drift"),
+                              "retryable Resume capture drift preserves the fresh-detail request");
+                } else {
+                    check(!ready && !failed && service.busy() && !service.matchingEnabled() &&
+                              stablePauses == 2,
+                          "unchanged ambiguous required mappings pause again and still block injection");
+                    service.cancel();
+                }
+                continue;
+            } else if (mode == "stop") {
                 check(spin([&] { return paused; }), "stop reaches partial matching state");
                 const auto calls = readLog(dir + "/calls.log");
                 delay(850);
@@ -145,8 +199,9 @@ struct DynamicMappingServiceTests {
             check(ready == 1 && !failed && !premature,
                   "only full validation and final recheck emit ready");
             const auto calls = readLog(dir + "/calls.log");
-            check(calls.indexOf(("select-pack " + pack).toUtf8()) >= 0,
-                  "authored bootstrap selects default target pack even with another reference");
+            check(calls.contains("authored source=source.Type0 dictionaries=1") &&
+                      calls.indexOf("authored source=")<calls.indexOf("select-pack "),
+                  "scoped installed authored dictionary is validated before structural reference selection");
             check(calls.contains("resolve A started=100 revalidated=0 matched=70"),
                   "snapshot A matches 70/100");
             check(calls.contains("resolve C started=30 revalidated=70 matched=90"),

@@ -70,6 +70,7 @@ target_include_directories(McOverlayOpenGlJvmSmoke PRIVATE
     "${MC_AGENT_JNI_INCLUDE_DIR}"
     "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 target_link_libraries(McOverlayOpenGlJvmSmoke PRIVATE
+    advapi32
     gdi32
     opengl32
     user32)
@@ -110,6 +111,15 @@ target_compile_definitions(McOverlayRendererTests PRIVATE
 target_include_directories(McOverlayRendererTests PRIVATE
     ../agent "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
 target_link_libraries(McOverlayRendererTests PRIVATE mc_agent::imgui Qt6::Gui
+    opengl32 gdi32 user32 dwmapi imm32 ole32 oleaut32 uuid advapi32)
+
+get_target_property(mc_core_renderer_sources McOverlayRendererTests SOURCES)
+list(REMOVE_ITEM mc_core_renderer_sources OverlayRendererTests.cpp)
+add_executable(McOverlayCoreProfileRendererTests EXCLUDE_FROM_ALL CoreProfileRendererTests.cpp ${mc_core_renderer_sources})
+target_compile_features(McOverlayCoreProfileRendererTests PRIVATE cxx_std_20)
+target_compile_definitions(McOverlayCoreProfileRendererTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+target_include_directories(McOverlayCoreProfileRendererTests PRIVATE ../agent "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+target_link_libraries(McOverlayCoreProfileRendererTests PRIVATE mc_agent::imgui Qt6::Gui
     opengl32 gdi32 user32 dwmapi imm32 ole32 oleaut32 uuid advapi32)
 
 if(MSVC)

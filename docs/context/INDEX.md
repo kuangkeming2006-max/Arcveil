@@ -40,7 +40,7 @@
 | 构建目标 | 作用与约束 |
 | --- | --- |
 | `MinecraftOverlayManager` | Qt6 Core/Gui/Qml/Quick/QuickControls2/Quick3D/Network/Concurrent；C++20 |
-| `McOverlayAgent` | Windows x64；JNI/JVMTI 仅头文件，不链接 `jvm.lib`；MinHook、ImGui OpenGL2 |
+| `McOverlayAgent` | Windows x64；JNI/JVMTI 仅头文件，不链接 `jvm.lib`；MinHook、ImGui OpenGL2 / core-context OpenGL3 |
 | `mc_overlay_attach_helper` | 编译 Java AttachHelper JAR，调用 `VirtualMachine.loadAgentPath` |
 | `McOverlayNativeLoader` | 独立可执行文件，普通 DLL 加载后调用 `McOverlay_Start` |
 | `mc_windows_media_bridge` | Windows C# 媒体辅助进程；由控制器媒体服务使用 |

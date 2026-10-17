@@ -17,11 +17,15 @@ struct Entry {
 class Cache final {
   public:
     explicit Cache(QString root) : m_root(std::move(root)) {}
+    // Offline history enumeration, not an independent runtime-detection catalog.
+    // Index aliases of the same immutable revision are returned only once.
     QStringList knownPacks(const QString &contractDigest) const;
     Entry preferred(const QString &contractDigest) const;
     Entry lookup(const QString &fingerprint, const QString &contractDigest) const;
     QList<Entry> candidates(const QString &family, const QString &minecraftVersion,
                             const QString &contractDigest) const;
+    // Structural references require an explicit, exact Minecraft API version;
+    // only the same family or its explicit Vanilla base is eligible.
     Entry reference(const QString &contractDigest, const QString &family = {},
                     const QString &minecraftVersion = {}, const QString &mappingIdentity = {}) const;
     void candidate(const QString &run, const QString &fingerprint, const QString &status);

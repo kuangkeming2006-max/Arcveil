@@ -218,7 +218,7 @@ bool OverlayManager::startAttachTransaction(std::shared_ptr<AttachTransaction> t
     m_transaction = transaction;
     m_transaction->elapsed.start();
     m_runtimeBindingsReady = false; m_rendererReportedReady = false;
-    emit mappingAttachRequested(pid);
+    emit mappingAttachRequested(pid, transaction->transactionId);
 
     clearError();
     setRenderer({});

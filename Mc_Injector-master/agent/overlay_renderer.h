@@ -150,6 +150,7 @@ private:
     // a destroyed OverlayRenderer object.
     OverlayInputState* m_inputState = nullptr;
     bool m_initialized = false;
+    bool m_coreProfile = false;
     bool m_permanentlyDisabled = false;
     bool m_wndProcFallbackLogged = false;
     bool m_cursorSessionActive = false;

@@ -8,6 +8,7 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QUuid>
 #include <stdexcept>
 #include <algorithm>
@@ -87,9 +88,13 @@ Entry Cache::entry(const QString &revision, const QString &contractDigest, bool 
 }
 QStringList Cache::knownPacks(const QString &contractDigest) const {
     QStringList result;
+    QSet<QString> seen;
     const auto verified = index().value("verified").toObject();
     for (auto it = verified.begin(); it != verified.end(); ++it) {
-        const auto e = entry(it.value().toString(), contractDigest, false);
+        const auto revision = it.value().toString();
+        if (seen.contains(revision)) continue;
+        seen.insert(revision);
+        const auto e = entry(revision, contractDigest, false);
         if (e.valid()) result << e.pack;
     }
     return result;
@@ -114,13 +119,17 @@ Entry Cache::lookup(const QString &fingerprint, const QString &contractDigest) c
 QList<Entry> Cache::candidates(const QString &family, const QString &minecraftVersion,
                                const QString &contractDigest) const {
     QList<Entry> result;
-    if (family.isEmpty() || family == "Unknown") return result;
+    if (family.isEmpty() || family == "Unknown" || minecraftVersion.isEmpty()) return result;
     const auto i = index();
     const auto verified = i.value("verified").toObject();
     // Last is only an ordering hint within an already family-scoped set.
     const auto last = i.value("lastVerified").toString();
+    QSet<QString> seen;
     for (auto it = verified.begin(); it != verified.end(); ++it) {
-        auto e = entry(it.value().toString(), contractDigest, false);
+        const auto revision = it.value().toString();
+        if (seen.contains(revision)) continue;
+        seen.insert(revision);
+        auto e = entry(revision, contractDigest, false);
         if (!e.valid() || e.family != family || e.minecraftVersion != minecraftVersion ||
             e.mappingIdentity.isEmpty()) continue;
         if (e.revision == last) result.prepend(e); else result.append(e);
@@ -130,41 +139,34 @@ QList<Entry> Cache::candidates(const QString &family, const QString &minecraftVe
 }
 Entry Cache::reference(const QString &contractDigest, const QString &family,
                        const QString &minecraftVersion, const QString &mappingIdentity) const {
-    if (family.isEmpty() || family == "Unknown") return {};
-    struct RankedReference { Entry value; int rank, distance; };
+    if (family.isEmpty() || family == "Unknown" || minecraftVersion.isEmpty()) return {};
+    struct RankedReference { Entry value; int rank; };
     std::vector<RankedReference> references;
-    auto distance = [&](const QString &version) {
-        const auto source = version.split('.'), target = minecraftVersion.split('.');
-        int result = 0;
-        for (int i = 0; i < 3; ++i) {
-            bool a = false, b = false;
-            const int x = source.value(i).toInt(&a), y = target.value(i).toInt(&b);
-            if (!a || !b) return version == minecraftVersion ? 0 : 1000000;
-            result += qAbs(x - y) * (i == 0 ? 10000 : i == 1 ? 100 : 1);
-        }
-        return result;
-    };
+    QSet<QString> seen;
     const auto verified = index().value("verified").toObject();
     for (auto it = verified.begin(); it != verified.end(); ++it) {
-        auto e = entry(it.value().toString(), contractDigest, false);
-        if (!e.valid()) continue;
+        const auto revision = it.value().toString();
+        if (seen.contains(revision)) continue;
+        seen.insert(revision);
+        auto e = entry(revision, contractDigest, false);
+        // A historical reference may supply structure, never a different API
+        // contract. Same-family history is still scoped to the detected version.
+        if (!e.valid() || e.minecraftVersion != minecraftVersion) continue;
         int rank = 0;
         QString reason;
         if (e.family == family) {
             if (!mappingIdentity.isEmpty() && e.mappingIdentity == mappingIdentity) {
                 rank = 4; reason = "exact-stable-mapping-identity";
-            } else if (e.minecraftVersion == minecraftVersion) {
+            } else {
                 rank = 3; reason = "same-family-and-minecraft-version";
-            } else { rank = 2; reason = "same-family-nearest-verified-reference"; }
+            }
         } else if (e.family == "Vanilla" && e.minecraftVersion == minecraftVersion) {
             rank = 1; reason = "explicit-base-minecraft-structural-reference";
         }
-        const int separation = distance(e.minecraftVersion);
-        if (rank > 0) { e.referenceReason = reason; references.push_back({e, rank, separation}); }
+        if (rank > 0) { e.referenceReason = reason; references.push_back({e, rank}); }
     }
     std::sort(references.begin(), references.end(), [](const auto &a, const auto &b) {
         if (a.rank != b.rank) return a.rank > b.rank;
-        if (a.distance != b.distance) return a.distance < b.distance;
         return a.value.promotionSerial > b.value.promotionSerial;
     });
     // Historical snapshots are only read when selecting a structural reference.

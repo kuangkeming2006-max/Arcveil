@@ -22,6 +22,12 @@
 
 namespace mcoverlay {
 
+bindings::VersionCapabilities GameBindings::versionCapabilities() const noexcept
+{
+    if (!bindingsReady() || !m_cache || !m_cache->adapter) return {};
+    return m_cache->adapter->capabilities;
+}
+
 GameBindings::GameBindings(JavaVM* const vm, jvmtiEnv* const jvmti, const std::filesystem::path& mappingPack, std::string_view mappingHash, LoaderIdentity loader) noexcept
     : m_vm(vm), m_jvmti(jvmti), m_mappingRegistry(mappingPack, mappingHash), m_bindingLoader(std::move(loader))
 {
@@ -52,6 +58,8 @@ void GameBindings::deleteGlobalRefs(JNIEnv* const env, BindingCache& cache) noex
         return;
     }
     if (cache.minecraftClass != nullptr) env->DeleteGlobalRef(cache.minecraftClass);
+    if (cache.mouseHandlerClass != nullptr) env->DeleteGlobalRef(cache.mouseHandlerClass);
+    if (cache.entityPlayerClass != nullptr) env->DeleteGlobalRef(cache.entityPlayerClass);
     if (cache.rayVectorClass != nullptr) env->DeleteGlobalRef(cache.rayVectorClass);
     if (cache.rayHitClass != nullptr) env->DeleteGlobalRef(cache.rayHitClass);
     if (cache.diggingPacketClass != nullptr) env->DeleteGlobalRef(cache.diggingPacketClass);

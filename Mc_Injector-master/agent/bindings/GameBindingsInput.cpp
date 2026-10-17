@@ -136,6 +136,9 @@ bool GameBindings::setLwjglMouseGrabbed(JNIEnv* const env, const bool grabbed) n
 
 bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return setModernInputCaptured(env,guiOpen);
     if (env == nullptr) return false;
 
     if (guiOpen && !m_overlayInputSessionActive) {
@@ -156,9 +159,7 @@ bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexc
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved &&
         m_cache != nullptr) {
         BindingCache* const cache = m_cache.get();
-        jobject minecraft = cache->minecraftInstanceField != nullptr
-            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        jobject minecraft = cache->gameApi().minecraft(env);
         if (env->ExceptionCheck() != JNI_TRUE && minecraft != nullptr) {
             // func_71364_i updates Minecraft.inGameHasFocus as well as LWJGL;
             // this prevents a normal 1.8.9 client from immediately re-grabbing.
@@ -190,6 +191,9 @@ bool GameBindings::setInputCaptured(JNIEnv* const env, const bool guiOpen) noexc
 
 bool GameBindings::maintainInputReleased(JNIEnv* const env) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return setModernInputCaptured(env,true);
     if (env == nullptr) return false;
     const bool released = setLwjglMouseGrabbed(env, false);
     // Do not release Win32 capture here. ImGui deliberately owns capture while
@@ -208,9 +212,7 @@ bool GameBindings::gameScreenOpen(JNIEnv* const env) noexcept
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved
         ? m_cache.get() : nullptr;
     if (cache != nullptr && cache->currentScreen != nullptr) {
-        jobject minecraft = cache->minecraftInstanceField != nullptr
-            ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-            : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+        jobject minecraft = cache->gameApi().minecraft(env);
         if (!env->ExceptionCheck() && minecraft != nullptr) {
             jobject screen = env->GetObjectField(minecraft, cache->currentScreen);
             const bool failed = env->ExceptionCheck() == JNI_TRUE;

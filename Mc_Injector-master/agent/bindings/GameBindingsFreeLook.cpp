@@ -28,9 +28,7 @@ bool GameBindings::setFreeLookPerspective(JNIEnv* env,const int perspective,
     const auto* c=m_cache.get();
     if(!env||!c||!c->minecraftClass||!c->gameSettingsField||
        !c->thirdPersonView) return false;
-    jobject minecraft=c->minecraftInstanceField
-        ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
-        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    jobject minecraft=c->gameApi().minecraft(env);
     if(env->ExceptionCheck()||!minecraft) {
         clearException(env);
         if(minecraft) env->DeleteLocalRef(minecraft);
@@ -123,11 +121,9 @@ void GameBindings::rotateFreeLookCamera(JNIEnv* env,jobject entity,
     // free camera; all other entities retain exact vanilla field semantics.
     bool localCameraEntity=false;
     if(c->minecraftClass&&c->playerField) {
-        jobject minecraft=c->minecraftInstanceField
-            ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
-            : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+        jobject minecraft=c->gameApi().minecraft(env);
         jobject player=!env->ExceptionCheck()&&minecraft
-            ? env->GetObjectField(minecraft,c->playerField):nullptr;
+            ? c->gameApi().player(env, minecraft):nullptr;
         localCameraEntity=!env->ExceptionCheck()&&player&&
             env->IsSameObject(entity,player)==JNI_TRUE;
         if(player)env->DeleteLocalRef(player);

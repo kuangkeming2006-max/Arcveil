@@ -45,6 +45,7 @@ for command in ('validate','resolve'):
 # content must stay separate; identity-hash collisions cannot merge scopes.
 renumbered=copy.deepcopy(raw);renumbered['loaders'][0]['id']=99
 for c in renumbered['classes']:c['loader']=99
+for evidence in renumbered.get('runtimeEvidence',[]):evidence['loader']=99
 run(['inspect','--snapshot',write('renumbered-lite.json',renumbered),'--lite','--out',f/'renumbered.jsonl'])
 assert read(f/'renumbered.jsonl')['fingerprint']==index['fingerprint']
 duplicate=copy.deepcopy(raw);duplicate['loaders'].append({'id':2,'type':raw['loaders'][0]['type'],'instance':456})

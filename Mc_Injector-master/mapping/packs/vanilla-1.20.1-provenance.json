@@ -1,0 +1,307 @@
+{
+  "version": "1.20.1",
+  "javaMajor": 17,
+  "clientSha1": "0c3ec587af28e5a785c0b4a7b8a30f9a8f78f838",
+  "mappingsSha1": "6c48521eed01fe2e8ecdadbd5ae348415f3c47da",
+  "clientUrl": "https://piston-data.mojang.com/v1/objects/0c3ec587af28e5a785c0b4a7b8a30f9a8f78f838/client.jar",
+  "mappingsUrl": "https://piston-data.mojang.com/v1/objects/6c48521eed01fe2e8ecdadbd5ae348415f3c47da/client.txt",
+  "validation": "offline official JAR metadata only; no JVM/Attach/gameplay verification",
+  "members": [
+    {
+      "logical": "getMinecraft",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "getInstance",
+      "runtimeMember": "N",
+      "descriptor": "()Lenn;",
+      "static": true
+    },
+    {
+      "logical": "playerField",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "player",
+      "runtimeMember": "t",
+      "descriptor": "Lfiy;",
+      "static": false
+    },
+    {
+      "logical": "worldField",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "level",
+      "runtimeMember": "s",
+      "descriptor": "Lfew;",
+      "static": false
+    },
+    {
+      "logical": "getHealth",
+      "officialOwner": "net.minecraft.world.entity.LivingEntity",
+      "officialMember": "getHealth",
+      "runtimeMember": "er",
+      "descriptor": "()F",
+      "static": false
+    },
+    {
+      "logical": "getMaxHealth",
+      "officialOwner": "net.minecraft.world.entity.LivingEntity",
+      "officialMember": "getMaxHealth",
+      "runtimeMember": "eI",
+      "descriptor": "()F",
+      "static": false
+    },
+    {
+      "logical": "getEntityId",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getId",
+      "runtimeMember": "af",
+      "descriptor": "()I",
+      "static": false
+    },
+    {
+      "logical": "getBounds",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getBoundingBox",
+      "runtimeMember": "cE",
+      "descriptor": "()Leed;",
+      "static": false
+    },
+    {
+      "logical": "isMainThread",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "isSameThread",
+      "runtimeMember": "bl",
+      "descriptor": "()Z",
+      "static": false
+    },
+    {
+      "logical": "isSingleplayer",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "hasSingleplayerServer",
+      "runtimeMember": "R",
+      "descriptor": "()Z",
+      "static": false
+    },
+    {
+      "logical": "getLoadedEntities",
+      "officialOwner": "net.minecraft.client.multiplayer.ClientLevel",
+      "officialMember": "entitiesForRendering",
+      "runtimeMember": "e",
+      "descriptor": "()Ljava/lang/Iterable;",
+      "static": false
+    },
+    {
+      "logical": "getName",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getName",
+      "runtimeMember": "Z",
+      "descriptor": "()Lsw;",
+      "static": false
+    },
+    {
+      "logical": "getFormattedText",
+      "officialOwner": "net.minecraft.network.chat.Component",
+      "officialMember": "getString",
+      "runtimeMember": "getString",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false
+    },
+    {
+      "logical": "getEyeHeight",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getEyeHeight",
+      "runtimeMember": "cF",
+      "descriptor": "()F",
+      "static": false
+    },
+    {
+      "logical": "isInvisible",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "isInvisible",
+      "runtimeMember": "cb",
+      "descriptor": "()Z",
+      "static": false
+    },
+    {
+      "logical": "isAlive",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "isAlive",
+      "runtimeMember": "bs",
+      "descriptor": "()Z",
+      "static": false
+    },
+    {
+      "logical": "isRemoved",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "isRemoved",
+      "runtimeMember": "dD",
+      "descriptor": "()Z",
+      "static": false
+    },
+    {
+      "logical": "currentScreenField",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "screen",
+      "runtimeMember": "z",
+      "descriptor": "Leuq;",
+      "static": false
+    },
+    {
+      "logical": "positionMethods",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getX",
+      "runtimeMember": "dn",
+      "descriptor": "()D",
+      "static": false
+    },
+    {
+      "logical": "positionMethods",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getY",
+      "runtimeMember": "dp",
+      "descriptor": "()D",
+      "static": false
+    },
+    {
+      "logical": "positionMethods",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getZ",
+      "runtimeMember": "dt",
+      "descriptor": "()D",
+      "static": false
+    },
+    {
+      "logical": "previousPositionFields",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "xo",
+      "runtimeMember": "J",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "previousPositionFields",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "yo",
+      "runtimeMember": "K",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "previousPositionFields",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "zo",
+      "runtimeMember": "L",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "rotationMethods",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getYRot",
+      "runtimeMember": "dy",
+      "descriptor": "()F",
+      "static": false
+    },
+    {
+      "logical": "rotationMethods",
+      "officialOwner": "net.minecraft.world.entity.Entity",
+      "officialMember": "getXRot",
+      "runtimeMember": "dA",
+      "descriptor": "()F",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "minX",
+      "runtimeMember": "a",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "minY",
+      "runtimeMember": "b",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "minZ",
+      "runtimeMember": "c",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "maxX",
+      "runtimeMember": "d",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "maxY",
+      "runtimeMember": "e",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "aabbFields",
+      "officialOwner": "net.minecraft.world.phys.AABB",
+      "officialMember": "maxZ",
+      "runtimeMember": "f",
+      "descriptor": "D",
+      "static": false
+    },
+    {
+      "logical": "getCurrentVersion",
+      "officialOwner": "net.minecraft.SharedConstants",
+      "officialMember": "getCurrentVersion",
+      "runtimeMember": "b",
+      "descriptor": "()Lad;",
+      "static": true
+    },
+    {
+      "logical": "getVersionName",
+      "officialOwner": "net.minecraft.WorldVersion",
+      "officialMember": "getName",
+      "runtimeMember": "c",
+      "descriptor": "()Ljava/lang/String;",
+      "static": false
+    },
+    {
+      "logical": "mouseHandlerField",
+      "officialOwner": "net.minecraft.client.Minecraft",
+      "officialMember": "mouseHandler",
+      "runtimeMember": "n",
+      "descriptor": "Leno;",
+      "static": false
+    },
+    {
+      "logical": "grabMouse",
+      "officialOwner": "net.minecraft.client.MouseHandler",
+      "officialMember": "grabMouse",
+      "runtimeMember": "i",
+      "descriptor": "()V",
+      "static": false
+    },
+    {
+      "logical": "releaseMouse",
+      "officialOwner": "net.minecraft.client.MouseHandler",
+      "officialMember": "releaseMouse",
+      "runtimeMember": "j",
+      "descriptor": "()V",
+      "static": false
+    },
+    {
+      "logical": "isMouseGrabbed",
+      "officialOwner": "net.minecraft.client.MouseHandler",
+      "officialMember": "isMouseGrabbed",
+      "runtimeMember": "h",
+      "descriptor": "()Z",
+      "static": false
+    }
+  ]
+}

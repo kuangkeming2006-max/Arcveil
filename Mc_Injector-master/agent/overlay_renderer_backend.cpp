@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_opengl2.h>
+#include <imgui_impl_opengl3.h>
 #include <imgui_impl_win32.h>
 
 #include <gl/GL.h>
@@ -274,7 +275,14 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
         m_mediaFont = nullptr;
         return false;
     }
-    if (!ImGui_ImplOpenGL2_Init()) {
+    // Select by the actual GL context, independently of Minecraft/client naming.
+    int major=0,minor=0;
+    const auto glVersion=reinterpret_cast<const char*>(::glGetString(GL_VERSION));
+    if (glVersion) std::sscanf(glVersion,"%d.%d",&major,&minor);
+    GLint profile=0;
+    if (major>3 || (major==3 && minor>=2)) ::glGetIntegerv(0x9126 /* GL_CONTEXT_PROFILE_MASK */,&profile);
+    m_coreProfile=(profile&1)!=0;
+    if (!(m_coreProfile ? ImGui_ImplOpenGL3_Init("#version 150") : ImGui_ImplOpenGL2_Init())) {
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext(m_imguiContext);
         m_imguiContext = nullptr;
@@ -374,8 +382,9 @@ bool OverlayRenderer::initialize(HWND const window, HGLRC const context) noexcep
                 ::glBindTexture(GL_TEXTURE_2D,m_mediaKeycapTexture);
                 ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
                 ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
-                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
+                const GLint wrap=m_coreProfile ? 0x812F /* GL_CLAMP_TO_EDGE */ : GL_CLAMP;
+                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,wrap);
+                ::glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,wrap);
                 ::glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,atlasWidth,atlasHeight,0,
                                GL_RGBA,GL_UNSIGNED_BYTE,atlasPixels);
                 ::glBindTexture(GL_TEXTURE_2D,static_cast<GLuint>(previousTexture));
@@ -454,7 +463,8 @@ void OverlayRenderer::shutdownWithCurrentContext() noexcept
         }
         cached = {};
     }
-    ImGui_ImplOpenGL2_Shutdown();
+    if (m_coreProfile) ImGui_ImplOpenGL3_Shutdown();
+    else ImGui_ImplOpenGL2_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext(m_imguiContext);
     m_imguiContext = nullptr;
@@ -580,6 +590,7 @@ void OverlayRenderer::abandonAfterHookDisabled() noexcept
 
 void OverlayRenderer::captureBackdropTexture() noexcept
 {
+    if (m_coreProfile) return; // Compatibility-only blur must not issue removed GL calls.
     const ImGuiIO& io = ImGui::GetIO();
     const int width = static_cast<int>(io.DisplaySize.x);
     const int height = static_cast<int>(io.DisplaySize.y);
@@ -609,6 +620,7 @@ void OverlayRenderer::captureBackdropTexture() noexcept
 
 void OverlayRenderer::renderInventoryBlur(const float strength) noexcept
 {
+    if (m_coreProfile) return;
     if (strength <= 0.01F || m_features.clickGuiBlur <= 0) return;
     const ImGuiIO& io = ImGui::GetIO();
     captureBackdropTexture();

@@ -16,12 +16,12 @@ MappingProgressController::MappingProgressController(QObject *parent)
     });
     m_steps = {"pending", "pending", "pending", "pending"};
 }
-void MappingProgressController::begin(quint32 pid) {
+void MappingProgressController::begin(quint32 pid, const QString &transactionId) {
     m_stopRequested = false;
-    m_transactionId.clear();
+    m_transactionId = transactionId;
     m_awaitingTransaction = true;
+    m_fallbackShown = false;
     reset(pid);
-    emit openRequested();
 }
 void MappingProgressController::reset(quint32 pid) {
     m_symbols.clear();
@@ -54,11 +54,24 @@ void MappingProgressController::stopMatching() {
 void MappingProgressController::consume(const QJsonObject &e) {
     const auto kind = e.value("event").toString();
     const auto transaction = e.value("transactionId").toString();
-    if (kind == "session-start") { m_transactionId = transaction; m_awaitingTransaction = false; }
+    if (kind == "session-start") {
+        if (!m_transactionId.isEmpty() && transaction != m_transactionId) return;
+        m_transactionId = transaction;
+        m_awaitingTransaction = false;
+    }
     else if (!transaction.isEmpty() && (m_awaitingTransaction ||
              (!m_transactionId.isEmpty() && transaction != m_transactionId))) return;
     if (kind == "session-start") {
         reset(quint32(e.value("pid").toDouble()));
+    } else if (kind == "mapping-fallback") {
+        const auto mode = e.value("mode").toString();
+        if (mode != "automatic" && mode != "diagnostic") return;
+        m_status = e.value("reason").toString();
+        if (mode == "diagnostic") m_matchingEnabled = false;
+        if (!m_fallbackShown) {
+            m_fallbackShown = true;
+            emit openRequested();
+        }
     } else if (kind == "step") {
         step(e.value("index").toInt(-1), e.value("state").toString());
         if (e.contains("message"))
@@ -84,6 +97,8 @@ void MappingProgressController::consume(const QJsonObject &e) {
         if (!m_matchingEnabled)
             m_status =
                 QStringLiteral("Attach waiting for mapping; resume to continue. Existing matches retained.");
+        else if (e.value("reason") == "manual-resume")
+            m_status = QStringLiteral("Resuming mapping · capturing fresh runtime evidence");
     } else if (kind == "waiting-for-runtime-change") {
         m_matchingEnabled = !e.value("paused").toBool();
         m_status =
@@ -105,7 +120,7 @@ void MappingProgressController::consume(const QJsonObject &e) {
             m_status = source == "verified-cache" ? QStringLiteral("Cache HIT → Live validation → Ready")
                        : source == "automatic"
                            ? QStringLiteral("反混淆成功 · 自动解析及最终验证通过")
-                           : QStringLiteral("反混淆成功 · mapping pack 运行时验证通过");
+                           : QStringLiteral("Mapping 验证成功 · mapping pack 运行时验证通过");
         } else {
             step(3, "degraded");
             m_status = QStringLiteral("验证完成，但没有完整的 symbol 展示数据");

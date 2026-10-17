@@ -13,6 +13,7 @@
 
 #include "BedWarsState.h"
 #include "MappingProvider.h"
+#include "VersionAdapter.h"
 #include "AimControl.h"
 #include "SilentLockCoordinator.h"
 #include "LiveInteractionTransform.h"
@@ -59,6 +60,7 @@ struct EntityMarker final {
     jint entityId = -1;
     float health = 0.0F;
     float maxHealth = 0.0F;
+    float yaw = 0.0F, pitch = 0.0F;
     int hurtTime = -1;
     bool groundKnown = false;
     double distance = 0.0;
@@ -174,6 +176,8 @@ struct GameSnapshot final {
     double z = 0.0;
     AxisAlignedBox bounds{};
     jint loadedEntities = 0;
+    float yaw = 0.0F, pitch = 0.0F;
+    bool entityEnumerationTruncated = false;
     bool singlePlayer = false;
     bool integratedSinglePlayer = false;
     bool hypixelServer = false;
@@ -273,7 +277,7 @@ struct GameplaySettings final {
     int localVelocityVerticalPercent = 100;
 };
 
-// Minecraft 1.8.9-only JNI binding cache. Only jclass global references and
+// Unified game facade with a verified version adapter. Only jclass global references and
 // method/field IDs survive a frame. Minecraft/player/AABB object references
 // are always local to sample() and are discarded before SwapBuffers returns.
 struct BindingLoaderIdentity { std::string anchor, type; unsigned instance = 0; };
@@ -282,6 +286,8 @@ public:
     using LoaderIdentity = BindingLoaderIdentity;
     GameBindings(JavaVM* vm, jvmtiEnv* jvmti, const std::filesystem::path& mappingPack = {}, std::string_view mappingHash = {}, LoaderIdentity loader = {}) noexcept;
     [[nodiscard]] bool bindingsReady() const noexcept { return m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved; }
+    // API support ceiling; optional live JNI IDs/hook readiness further restrict features.
+    [[nodiscard]] bindings::VersionCapabilities versionCapabilities() const noexcept;
     // Resolver-thread diagnostics; no bytecode/constant-pool retrieval in Agent binding.
     [[nodiscard]] std::uint64_t bindingJvmtiCalls() const noexcept { return m_bindingJvmtiCalls; }
     [[nodiscard]] std::uint64_t bindingJniCalls() const noexcept { return m_bindingJniCalls; }
@@ -374,6 +380,10 @@ private:
     struct BindingCache;
 
     [[nodiscard]] bool resolve(JNIEnv* env) noexcept;
+    [[nodiscard]] bool resolveModernProfile(JNIEnv* env, const MappingProfile& profile,
+                                            jclass minecraft, BindingCache& candidate);
+    [[nodiscard]] const GameSnapshot& sampleModern(JNIEnv* env, std::uint64_t tickMilliseconds) noexcept;
+    [[nodiscard]] bool setModernInputCaptured(JNIEnv* env, bool captured) noexcept;
     [[nodiscard]] bool resolveProfile(JNIEnv* env,
                                       const MappingProfile& profile,
                                       jclass minecraft,

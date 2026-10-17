@@ -1,4 +1,5 @@
 #pragma once
+#include "BuildInfo.h"
 #include "../mapping/cache/MappingCache.h"
 #include <QJsonObject>
 #include <QObject>
@@ -20,6 +21,7 @@ class MappingService final : public QObject {
     Q_PROPERTY(QString fingerprint READ fingerprint NOTIFY changed)
     Q_PROPERTY(QString runtimeFingerprint READ fingerprint NOTIFY changed)
     Q_PROPERTY(QString logPath READ logPath NOTIFY changed)
+    Q_PROPERTY(QString internalVersion READ internalVersion CONSTANT)
   public:
     explicit MappingService(QObject *parent = nullptr);
     ~MappingService() override;
@@ -33,6 +35,7 @@ class MappingService final : public QObject {
     QString status() const { return m_status; }
     QString fingerprint() const { return m_fingerprint; }
     QString logPath() const { return m_run.isEmpty() ? QString{} : m_run + "/events.jsonl"; }
+    QString internalVersion() const { return QString::fromLatin1(arcveil::build::internalVersion); }
     void prepare(quint32 pid, const QString &java, const QString &helper, bool modular,
                  const QString &toolsJar, std::shared_ptr<AttachTransaction> transaction = {});
     static QString processStartFor(quint32 pid);
@@ -59,7 +62,7 @@ class MappingService final : public QObject {
     friend struct TransactionCacheTests;
     friend struct LiveMappingSmoke;
     friend struct DynamicMappingServiceTests;
-    enum class CapturePhase { Initial, Watch, Final, CacheWarmup };
+    enum class CapturePhase { Initial, Watch, Final, CacheWarmup, Refresh, ContextFinal };
     void captureLite(CapturePhase phase);
     void selectDetail(CapturePhase phase);
     void captureDetail(CapturePhase phase);
@@ -73,6 +76,17 @@ class MappingService final : public QObject {
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void identifyTarget();
+    void captureAuthoredMetadata(bool finalCheck);
+    void beginAuthoredValidation();
+    void nextAuthoredCandidate(const QString &reason);
+    void beginStructuralFallback();
+    QStringList runtimeScopeArguments(const QString &tier) const;
+    void verifyCapturedEnvironment(std::function<void()> verified);
+    bool matchesEnvironment(const QJsonObject &identity) const;
+    void publishRuntimeContext(const QString &validationMode);
+    void showFallback(const QString &mode, const QString &reason);
+    void writeIdentityCatalog();
+    QString activeContractDigest(const QString& gameVersion) const;
     void selectCacheCandidate();
     void checkCached(const mapping_cache::Entry &entry);
     void fallbackFromCache(const QString &reason);
@@ -92,6 +106,7 @@ class MappingService final : public QObject {
     QString m_root, m_tools, m_run, m_pack, m_java, m_helper, m_toolsJar, m_status, m_fingerprint,
         m_start, m_contractDigest;
     QString m_analyzer, m_contracts, m_defaultPack, m_probe;
+    QString m_modernPack, m_legacyPack;
     QPointer<QProcess> m_process;
     void *m_processJob = nullptr;
     MappingEventModel m_events;
@@ -103,7 +118,7 @@ class MappingService final : public QObject {
     QJsonObject m_validation, m_capture;
     mapping_cache::Entry m_hit, m_reference;
     QTimer m_watchTimer;
-    bool m_watchEnabled = false, m_dynamic = false, m_pendingChange = false;
+    bool m_watchEnabled = false, m_dynamic = false, m_pendingChange = false, m_refreshPending = false;
     int m_watchInterval = 2500, m_maxWatchInterval = 5000, m_debounceMs = 750,
         m_captureFailures = 0;
     quint64 m_snapshotGeneration = 0, m_captureSerial = 0;
@@ -114,11 +129,16 @@ class MappingService final : public QObject {
     std::shared_ptr<AttachTransaction> m_transaction;
     QList<mapping_cache::Entry> m_candidates;
     int m_candidateIndex = 0;
-    bool m_cachePath = false, m_candidateWarmed = false, m_stableAmbiguity = false, m_fullLite = false, m_authoredWarmup = false, m_forceAutomatic = false;
+    bool m_cachePath = false, m_candidateWarmed = false, m_stableAmbiguity = false, m_fullLite = false, m_authoredWarmup = false, m_skipCacheCandidates = false;
     QString m_identityPacksFile;
     bool m_finalCheck = false;
     bool m_upgradeCacheProof = false;
     QJsonObject m_runtimeBinding;
+    QJsonObject m_environment, m_authoredIdentity, m_authoredPack;
+    QStringList m_authoredCandidates;
+    QString m_validationPack;
+    int m_authoredCandidateIndex = 0;
+    bool m_metadataFastPath = false, m_fallbackShown = false, m_referenceAuthoredTried = false;
     QString m_family, m_minecraftVersion, m_mappingIdentity, m_metadataIdentity, m_transport;
     QHash<QString, QString> m_transports; // pid + processStart; never reused for a recycled PID.
 

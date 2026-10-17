@@ -45,6 +45,7 @@
 - ProcessScanner 提供 model roles 与 selectedPid/refreshing/scanProgress、refresh/selectProcess。
 - AppSettings 为 darkTheme、window size、navigation width、auto refresh 等持久化入口。
 - 测试观察根 `activeRoute` 与 objectName：navigation_<route>、scanRefreshButton、attachDialog、aboutBuildLabel。提取组件不应改变这些对象的可发现性。
+- 内部版本由 `P/src/BuildInfo.h` 集中定义，About、导航和 MappingProgressWindow 通过 `MappingService.internalVersion` 常量属性显示；Mapping JSONL 使用同源的完整 build 标识。
 - popup 动画中断后必须释放 modal 输入；保留视觉 parent、z、focus 和 open/close 语义。
 - 新 QML 文件无法隐式看到 main.qml 的 id；显式 props/signal 或临时 host 契约见 [拆分方案](../REFACTOR_PLAN.md)。
 
@@ -62,7 +63,8 @@ Mapping Console (v55.5): `P/qml/MappingConsole.qml` consumes the controller Mapp
 
 
 Mapping progress v55.8 stage 1: `MappingProgressWindow.qml` is a separate nonmodal
-ApplicationWindow, automatically opened by OverlayManager.mappingAttachRequested.
+ApplicationWindow, historically opened by OverlayManager.mappingAttachRequested;
+the current conditional routing is described below.
 `MappingProgressController` owns typed event consumption and `MappingProgressModel`
 owns symbol rows; three filter models expose active/completed/pending. Successful
 rows dwell for 750 ms before migration, independent of window visibility. QML only
@@ -71,6 +73,14 @@ Historical v55.8 Stop disabled presentation retry scheduling and never called Ma
 OverlayManager.detach. The existing mandatory preflight is not a cancellable
 optional matcher. Structured service integration is now in MappingServiceProgress.cpp; only final verified receipts complete rows. Settings also provides a reopen button.
 Tests: MappingProgressTests and ControllerUiSmoke phases 32–39.
+
+Current routing: `OverlayManager.mappingAttachRequested(pid, transactionId)` resets
+the presentation silently and pins its owner before asynchronous service events.
+Only transaction-scoped `mapping-fallback` (`mode=automatic|diagnostic`) opens the
+existing progress window automatically, once per owner. Verified cache/authored
+paths stay hidden; retries never reopen a user-hidden window. Manual open remains
+available through the existing console/settings shortcuts. A diagnostic does not
+enable automatic matching. Window close still has no cancel/detach ownership edge.
 
 
 v55.9: Stop/Resume route to the real MappingService watch lifecycle through

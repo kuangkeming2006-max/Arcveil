@@ -15,6 +15,8 @@
 #include <QThread>
 #include <QUuid>
 #include <windows.h>
+#include <set>
+#include <tuple>
 namespace mcoverlay::mapping {
 Json readSnapshotFile(const std::filesystem::path &path) {
     std::ifstream file(path, std::ios::binary);
@@ -96,6 +98,100 @@ Json processRun(const QString &program, const QStringList &arguments, int timeou
         {"program", program.toUtf8().toStdString()}};
 }
 } // namespace
+Json captureRequestStats(const Json &request) {
+    Json::Object sections;
+    for (const auto &[key, value] : request.object()) sections[key] = double(value.dump().size());
+    std::set<std::string> warmed;
+    if (request.contains("warmup")) for (const auto &group : request.at("warmup").array())
+        for (const auto &name : group.at("classes").array()) warmed.insert(group.at("anchor").string()+":"+name.string());
+    auto count = [&](const char *key) { return request.contains(key) ? double(request.at(key).array().size()) : 0.; };
+    return Json::Object{{"captureTier",request.at("captureTier")}, {"requestBytes",double(request.dump().size())},
+        {"configuredRequestBytes",double(probeRequestBytes)}, {"requestedClassCount",count("liteClasses")},
+        {"runtimeAnchorCount",count("runtimeAnchors")}, {"classHintCount",count("classHints")},
+        {"warmupClassCount",double(warmed.size())}, {"sections",sections},
+        {"identityCatalogUsed",false}, {"scope",request.contains("liteClasses") ? "selected" : "structural-inventory"}};
+}
+Json planCaptureRequest(const std::map<QString, QString> &options, const Json &contracts,
+                        const std::string &requestId) {
+    auto option = [&](const QString &name, const QString &fallback = QString{}) {
+        auto it=options.find(name); return it==options.end()?fallback:it->second;
+    };
+    const auto tier=option("--capture-tier",options.contains("--detect-only")?"detection":"structural").toStdString();
+    if (tier!="detection" && tier!="vanilla-validation" && tier!="modded-validation" && tier!="structural")
+        throw std::runtime_error("unsupported capture tier: "+tier);
+    const bool detection=tier=="detection", validation=tier=="vanilla-validation" || tier=="modded-validation";
+    if (detection && options.contains("--binding-check")) throw std::runtime_error("detection cannot request installed-code proof");
+    if (tier=="vanilla-validation" && options.contains("--binding-check")) throw std::runtime_error("Vanilla validation is metadata-only");
+    Json request=Json::Object{{"requestId",requestId},{"captureTier",tier},
+        {"mode",(detection || validation || options.contains("--lite"))?"lite":"full"}};
+    if (options.contains("--binding-check")) request["bindingCheck"]=true;
+    if (options.contains("--candidates")) {
+        if (tier!="structural") throw std::runtime_error("detail candidates require structural capture tier");
+        request["selectionPath"]=QFileInfo(option("--candidates")).absoluteFilePath().toUtf8().toStdString();
+    }
+    if (options.contains("--runtime-anchor")) request["runtimeAnchor"]=option("--runtime-anchor").toStdString();
+    if (options.contains("--runtime-loader-type") || options.contains("--runtime-loader-instance")) {
+        bool valid=false; const auto instance=option("--runtime-loader-instance").toULongLong(&valid);
+        if (!valid || instance>0xffffffffULL || option("--runtime-loader-type").isEmpty())
+            throw std::runtime_error("invalid runtime loader receipt");
+        request["runtimeLoader"]=Json::Object{{"type",option("--runtime-loader-type").toStdString()},{"instance",double(instance)}};
+    }
+    // These are supported installed API anchors, not version evidence. Detection never
+    // reads old Cache packs or expands their game API symbols/launch patterns.
+    std::set<std::string> anchors, names;
+    // The standalone two-stage command omits --pack on its selected detail pass.
+    // Observe evidence only if an audited anchor is already in that exact scope;
+    // this does not add a detail candidate or warm any extra game class.
+    if (detection || (tier=="structural" && !options.contains("--pack") && !options.contains("--runtime-anchor")))
+        anchors={"Lnet/minecraft/client/main/Main;","Lnet/minecraft/client/Minecraft;","Lave;","Lenn;"};
+    std::map<std::string,std::set<std::string>> warmups;
+    Json::Array hints, detectionHints;
+    for (const auto &[family,prefix,confidence] : std::vector<std::tuple<std::string,std::string,int>>{
+        {"Forge","Lnet/minecraftforge/",200},{"Forge","Lcpw/mods/fml/",180},
+        {"Lunar","Lcom/lunarclient/",250},{"Lunar","Lcom/moonsworth/",250},
+        {"Badlion","Lnet/badlion/",250},{"Badlion","Lcom/badlion/",250}})
+        hints.push_back(Json::Object{{"family",family},{"value",prefix},{"prefix",true},{"confidence",confidence}});
+    for (const auto &[family,value,confidence] : std::vector<std::tuple<std::string,std::string,int>>{
+        {"Forge","forge",190},{"Forge","launchwrapper",90},
+        {"Lunar",".lunarclient",260},{"Lunar","lunar",240},{"Badlion","badlion",250}})
+        detectionHints.push_back(Json::Object{{"family",family},{"value",value},{"confidence",confidence}});
+    if (!detection && options.contains("--pack")) {
+        const auto pack=Json::read(filePath(option("--pack")));
+        (void)bindings::parseMappingPack(pack);
+        const auto &activeContracts=contractsForPack(pack,contracts);
+        for (const auto &provider:pack.at("providers").array()) for (const auto &dict:provider.at("dictionaries").array()) {
+            const auto anchor=dict.at("symbols").at("minecraftSignature").string();
+            if (anchor.empty()) continue;
+            anchors.insert(anchor);
+            Json::Array selected;
+            if (validation || options.contains("--required-only")) selected=requiredClassNames(activeContracts,dict.at("symbols")).array();
+            else for (const auto &[key,spec]:activeContracts.at("symbols").object())
+                if (spec.at("kind").string()=="class" && !dict.at("symbols").at(key).string().empty())
+                    selected.push_back(dict.at("symbols").at(key));
+            for (const auto &name:selected) if (!name.string().empty()) {
+                names.insert(name.string()); warmups[anchor].insert(name.string());
+            }
+        }
+    } else if (validation) throw std::runtime_error("validation capture requires exactly scoped --pack");
+    if (request.contains("runtimeAnchor")) anchors.insert(request.at("runtimeAnchor").string());
+    Json::Array runtimeAnchors, liteClasses, warmup;
+    for (const auto &anchor:anchors) {
+        runtimeAnchors.push_back(anchor);
+        if (anchor.size()>2 && anchor.front()=='L' && anchor.back()==';') {
+            auto binary=anchor.substr(1,anchor.size()-2); std::replace(binary.begin(),binary.end(),'/','.');
+            if (detection) names.insert(binary);
+        }
+    }
+    for (const auto &name:names) liteClasses.push_back(name);
+    for (const auto &[anchor,classes]:warmups) {
+        Json::Array values; for (const auto &name:classes) values.push_back(name);
+        warmup.push_back(Json::Object{{"anchor",anchor},{"classes",values}});
+    }
+    request["runtimeAnchors"]=runtimeAnchors; request["classHints"]=hints; request["detection"]=detectionHints;
+    if (detection || validation || options.contains("--identity-lite")) request["liteClasses"]=liteClasses;
+    if (!detection && !options.contains("--detect-only") && !warmup.empty()) request["warmup"]=warmup;
+    return request;
+}
 Json captureLive(const std::map<QString, QString> &options, const Json &contracts,
                  const Events &events) {
     auto option = [&](const QString &name, const QString &fallback = QString{}) {
@@ -109,67 +205,11 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v13.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v16.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    Json request = Json::Object{{"requestId", requestId},
-                                {"mode", options.contains("--lite") ? "lite" : "full"}};
-    if (options.contains("--binding-check")) request["bindingCheck"] = true;
-    if (options.contains("--candidates"))
-        request["selectionPath"] =
-            QFileInfo(option("--candidates")).absoluteFilePath().toUtf8().toStdString();
-    if (options.contains("--pack")) {
-        const auto authored = Json::read(filePath(option("--pack")));
-        (void)bindings::parseMappingPack(authored);
-        Json::Array warmup, detection;
-        for (const auto &p : authored.at("providers").array())
-            for (const auto &d : p.at("dictionaries").array()) {
-                Json::Array names;
-                for (const auto &[key, spec] : contracts.at("symbols").object())
-                    if (spec.at("kind").string() == "class" &&
-                        !d.at("symbols").at(key).string().empty())
-                        names.push_back(d.at("symbols").at(key));
-                if (options.contains("--required-only")) names = requiredClassNames(contracts, d.at("symbols")).array();
-                warmup.push_back(Json::Object{{"anchor", d.at("symbols").at("minecraftSignature")},
-                                              {"classes", names}});
-                for (const auto &pattern : d.at("detection").array())
-                    if (pattern.at("match").integer() == 2)
-                        detection.push_back(Json::Object{{"family", d.at("family")},
-                                                         {"value", pattern.at("value")},
-                                                         {"confidence", pattern.at("confidence")}});
-            }
-        if (!options.contains("--detect-only")) request["warmup"] = warmup;
-        detection.push_back(Json::Object{{"family", "Badlion"}, {"value", "badlion"}, {"confidence", 250}});
-        request["detection"] = detection;
-    }
-    if (options.contains("--identity-lite")) {
-        Json::Array names, classHints;
-        auto packs = Json::Array{option("--pack").toUtf8().toStdString()};
-        if (options.contains("--identity-packs")) {
-            const auto known = Json::read(filePath(option("--identity-packs")));
-            for (const auto &path : known.at("packs").array()) packs.push_back(path);
-        }
-        for (const auto &path : packs) {
-            const auto pack = Json::read(filePath(QString::fromStdString(path.string())));
-            (void)bindings::parseMappingPack(pack);
-            for (const auto &provider : pack.at("providers").array())
-                for (const auto &dict : provider.at("dictionaries").array()) {
-                    if (options.contains("--required-only")) {
-                        const auto required = requiredClassNames(contracts, dict.at("symbols"));
-                        for (const auto &name : required.array()) names.push_back(name);
-                    } else for (const auto &[key, spec] : contracts.at("symbols").object())
-                        if (spec.at("kind").string() == "class" && !dict.at("symbols").at(key).string().empty())
-                            names.push_back(dict.at("symbols").at(key));
-                    for (const auto &hint : dict.at("detection").array()) if (hint.at("match").integer() <= 1)
-                        classHints.push_back(Json::Object{{"family",dict.at("family")}, {"value",hint.at("value")},
-                            {"prefix",hint.at("match").integer()==1}, {"confidence",hint.at("confidence")}});
-                }
-        }
-        classHints.push_back(Json::Object{{"family","Badlion"}, {"value","Lnet/badlion/"}, {"prefix",true}, {"confidence",250}});
-        classHints.push_back(Json::Object{{"family","Badlion"}, {"value","Lcom/badlion/"}, {"prefix",true}, {"confidence",250}});
-        request["liteClasses"] = names; request["classHints"] = classHints;
-    }
+    Json request = planCaptureRequest(options, contracts, requestId);
     Json paths =
         Json::Object{{"event", "CAPTURE_PATH"},
                      {"standardAttach", Json::Object{{"status", "pending"},
@@ -184,6 +224,8 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
         const auto errorPath = std::filesystem::path(rawPath + L".error");
         request["output"] = qtPath(rawPath).toUtf8().toStdString();
         const auto requestBytes = QByteArray::fromStdString(request.dump());
+        auto requestStats=captureRequestStats(request); requestStats["event"]="CAPTURE_REQUEST";
+        requestStats["transport"]=attempt ? "NativeLoader" : "StandardAttach"; events(requestStats);
         if (std::size_t(requestBytes.size()) > probeRequestBytes)
             throw SnapshotLimit("file", "probe-request-json", requestBytes.size(),
                                 probeRequestBytes);
