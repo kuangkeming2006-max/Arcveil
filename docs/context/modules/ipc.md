@@ -42,6 +42,7 @@ DETACH 触发已有有序清理，成功后 DETACH_COMPLETE；断管道会隐藏
 | Agent → Controller | GUI_TYPOGRAPHY_CHANGED `<size> <weight>` | packed atomic + revision → telemetryMain → processAgentLine → QSettings |
 | Agent → Controller | GUI_ELEMENT_SCALE_CHANGED `<percent>` | atomic + revision → telemetryMain → processAgentLine → QSettings / 配置档案 |
 | Agent → Controller | GAME_STATE | queueTelemetry → formatGameState/telemetryMain → processAgentLine |
+| Agent → Controller | SCAFFOLD_CONFIG_APPLIED、SMART_HOTBAR_APPLIED、GAMEPLAY_DIAGNOSTIC | accepted control configuration / bounded frame mailbox → telemetryMain → authenticated processAgentLine → diagnostic log / agentGameplayDiagnostic signal |
 | Agent → Controller | PLAYER_FOUND、PLAYER_STATUS、MATCH_STATE、HYPIXEL_QUERY | mailbox/queueHypixelQuery → telemetryMain → processAgentLine → controller signals |
 | Agent → Controller | MEDIA_ACTION、MEDIA_SETTINGS_CHANGED | queueMediaAction/queueMediaSettingsChanged → telemetryMain → processAgentLine |
 | Agent → Controller | BLACKLIST_ADD、REMOVE、WARNING、LAYOUT、SETTINGS_CHANGED（均带 BLACKLIST_ 前缀） | queueBlacklistAction → telemetryMain → processAgentLine → BlacklistService slots |
@@ -81,5 +82,51 @@ checks current transaction/PID/start, and requires both binding and renderer rea
 before Active. HELLO alone no longer stops the attach timeout. Legacy Agents lacking
 this receipt cannot silently activate through the current Controller.
 普通 UI/renderer 改动读本页即可；消息变更才读取两端对应分支和服务编码入口，不需要加载整个 runtime/controller 大文件。
+
+## v56.9.3 gameplay diagnostic receipts
+
+These are optional additions to protocol 1. Older Agents may omit them. A
+configuration receipt never updates Controller settings, authorizes Active, or
+claims a mapped action succeeded. Controller accepts them only after HELLO and
+for the current transaction owner, validates at most 1,024 bytes with exact
+field counts, and publishes `agentGameplayDiagnostic(QJsonObject)` plus the
+`AGENT_GAMEPLAY_DIAGNOSTIC` log record containing transaction/PID identity.
+Runtime uint64 counters are JSON decimal strings to preserve exact values.
+The authenticated Controller also calls `MappingService::recordGameplayDiagnostic`;
+the matching live transaction persists the nested receipt as
+`AGENT_GAMEPLAY_DIAGNOSTIC` in its existing `events.jsonl` (no debug-console setup
+required). Stale/foreign-process/oversized receipts cannot be appended.
+
+`SCAFFOLD_CONFIG_APPLIED <enabled> <same-layer>` and
+`SMART_HOTBAR_APPLIED <packed>` confirm validated config receipt only.
+Identical values are deduplicated within one pipe session, so unrelated feature
+layout updates do not repeat Scaffold/Hotbar diagnostics. Reconnection resets
+the receipt deduplication.
+`GAMEPLAY_DIAGNOSTIC 1 <seq> <tick-ms> <configured-flags> <input-flags>
+<binding-mask> <missing-bindings> <hook-mask> <update-calls> <hotbar-callbacks> <hotbar-actions>
+<scaffold-attempts> <scaffold-accepted> <last-block-reason>` reports independent
+observations. Config flags are 1 Scaffold intent before server guard, 2 same
+layer, 4 SmartHotbar. Input flags are 1 JNIEnv present, 2 overlay interactive,
+4 game screen, 8 foreground, 16 input gate open, 32 Hypixel guard applicable.
+The guard flag is not an override or a new condition.
+
+Binding-mask bits 1/2 represent the existing Scaffold/Hotbar optional JNI
+predicates; 4 means those predicates have actually been observed and 8 means
+core bindings are published. Without bit 4, zero optional bits are not evidence
+of missing members. Hook-mask bits 1/2/4 represent consumed-key, item-use and
+movement-packet hooks. Callback/action/placement counters describe observations
+at those actual code points, not UI switches. `hotbarCallbacks` counts the
+consumed-key callback only; an installed item-use hook bit does not claim that
+an item-use/refill callback occurred. `GameplayBlockReason` in
+`GameBindings.h` defines the final reason token; it describes the latest observed
+guard, not a replacement for per-feature execution counters.
+
+`missing-bindings` is a bounded group mask, computed only after core binding and
+the existing Legacy optional predicates have actually been observed
+(`binding-mask & 12 == 12`). Bits are 1 Input/Safewalk, 2 Movement, 4 Inventory,
+8 Items, 16 Placement, 32 HotbarKeys, 64 ItemSword class, 128 WindowClick.
+It reads immutable cache IDs without new JNI calls. Zero before observation
+does not prove completeness; a missing group may include IDs left null by an
+earlier short circuit and is not an exact failed-symbol diagnosis.
 
 2026-09-26 导航更新：控制器接收/快照在 OverlayManagerProtocol.cpp，服务消息在 Services.cpp，读写在 Transport.cpp，公共 token helper 在 Codec.internal.cpp；Agent 接收在 AgentRuntimeControl.cpp，发送在 Telemetry.cpp，feature 编码在 Features.cpp。消息格式与字段顺序未改，生命周期 smoke 和控制器响应性测试已运行通过。

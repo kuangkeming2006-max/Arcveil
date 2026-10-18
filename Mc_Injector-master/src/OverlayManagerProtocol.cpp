@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QLocalSocket>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -73,7 +74,57 @@ void OverlayManager::processAgentLine(const QByteArray &line)
     if (!m_authenticated)
         return;
 
-    if (type == QByteArrayLiteral("HOOK_READY")) {
+    if (type == QByteArrayLiteral("SCAFFOLD_CONFIG_APPLIED") ||
+        type == QByteArrayLiteral("SMART_HOTBAR_APPLIED") ||
+        type == QByteArrayLiteral("GAMEPLAY_DIAGNOSTIC")) {
+        // New optional v1 diagnostics do not change the legacy settings codec,
+        // nor can a configuration or hook receipt authorize an Active session.
+        if (line.size() > 1024 || !m_transaction || !m_transaction->valid ||
+            m_agentTransactionId != transactionId()) return;
+        QJsonObject diagnostic;
+        if (type == QByteArrayLiteral("SCAFFOLD_CONFIG_APPLIED")) {
+            if (fields.size() != 3 || (fields[1] != "0" && fields[1] != "1") ||
+                (fields[2] != "0" && fields[2] != "1")) return;
+            diagnostic = {{"kind", "config"}, {"feature", "scaffold"},
+                {"enabled", fields[1] == "1"}, {"sameLayerOnly", fields[2] == "1"}};
+        } else if (type == QByteArrayLiteral("SMART_HOTBAR_APPLIED")) {
+            if (fields.size() != 2) return;
+            bool ok = false;
+            const auto value = fields[1].toUInt(&ok);
+            if (!ok || !validSmartHotbarConfig(value)) return;
+            diagnostic = {{"kind", "config"}, {"feature", "smart-hotbar"},
+                {"packed", qint64(value)}};
+        } else {
+            if (fields.size() != 15 || fields[1] != "1") return;
+            std::array<quint64, 13> values{};
+            for (int i = 0; i < 13; ++i) {
+                bool ok = false;
+                if (fields[i + 2].isEmpty() || fields[i + 2].size() > 20) return;
+                if (!std::all_of(fields[i + 2].begin(), fields[i + 2].end(),
+                    [](char c) { return c >= '0' && c <= '9'; })) return;
+                values[i] = fields[i + 2].toULongLong(&ok);
+                if (!ok) return;
+            }
+            if (values[0] == 0 || values[2] > 7 || values[3] > 63 ||
+                values[4] > 0xffffffffULL || values[5] > 255 ||
+                values[6] > 0xffffffffULL || values[12] > 255) return;
+            // Counters are decimal strings so JSON never rounds a uint64 value.
+            diagnostic = {{"kind", "runtime"}, {"version", 1},
+                {"sequence", QString::number(values[0])}, {"tickMs", QString::number(values[1])},
+                {"configuredFlags", qint64(values[2])}, {"inputFlags", qint64(values[3])},
+                {"bindingMask", qint64(values[4])}, {"missingBindings", int(values[5])},
+                {"hookMask", qint64(values[6])}, {"updateCalls", QString::number(values[7])},
+                {"hotbarCallbacks", QString::number(values[8])}, {"hotbarActions", QString::number(values[9])},
+                {"scaffoldAttempts", QString::number(values[10])}, {"scaffoldAccepted", QString::number(values[11])},
+                {"lastBlockReason", int(values[12])}};
+        }
+        diagnostic["transactionId"] = m_agentTransactionId;
+        diagnostic["pid"] = qint64(m_targetPid);
+        qInfo().noquote() << "AGENT_GAMEPLAY_DIAGNOSTIC"
+                         << QString::fromUtf8(QJsonDocument(diagnostic).toJson(QJsonDocument::Compact));
+        m_mappingService.recordGameplayDiagnostic(diagnostic);
+        emit agentGameplayDiagnostic(diagnostic);
+    } else if (type == QByteArrayLiteral("HOOK_READY")) {
         setRenderer(QString::fromUtf8(fields.value(1)));
         setStatusMessage(QStringLiteral("OpenGL presentation hook installed; waiting for a render context..."));
     } else if (type == QByteArrayLiteral("BINDING_READY")) {

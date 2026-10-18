@@ -120,7 +120,8 @@ add_library(mc_agent_imgui STATIC
     "${MC_AGENT_IMGUI_SOURCE_DIR}/imgui_tables.cpp"
     "${MC_AGENT_IMGUI_SOURCE_DIR}/imgui_widgets.cpp"
     "${MC_AGENT_IMGUI_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
-    "${MC_AGENT_IMGUI_SOURCE_DIR}/backends/imgui_impl_opengl2.cpp")
+    "${MC_AGENT_IMGUI_SOURCE_DIR}/backends/imgui_impl_opengl2.cpp"
+    "${MC_AGENT_IMGUI_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp")
 add_library(mc_agent::imgui ALIAS mc_agent_imgui)
 target_include_directories(mc_agent_imgui PUBLIC
     "${MC_AGENT_IMGUI_SOURCE_DIR}"
@@ -147,6 +148,7 @@ add_library(McOverlayAgent SHARED
     bindings/BedWarsState.h
     bindings/GameBindings.cpp
     bindings/GameBindingsResolve.cpp
+    bindings/GameBindingsModern.cpp
     bindings/GameBindingsSnapshot.cpp
     bindings/GameBindingsInput.cpp
     bindings/GameBindingsGameplay.cpp
@@ -307,8 +309,21 @@ add_custom_target(mc_mapping_packs ALL
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/../mapping/packs/default-v2.json"
         "${CMAKE_BINARY_DIR}/mappings/default-v2.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/../mapping/packs/vanilla-1.20.1.json"
+        "${CMAKE_BINARY_DIR}/mappings/vanilla-1.20.1.json"
     VERBATIM)
 add_dependencies(McOverlayAgent mc_mapping_packs)
+get_target_property(mc_modern_binding_sources McOverlayAgent SOURCES)
+list(FILTER mc_modern_binding_sources INCLUDE REGEX "bindings/(GameBindings.*\\.cpp|MappingProvider\\.cpp|MappingPack\\.cpp|BedWarsState\\.cpp)$")
+add_executable(McOverlayModernJvmTests EXCLUDE_FROM_ALL
+    bindings/ModernJvmTests.cpp ${mc_modern_binding_sources} src/AgentLog.cpp)
+target_compile_features(McOverlayModernJvmTests PRIVATE cxx_std_20)
+target_include_directories(McOverlayModernJvmTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+target_compile_definitions(McOverlayModernJvmTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+target_link_libraries(McOverlayModernJvmTests PRIVATE advapi32 user32)
+set_target_properties(McOverlayModernJvmTests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 add_dependencies(McOverlayMappingProviderTests mc_mapping_packs)
 add_executable(McOverlayMappingPackTests EXCLUDE_FROM_ALL
     bindings/MappingProvider.cpp bindings/MappingPack.cpp ../tests/mapping/MappingPackTests.cpp)
@@ -324,3 +339,12 @@ endif()
 
 target_link_libraries(McOverlayMappingProviderTests PRIVATE advapi32)
 target_link_libraries(McOverlayMappingPackTests PRIVATE advapi32)
+
+add_executable(McOverlayGameApiTests EXCLUDE_FROM_ALL bindings/GameApiTests.cpp)
+target_compile_features(McOverlayGameApiTests PRIVATE cxx_std_20)
+target_include_directories(McOverlayGameApiTests PRIVATE
+    "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+set_target_properties(McOverlayGameApiTests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+if(MINGW)
+    target_link_options(McOverlayGameApiTests PRIVATE -static -static-libgcc -static-libstdc++)
+endif()

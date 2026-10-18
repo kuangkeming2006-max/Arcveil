@@ -141,3 +141,15 @@ v56.2 本机微软拼音 native EDIT、raw、WGL unified/split 与 stalled rende
 系统候选窗口可以在测试 HWND 截图范围外；旧 element 在 Show(TRUE) 后可能结束。
 `priorElementShown` 仅表示旧接口状态，不能据此否定用户看到的候选窗口；
 `stalledRendererNativeRestoreRequested` 验证恢复请求 HRESULT，未自动验证完整系统 UI。
+
+## v56.9 OpenGL core context
+
+`overlay_renderer_backend.cpp::initialize` chooses ImGui OpenGL2 for compatibility
+contexts or OpenGL3/GLSL150 for actual >=3.2 core contexts. This is context-driven,
+independent of game version/client family. NewFrame/draw/shutdown use the same
+backend. Fixed-function blur is unavailable in core contexts; world camera
+projection still requires game-bindings WorldProjection capability, unavailable
+on the modern Adapter. WGL hook and controller D3D11 remain unchanged.
+CoreProfileRendererTests runs real WGL core rendering; OpenGlJvmSmoke optionally
+uses `-CoreProfile -FixturePath -MappingPack` for a private modern JVM. Neither
+test is real Minecraft render-pipeline verification.

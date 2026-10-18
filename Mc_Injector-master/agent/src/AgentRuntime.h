@@ -52,6 +52,9 @@ private:
     void joinTelemetry() noexcept;
     void queueTelemetry(const class GameSnapshot& snapshot,
                         std::uint64_t tickMilliseconds) noexcept;
+    void queueGameplayDiagnostics(std::uint32_t configuredFlags,
+                                  std::uint32_t inputFlags,
+                                  std::uint64_t tickMilliseconds) noexcept;
     void queueStateChanged(bool visible, bool interactive) noexcept;
     void queueFeatureChanged(const FeatureSettings& settings) noexcept;
     void queueHypixelQuery(const std::array<char, 17U>& playerId) noexcept;
@@ -140,6 +143,10 @@ private:
     // local-hostile aura, local incoming-velocity scaling.
     std::atomic<std::uint32_t> m_featureExtraBits{0x43U};
     std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
+    // Diagnostic receipt deduplication is owned by the control-pipe thread.
+    std::uint8_t m_scaffoldReceiptFlags = 0xffU;
+    std::uint32_t m_hotbarReceiptConfig = 0U;
+    bool m_hotbarReceiptSent = false;
     std::atomic<unsigned> m_aimOptions{412810U};
     std::atomic<unsigned> m_featureChangedAimOptions{412810U};
     std::atomic<int> m_textGuiAlignment{2};
@@ -201,9 +208,16 @@ private:
         std::uint64_t playerRosterGeneration = 0U;
         std::array<char, 17U> localPlayerName{};
         bool matchActive = false;
+        struct GameplayMessage final {
+            std::uint64_t sequence = 0, tickMilliseconds = 0;
+            std::uint32_t configuredFlags = 0, inputFlags = 0;
+            GameplayDiagnostics bindings{};
+        } gameplay{};
     };
     SRWLOCK m_telemetryLock = SRWLOCK_INIT;
     TelemetryMailbox m_telemetryMailbox{};
+    TelemetryMailbox::GameplayMessage m_lastGameplayDiagnostic{}; // render-thread owned
+    std::uint64_t m_lastGameplayDiagnosticSampleTick = 0; // render-thread owned
     std::atomic<std::uint32_t> m_stateChangedRevision{0U};
     std::atomic<std::uint8_t> m_stateChangedBits{0U};
     std::atomic<std::uint32_t> m_featureChangedRevision{0U};

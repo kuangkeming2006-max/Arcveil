@@ -375,7 +375,7 @@ public slots:
     void publishMediaSpectrum(const QByteArray &bands);
 
 signals:
-    void mappingAttachRequested(quint32 pid);
+    void mappingAttachRequested(quint32 pid, const QString &transactionId);
     void stateChanged();
     void attachedChanged();
     void busyChanged();
@@ -407,6 +407,8 @@ signals:
     void mediaNextRequested();
     void mediaToggleRequested();
     void agentSessionReady();
+    // Authenticated, bounded diagnostics; never configuration or Ready authority.
+    void agentGameplayDiagnostic(const QJsonObject &diagnostic);
     void targetChanged();
     void rendererChanged();
     void statusMessageChanged();

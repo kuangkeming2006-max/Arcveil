@@ -17,6 +17,9 @@ struct AttachTransaction {
     quint64 generation = 0;
     QElapsedTimer elapsed, loaderElapsed, agentElapsed;
     QJsonObject stageMs;
+    // Final, current-process evidence; cache/provider metadata never supplies
+    // runtime identity. Owned by this transaction and published before loading.
+    QJsonObject verifiedRuntimeContext;
     int analyzerProcesses = 0, helperProcesses = 0, detailCaptureCalls = 0, autoResolveCalls = 0;
     qint64 jvmtiCalls = 0, capturedBytes = 0, bytecodeBytes = 0, constantPoolBytes = 0;
     bool cacheHit = false;

@@ -34,22 +34,40 @@ int main(int argc, char **argv) {
     const auto mode = qEnvironmentVariable("ARCVEIL_DYNAMIC_FIXTURE_MODE");
     const auto command = args[1];
     const QJsonObject identity{{"family", "Lunar"}, {"minecraftVersion", "1.8.9"},
+        {"versionVerified", true}, {"selectedPack", get("--pack")}, {"mappingNamespace", "Custom"},
+        {"runtimeBinding", QJsonObject{{"anchor", "fixture.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}, {"loaderKey", "fixture-loader"}}},
+        {"detectionReason", "explicit Mock dynamic identity fixture"},
         {"mappingIdentity", "fixture-target-identity"}, {"metadataIdentity", "fixture-target-metadata"}};
     if (command == "identify") { writeObject(get("--out"), identity); return 0; }
+    if(command=="validate-authored") {
+        const auto scoped=readObject(get("--pack"));
+        int dictionaries=0; QString firstSource;
+        for(const auto &item:scoped.value("providers").toArray()) {
+            const auto values=item.toObject().value("dictionaries").toArray(); dictionaries+=values.size();
+            if(!values.isEmpty()) firstSource=values.first().toObject().value("symbols").toObject().value("symbol000").toString();
+        }
+        log(QString("authored source=%1 dictionaries=%2").arg(firstSource).arg(dictionaries));
+        log("authored-pack "+get("--pack"));
+        writeObject(get("--out"),{{"valid",false},{"injectionReady",false},{"validationMode","authored-metadata"},
+            {"reason","Mock modified API requires structural fallback"}}); return 3;
+    }
     if (command == "inspect") {
         if (mode == "capture-fatal") {
             emitEvent({{"event", "failure"}, {"reason", "fixture capture unavailable"}});
             return 1;
         }
-        const bool bootstrapWarmup = !args.contains("--detect-only") && state.value("lite").toInt() > 0;
-        const int index = state.value("lite").toInt() + (bootstrapWarmup ? 0 : 1);
-        state["lite"] = index;
+        // Environment/authored captures do not advance the simulated structural
+        // runtime. Only the resolver's inventory watch drives A -> A -> U -> C -> D.
+        const bool structural=get("--capture-tier")=="structural";
+        const int index=state.value("structuralLite").toInt()+(structural?1:0);
+        if(structural) state["structuralLite"]=index;
         QString phase = index <= 2 ? "A" : index == 3 ? "U" : index == 4 ? "C" : "D";
+        if (mode.startsWith("stable-")) phase = "A";
         if (state.value("forceE").toBool())
             phase = "E";
         writeObject(stateFile, state);
         writeObject(get("--out"), {{"phase", phase}});
-        log("lite " + phase);
+        log((structural?QString("lite "):get("--capture-tier")+" ")+phase);
         const auto pid = get("--pid").toUInt();
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         FILETIME c{}, e{}, k{}, u{};
@@ -71,11 +89,23 @@ int main(int argc, char **argv) {
                      {"relevantFingerprint", "relevant-" + (phase == "U" ? "A" : phase)},
                      {"classes", QJsonArray{QJsonObject{{"name", "Fixture"}}}}});
         log("select " + phase);
+        log(QString("select-evidence %1").arg(args.contains("--reuse-snapshot") ? "reused" : "fresh"));
         log("select-pack " + get("--pack"));
         return 0;
     }
     if (command == "inspect-detail") {
         auto phase = readObject(get("--candidates")).value("phase").toString();
+        if ((mode == "stable-resume" || mode == "stable-inflight" || mode == "stable-refresh-drift") && state.value("resumeEvidence").toBool() &&
+            !args.contains("--reuse-snapshot")) phase = "D";
+        if (mode == "stable-refresh-drift" && state.value("resumeEvidence").toBool() &&
+            !state.value("refreshDrifted").toBool()) {
+            state["refreshDrifted"] = true;
+            writeObject(stateFile, state);
+            emitEvent({{"event", "failure"}, {"retryable", true},
+                       {"failureType", "runtime-drift"}, {"reason", "fixture refresh drift"}});
+            log("detail refresh drift");
+            return 5;
+        }
         if (mode == "drift" && state.value("validated").toBool() &&
             !state.value("drifted").toBool()) {
             phase = "E";
@@ -95,6 +125,7 @@ int main(int argc, char **argv) {
         }
         writeObject(get("--out"), {{"phase", phase}});
         log("detail " + phase);
+        log(QString("detail-evidence %1").arg(args.contains("--reuse-snapshot") ? "reused" : "fresh"));
         const auto pid = get("--pid").toUInt();
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         FILETIME c{}, e{}, k{}, u{};
@@ -216,12 +247,16 @@ int main(int argc, char **argv) {
         pack["providers"] = QJsonArray{provider};
         pack["dynamicDraft"] = true;
         const bool complete = accepted.size() == 100;
+        QJsonObject reasons;
+        if (mode.startsWith("stable-"))
+            for (const auto &key : unresolved) reasons[key.toString()] = "stable-ambiguity";
         writeObject(get("--out"), {{"stateVersion", 1},
                                    {"requiredComplete", complete},
                                    {"complete", complete},
                                    {"fingerprint", "detail-" + phase},
                                    {"accepted", accepted},
                                    {"unresolved", unresolved},
+                                   {"unresolvedReasons", reasons},
                                    {"symbols", results},
                                    {"pack", pack}});
         return complete ? 0 : 4;

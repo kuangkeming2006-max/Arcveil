@@ -78,7 +78,7 @@ void GameBindings::sampleCamera(JNIEnv* const env) noexcept
     m_snapshot.camera.valid = false;
     if (env == nullptr ||
         m_resolutionPhase.load(std::memory_order_acquire) != ResolutionPhase::Resolved ||
-        m_cache == nullptr) {
+        m_cache == nullptr || !versionCapabilities().supports(bindings::VersionCapability::WorldProjection)) {
         return;
     }
     BindingCache* const cache = m_cache.get();
@@ -150,11 +150,10 @@ void GameBindings::sampleBow(JNIEnv* env, GameSnapshot& snapshot, bool enabled) 
        std::any_of(c->vectorFields.begin(),c->vectorFields.end(),[](jfieldID f){return !f;})) return;
     if(env->PushLocalFrame(24)<0) { clearException(env); return; }
     const auto done=[&] { clearException(env); env->PopLocalFrame(nullptr); };
-    jobject mc=c->minecraftInstanceField ? env->GetStaticObjectField(c->minecraftClass,c->minecraftInstanceField)
-        : env->CallStaticObjectMethod(c->minecraftClass,c->getMinecraft);
+    jobject mc=c->gameApi().minecraft(env);
     if(!mc || env->ExceptionCheck() || !env->CallBooleanMethod(mc,c->isMainThread)) { done(); return; }
-    jobject player=env->GetObjectField(mc,c->playerField);
-    jobject world=env->GetObjectField(mc,c->worldField);
+    jobject player=c->gameApi().player(env, mc);
+    jobject world=c->gameApi().world(env, mc);
     if(!player || !world || env->ExceptionCheck() || !env->CallBooleanMethod(player,c->isUsingItem)) { done(); return; }
     jobject stack=env->CallObjectMethod(player,c->getEquipmentInSlot,0);
     jobject item=stack && !env->ExceptionCheck() ? env->CallObjectMethod(stack,c->getItem) : nullptr;
@@ -238,6 +237,9 @@ void GameBindings::sampleBow(JNIEnv* env, GameSnapshot& snapshot, bool enabled) 
 const GameSnapshot& GameBindings::sample(JNIEnv* const env,
                                          const std::uint64_t tickMilliseconds) noexcept
 {
+    if (bindingsReady() && m_cache && m_cache->adapter &&
+        m_cache->adapter->shape==bindings::GameApiShape::Modern120)
+        return sampleModern(env,tickMilliseconds);
     // Minecraft simulation runs at 20 TPS. Sampling once per tick keeps the
     // JNI budget bounded while the renderer uses last/current positions plus
     // renderPartialTicks to produce frame-rate-smooth hitboxes.
@@ -270,9 +272,7 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
         return m_snapshot;
     };
 
-    jobject minecraft = cache->minecraftInstanceField != nullptr
-        ? env->GetStaticObjectField(cache->minecraftClass, cache->minecraftInstanceField)
-        : env->CallStaticObjectMethod(cache->minecraftClass, cache->getMinecraft);
+    jobject minecraft = cache->gameApi().minecraft(env);
     if (env->ExceptionCheck() == JNI_TRUE) {
         return failJni();
     }
@@ -322,11 +322,11 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
         }
     }
 
-    jobject player = env->GetObjectField(minecraft, cache->playerField);
+    jobject player = cache->gameApi().player(env, minecraft);
     if (env->ExceptionCheck() == JNI_TRUE) {
         return failJni();
     }
-    jobject world = env->GetObjectField(minecraft, cache->worldField);
+    jobject world = cache->gameApi().world(env, minecraft);
     if (env->ExceptionCheck() == JNI_TRUE) {
         return failJni();
     }
@@ -419,9 +419,7 @@ const GameSnapshot& GameBindings::sample(JNIEnv* const env,
     box.maxZ = env->GetDoubleField(bounds, cache->maxZ);
     if (env->ExceptionCheck() == JNI_TRUE) return failJni();
 
-    jobject loadedEntities = cache->loadedEntitiesField != nullptr
-        ? env->GetObjectField(world, cache->loadedEntitiesField)
-        : env->CallObjectMethod(world, cache->getLoadedEntities);
+    jobject loadedEntities = cache->gameApi().entities(env, world);
     if (env->ExceptionCheck() == JNI_TRUE) return failJni();
     const jint loadedEntityCount = loadedEntities == nullptr
         ? 0 : env->CallIntMethod(loadedEntities, cache->listSize);

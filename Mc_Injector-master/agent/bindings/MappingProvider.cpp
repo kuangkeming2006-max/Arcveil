@@ -245,6 +245,9 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
     if (!validIdentifier(id)) return reject("mapping id must be 1-64 ASCII identifier characters");
     if (label.empty() || label.size() > kMaxLabelLength) return reject("mapping label is empty or too long");
     if (family == ClientFamily::Unknown) return reject("mapping client family is unknown");
+    if (!minecraftVersion.known()) return reject("mapping Minecraft version is missing or invalid");
+    if (static_cast<unsigned>(mappingNamespace) > static_cast<unsigned>(MappingNamespace::Custom))
+        return reject("invalid mapping namespace");
     if (detection.size() > kMaxDetectionPatterns) return reject("too many mapping detection patterns");
     for (const DetectionPattern& pattern : detection) {
         if (pattern.value.empty() || pattern.value.size() > kMaxSymbolLength ||
@@ -254,6 +257,30 @@ bool MappingDictionary::validate(std::string* const error) const noexcept
         if (pattern.match != DetectionMatch::LaunchHintContains && pattern.value.front() != 'L') {
             return reject("class detection patterns must use JVM object signatures");
         }
+    }
+
+    if (minecraftVersion == MinecraftVersion{1,20,1}) {
+        // A separate contract prevents legacy arrays/fields from reaching modern JNI.
+        const auto pairs = std::to_array<std::pair<std::string_view,std::string_view>>({
+            {minecraftName,minecraftSignature},{playerName,playerSignature},{entityPlayerName,entityPlayerSignature},
+            {livingName,livingSignature},{entityName,entitySignature},{aabbName,aabbSignature},
+            {worldName,worldSignature},{worldClientName,worldClientSignature},
+            {chatComponentName,chatComponentSignature},{sharedConstantsName,sharedConstantsSignature},
+            {worldVersionName,worldVersionSignature},{mouseHandlerName,mouseHandlerSignature}});
+        for (const auto& [name,signature] : pairs)
+            if (!signatureMatchesBinaryName(name,signature)) return reject("modern class name/descriptor mismatch");
+        if (guiScreenSignature.size()<3 || guiScreenSignature.front()!='L' || guiScreenSignature.back()!=';')
+            return reject("modern screen descriptor missing/invalid");
+        bool valid=true;
+#define MC_MAPPING_STRING(name) {constexpr std::string_view key=#name; if (!key.ends_with("Signature") && !(key.ends_with("Name") && key!="getName" && key!="getVersionName") && !validMemberName(name)) valid=false;}
+#define MC_MAPPING_ARRAY(name,extent) for (const auto& member:name) if (!validMemberName(member)) valid=false;
+#include "ModernMappingSymbols.inc"
+#undef MC_MAPPING_STRING
+#undef MC_MAPPING_ARRAY
+        if (!valid) return reject("modern required member name missing/invalid");
+        if (family!=ClientFamily::Vanilla) return reject("modern client family has no validated mapping support");
+        assignError(error,{});
+        return true;
     }
 
     // Core classes define whether the client profile itself is usable.  BedWars
@@ -444,7 +471,11 @@ MappingRegistry::MappingRegistry(const std::filesystem::path& packFile, std::str
                 std::move(p.detection),std::move(p.dictionaries)))!=MappingRegistrationResult::Accepted)
                 throw std::runtime_error("mapping pack registration failed");
         }
-    } catch (...) {m_healthy=false;m_providers.clear();}
+    } catch (const std::exception& e) {
+        m_healthy=false;m_providers.clear();assignError(&m_loadError,e.what());
+    } catch (...) {
+        m_healthy=false;m_providers.clear();assignError(&m_loadError,"unknown mapping pack load failure");
+    }
 }
 
 MappingRegistry::~MappingRegistry() = default;
@@ -566,28 +597,14 @@ bool MappingRegistry::healthy() const noexcept
 void MappingRegistry::observeClassSignature(const std::string_view signature,
                                             ClientEnvironment& environment) const noexcept
 {
+    // An anchor requests member validation; it does not identify a client.
+    // The registered pack set can be incomplete or contain colliding names.
+    if (isMinecraftAnchor(signature)) return;
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        provider->observeClassSignature(signature, environment);
-    }
-
-    // An unambiguous anchor is weak evidence. If multiple client families use
-    // the same anchor, launch/class markers decide; with no markers the
-    // resolver safely tries all exact-anchor candidates once.
-    ClientFamily anchorFamily = ClientFamily::Unknown;
-    bool ambiguous = false;
-    for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        for (const MappingDictionary& dictionary : provider->dictionaries()) {
-            if (dictionary.minecraftSignature == signature) {
-                if (anchorFamily == ClientFamily::Unknown) {
-                    anchorFamily = provider->family();
-                } else if (anchorFamily != provider->family()) {
-                    ambiguous = true;
-                }
-            }
-        }
-    }
-    if (!ambiguous && anchorFamily != ClientFamily::Unknown) {
-        environment.addEvidence(anchorFamily, 50U);
+        // Vanilla identity needs independent runtime brand evidence. Class
+        // names, even an exclusive authored match, cannot prove it.
+        if (provider->family() != ClientFamily::Vanilla)
+            provider->observeClassSignature(signature, environment);
     }
 }
 
@@ -595,7 +612,8 @@ void MappingRegistry::observeLaunchHint(const std::string_view hint,
                                         ClientEnvironment& environment) const noexcept
 {
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        provider->observeLaunchHint(hint, environment);
+        if (provider->family() != ClientFamily::Vanilla)
+            provider->observeLaunchHint(hint, environment);
     }
 }
 
@@ -625,8 +643,14 @@ MappingCandidates MappingRegistry::candidatesForAnchor(
 {
     MappingCandidates result;
     const ClientFamily selectedFamily = environment.family();
+    // An authored Vanilla dictionary is a conservative API candidate when
+    // identity evidence is absent. Its members cannot establish Vanilla
+    // identity, and a higher-priority modified-client provider must never
+    // acquire identity merely because it shares the same runtime names.
+    const ClientFamily candidateFamily = selectedFamily == ClientFamily::Unknown
+        ? ClientFamily::Vanilla : selectedFamily;
     for (const std::unique_ptr<MappingProvider>& provider : m_providers) {
-        if (selectedFamily != ClientFamily::Unknown && provider->family() != selectedFamily) {
+        if (provider->family() != candidateFamily) {
             continue;
         }
         for (const MappingDictionary& dictionary : provider->dictionaries()) {

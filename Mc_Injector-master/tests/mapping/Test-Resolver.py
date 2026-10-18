@@ -46,7 +46,12 @@ for ci,(name,c) in enumerate(sorted(classes.items())):
         for f,ref in zip(c['fields'],refs):code+=bytes([0xb2 if f['modifiers']&8 else 0xb4])+struct.pack('>H',ref)+bytes([0x57])
         m['bytecode']=(code+bytes([0xb1])).hex()
     c['constantPool']=b''.join(entries).hex();c['constantPoolCount']=len(entries)+1
-raw={'snapshotVersion':1,'complete':True,'captureKind':'jvmti-installed-double-read','pid':1,'processStart':'fixture','requestId':'fixture','loaders':[{'id':1,'type':'LFixtureLoader;'}],'classes':list(classes.values())}
+raw={'snapshotVersion':1,'complete':True,'captureKind':'jvmti-installed-double-read','pid':1,'processStart':'fixture','requestId':'fixture','loaders':[{'id':1,'type':'LFixtureLoader;','instance':123}],'classes':list(classes.values()),
+     # Explicitly simulated authority, independent of the pack-selection path.
+     # These offline fixtures are not observations from a Minecraft JVM.
+     'runtimeEvidence':[{'evidenceVersion':1,'anchor':sym['minecraftSignature'],'loader':1,
+                         'version':'1.8.9','versionSource':'synthetic-fixture',
+                         'brand':'vanilla','brandSource':'synthetic-fixture'}]}
 folder=build/'resolver-fixtures';folder.mkdir(exist_ok=True)
 def write(n,obj):(folder/n).write_text(json.dumps(obj,separators=(',',':')),encoding='utf-8')
 write('pack.json',p);write('raw.json',raw)
@@ -60,6 +65,8 @@ run(['validate','--pack',str(folder/'pack.json'),'--snapshot',str(folder/'refere
 # Rename every application class and member, including CP symbolic references; retain structure.
 renamed=copy.deepcopy(raw)
 classmap={n:'Lrenamed/C'+str(i)+';' for i,n in enumerate(sorted(classes))}
+for evidence in renamed['runtimeEvidence']:
+    evidence['anchor']=classmap[evidence['anchor']]
 membermap={}
 for c in renamed['classes']:
     old=c['name'];c['name']=classmap[old]
@@ -137,4 +144,33 @@ c['constantPool']=b''.join(encoded).hex()
 write('wrong-descriptor-raw.json',wrong)
 run(['inspect','--snapshot',str(folder/'wrong-descriptor-raw.json'),'--out',str(folder/'wrong-descriptor.json')])
 run(['resolve','--pack',str(folder/'pack.json'),'--reference',str(folder/'reference.json'),'--snapshot',str(folder/'wrong-descriptor.json'),'--out',str(folder/'wrong-descriptor-candidate.json')],4)
-print('Resolver: full-schema renamed classes/members, runtime validation, confidence/evidence, missing reference, ambiguity and incorrect optional descriptor fail-closed passed')
+# Installed invokedynamic without BootstrapMethods is unsupported evidence even
+# when reference and target contain the same method. Diagnose the actual gate;
+# do not disguise it as a low confidence score or accept the otherwise exact class.
+def with_dynamic(snapshot,owner):
+    result=copy.deepcopy(snapshot);c=next(c for c in result['classes'] if c['name']==owner)
+    index=c['constantPoolCount'];name=b'fixtureDynamic';descriptor=b'()V'
+    extra=bytes([1])+struct.pack('>H',len(name))+name+bytes([1])+struct.pack('>H',len(descriptor))+descriptor
+    extra+=bytes([12])+struct.pack('>HH',index,index+1)+bytes([18])+struct.pack('>HH',0,index+2)
+    c['constantPool']+=extra.hex();c['constantPoolCount']+=4
+    next(m for m in c['methods'] if m['descriptor']=='()V' and not m['name'].startswith('<'))['bytecode']=(bytes([0xba])+struct.pack('>H',index+3)+bytes([0,0,0xb1])).hex()
+    return result
+for name,snapshot,owner in [('dynamic-reference',raw,sig(sym['minecraftName'])),('dynamic-target',renamed,classmap[sig(sym['minecraftName'])])]:
+    write(name+'-raw.json',with_dynamic(snapshot,owner))
+    run(['inspect','--snapshot',str(folder/(name+'-raw.json')),'--out',str(folder/(name+'.json'))])
+run(['resolve','--pack',str(folder/'pack.json'),'--reference',str(folder/'dynamic-reference.json'),'--snapshot',str(folder/'dynamic-target.json'),'--out',str(folder/'dynamic-candidate.json')],4)
+dynamic=json.loads((folder/'dynamic-candidate.json').read_text())['attempts'][0]['symbols']
+assert 'unsupported dynamic bootstrap evidence' in next(e for e in dynamic if e['symbol']=='minecraftName')['reason']
+assert not next(e for e in dynamic if e['symbol']=='minecraftName')['accepted']
+# An exact class cannot bypass the independent hierarchy correspondence rule.
+for name,snapshot,owner in [('hierarchy-reference',raw,sig(sym['minecraftName'])),('hierarchy-target',renamed,classmap[sig(sym['minecraftName'])])]:
+    value=copy.deepcopy(snapshot);interface=copy.deepcopy(raw['classes'][0])
+    interface.update(name='LFixtureUnprovenInterface;',modifiers=0x200,fields=[],methods=[],constantPool='',constantPoolCount=1,interfaces=[])
+    value['classes'].append(interface)
+    next(c for c in value['classes'] if c['name']==owner)['interfaces'].append({'name':interface['name'],'loader':1})
+    write(name+'-raw.json',value)
+    run(['inspect','--snapshot',str(folder/(name+'-raw.json')),'--out',str(folder/(name+'.json'))])
+run(['resolve','--pack',str(folder/'pack.json'),'--reference',str(folder/'hierarchy-reference.json'),'--snapshot',str(folder/'hierarchy-target.json'),'--out',str(folder/'hierarchy-candidate.json')],4)
+hierarchy=json.loads((folder/'hierarchy-candidate.json').read_text())['attempts'][0]['symbols']
+assert 'interface lacks a verified unique structural correspondence' in next(e for e in hierarchy if e['symbol']=='minecraftName')['reason']
+print('Resolver: full-schema rename recovery, live validation, confidence/evidence, missing reference, ambiguity, wrong descriptor, dynamic bootstrap and hierarchy diagnostics fail-closed passed')

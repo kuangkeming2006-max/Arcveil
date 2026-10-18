@@ -5,6 +5,46 @@ P/ means Mc_Injector-master. This module owns pack interchange, standalone
 analysis, JSONL events and pre-injection mapping validation; Gameplay consumes
 only its existing BindingCache.
 
+## v56.9.1: independent environment and conditional recovery
+
+Current entry points: `Resolver.h::identifyRuntime/validateAuthoredRuntime`,
+`MappingServiceDynamic.cpp::identifyTarget/captureAuthoredMetadata/publishRuntimeContext`,
+and `AttachTransaction.h::verifiedRuntimeContext`.
+
+Probe-v14 reads bounded, twice-checked `runtimeEvidence` per defining loader:
+audited legacy RealmsSharedConstants.VERSION_STRING, modern version.json id,
+and ClientBrandRetriever.getClientModName. Modern resource evidence additionally
+needs Main or ClientBrandRetriever actually defined by that loader; parent
+resource delegation alone is insufficient. Only parsed values and loader receipts
+are persisted. Class-name/API candidates are diagnostic, never version authority.
+Absent evidence keeps versionVerified=false; Unknown never becomes Vanilla from
+an anchor or provider priority. Loader keys are snapshot-local; cross-capture
+continuity uses the exact anchor, loader type and current JVMTI object identity.
+
+Vanilla 1.8.9/1.20.1 uses its installed exact authored pack, required-only lite
+metadata capture/validation, then a second independent capture/validation. Exact
+members, descriptors, hierarchy and defining loader remain mandatory. The
+authored-metadata proof has a separate digest domain and no bindingIdentity;
+it is not promoted as installed-bytecode Cache/reference evidence. Success
+neither resolves structures nor opens the Mapping window. Vanilla mismatch
+fails with diagnosis rather than guessing a modified-client mapping.
+
+Modified clients first detect the current environment, then try compatible
+Cache, installed authored revalidation (including PR #9 recovery), compatible
+same-version authored data, and only then structural resolution/reference retry.
+Final capture rechecks independent environment as well as installed proof.
+`identity-proof` derives old verified Cache proof material offline; it cannot
+replace current `identify` evidence. Modern Forge remains terminal Unsupported.
+
+All paths publish one transaction-owned Verified Runtime Context containing
+transaction/PID/start identity, actual version/family, selected dictionary and
+namespace, pack hash, loader, proof mode and Adapter. Finalize checks this
+receipt. Existing readyForTransaction and Agent loader/hash boundary stay intact.
+The sole automatic UI trigger is transaction-scoped `mapping-fallback` with
+mode automatic/diagnostic; beginning a transaction is silent. Closing the window
+does not cancel it. See [audit](../V56_9_FAST_PATH_AUDIT.md) and
+[validation](../../../Mc_Injector-master/tests/mapping/V56_9_1_VALIDATION.md).
+
 ## v55.2 entry points
 
 - MappingAnalyzer inspect: offline snapshot inspection or --pid / --java live
@@ -285,3 +325,141 @@ reads of every historical snapshot. Full source snapshot integrity is checked on
 for the chosen structural reference (trying the next ranked reference on corruption).
 Current live validation remains mandatory for every candidate. runtimeFingerprint is
 also exposed explicitly as a Qt property and JSONL diagnostic alias.
+
+
+## v56.7 multi-version foundation
+
+Start at `P/agent/bindings/GameVersion.h`, `VersionAdapter.h`, then
+`GameApi.internal.h` and `GameBindingsCache.internal.h::gameApi`.
+MinecraftVersion is pack-declared, independent of ClientFamily and MappingNamespace.
+Schema-1 packs remain readable (Unknown namespace); default-v2 now uses schema-2
+with authored namespace metadata and unchanged symbols/priorities. Structural
+remapping labels schema-2 output Custom. Only exact 1.8.9 has a verified Adapter.
+Analyzer full/cache/resolve and Agent profile lookup reject unsupported APIs;
+MappingService cold start and unsupported receipts terminate with a diagnostic.
+GameBindings public facade/lifecycle remains; versionCapabilities reports a support
+ceiling, further restricted by live IDs/hooks. Internal borrowed GameApi/InventoryView
+own no JNI refs/frames and must stay local to a calling operation.
+See [review and remaining assumptions](../MULTIVERSION_REVIEW.md) and
+`P/tests/mapping/V56_7_VALIDATION.md` for actual test limits.
+
+
+## v56.8 Lunar update recovery
+
+Start at `MappingServiceDynamic.cpp::fallbackFromCache/choosePack` and
+`resumeMatching`, plus `src/BuildInfo.h`. A failed compact installed-content proof
+only disables cache candidates for that transaction. A fresh selected snapshot
+must independently validate the current authored dictionary before structural
+migration; an authored success still requires fresh final capture, process/start
+and fingerprint continuity, then atomic proof publication. Cache rejection alone
+is not evidence that names/descriptors changed. No confidence or required-binding
+rule was relaxed.
+
+Manual Resume schedules an immediate Refresh generation: lite -> select -> fresh
+detail, bypassing metadata equality skips and detail reuse. A queued Resume survives
+an in-flight ambiguous result and retryable capture drift. Identical insufficient
+evidence pauses again; missing classes continue the bounded watch. Final validation
+and fresh final capture still gate ready. Resolver symbol reasons distinguish
+unsupported dynamic bootstrap evidence, structure, incoming-reference, loader and
+hierarchy rejection; unresolved state classifications remain compatible.
+
+`AUTHORED_REVALIDATE` reports cache-proof recovery. All service JSONL events carry
+`internalVersion` from BuildInfo; `MappingService.internalVersion` is the read-only
+Qt display property shared by the three version labels. See
+`P/tests/mapping/V56_8_VALIDATION.md`, Test-LunarForge.py and the recorded metadata
+fixture for exact evidence and offline/live verification limits.
+
+## v56.9 versioned authored contracts
+
+Start at `mapping/analyzer/Resolver::contractsForPack`, `CaptureClient.cpp`,
+`main.cpp::identify`, and `MappingServiceDynamic::writeIdentityCatalog/activeContractDigest`.
+contracts-v2.json selects unchanged standalone 1.8.9 or new 1.20.1 contract by the
+pack's exact gameVersion. The separate vanilla-1.20.1.json is official-artifact
+derived and offline checked; it has no authority before current live verification.
+The identity catalog now contains only installed supported authored packs; see
+v56.9.2 below. Independent version/brand evidence in the exact defining loader
+establishes the environment before Mapping selection. Class/API-name candidates
+are diagnostic and cannot establish actual version or family. The modern Agent
+also checks its actual version before BINDING_READY.
+Family evidence is detected independently of provider support, so Forge/Lunar
+cannot silently become Vanilla. Modern non-Vanilla is unsupported in this release.
+Semantically unchanged sub-contracts keep their original standalone byte digest,
+preserving legacy cache keys; changed sub-contracts invalidate previous proofs.
+Cache format, confidence, final check and v56.8 recovery rules are unchanged.
+See [audit](../MINECRAFT_1_20_REVIEW.md), generator/provenance and V56_9_VALIDATION.
+
+## v56.9.2 unified, demand-scoped Snapshot validation
+
+Start at `P/mapping/analyzer/CaptureClient.h::planCaptureRequest/captureRequestStats`,
+then `main.cpp`'s `inspect --plan-capture` and
+`P/src/MappingServiceDynamic.cpp::runtimeScopeArguments/beginAuthoredValidation/beginStructuralFallback`.
+The four `--capture-tier` values define one Probe/Analyzer pipeline:
+
+| Tier | Current scope and authority |
+| --- | --- |
+| `detection` | Fixed supported environment anchors, loader identity and independent audited version/brand receipts. Emits anchor stubs with no API fields, methods or hierarchy; no authored warmup, bytecode or constant pool. Cache history is not read into the request. |
+| `vanilla-validation` | One selected exact-version authored dictionary's required classes/members and hierarchy, in the detected live loader. Metadata only, followed by a fresh independent validation; no automatic structural matching. |
+| `modded-validation` | One compatible Cache or authored dictionary at a time, with exact descriptors/hierarchy and compact installed-code proof. Code/pool are hashed in the target JVM, not transported as structural graphs. Authored recovery uses a second independent capture. |
+| `structural` | Broad metadata inventory and selected structural detail only after verified non-Vanilla existing mappings fail. Existing reference, confidence, provisional/export and final recheck gates remain mandatory. |
+
+`Cache::knownPacks()` is offline history enumeration, not an environment catalog.
+`writeIdentityCatalog()` writes only the two installed supported pack paths.
+`identity-packs` remains an offline identity-candidate input, but never expands a
+Probe request. `liteClasses`, runtime anchors and warmup classes are deduplicated;
+warmup is merged by anchor and restricted to the selected mapping. Cache candidates
+are queried only after actual version/family detection. Recovery order remains
+Cache -> installed authored -> compatible same-version mapping -> Automatic Resolver.
+Unknown cannot inherit a family from provider priority; foreign-loader family
+markers cannot overwrite current-loader brand evidence. Conflicting Vanilla/foreign
+modified-client evidence remains conservative Unknown.
+
+The v56.9.2 native resident protocol was `MappingProbe-v16.dll`, preventing reuse of an old
+resident Probe that lacks tier semantics. `ProbeProtocol.h::probeRequestBytes`
+remains 32768. `CAPTURE_REQUEST` reports actual request bytes, section sizes,
+requested class/anchor/hint/warmup counts and transport before enforcing that cap.
+`SNAPSHOT_STATS` reports capture tier, emitted classes/members, warmup work, Probe
+duration and transported/JVMTI bytecode/pool bytes. A deterministic request-size
+failure terminates instead of retrying an unchanged oversized request.
+
+All success paths continue through Mapping Validation -> transaction-owned
+Verified Runtime Context -> VersionAdapter -> normal Agent loading. MappingVerified
+does not imply Agent/Renderer Ready or Active. Only genuine fallback/diagnosis emits
+the automatic `mapping-fallback` presentation event; successful known mappings remain
+silent. See [review and measured tiers](../V56_9_2_SNAPSHOT_REVIEW.md),
+`P/tests/mapping/ModernMappingServiceTests.cpp`, `Test-RuntimeDetection.py`,
+`Test-CaptureRequestStress.py` and `TransactionCacheTests.cpp` for separately scoped
+synthetic, recorded Snapshot and real-runtime evidence.
+
+## v56.9.3: bounded identity recovery and audited legacy binding
+
+The resident protocol is now `MappingProbe-v17.dll`. Start at
+`MappingProbe.cpp::readRuntimeEvidence`, `Resolver.cpp::identifyRuntime`,
+`MappingServiceDynamic.cpp::captureCandidateVersionEvidence` and
+`CaptureClient.h::CaptureScopeUnavailable`.
+Per-source version attempts expose exact failure reasons. An unusable resource
+id cannot mask a valid same-loader legacy version; conflicting exact versions
+still reject. A narrowly audited Lunar release brand requires strong Lunar
+evidence in that same loader and never supplies a Minecraft version.
+
+Without independent version evidence, a known modified family with one trusted
+candidate loader may request one additional Detection capture using at most two
+audited `--evidence-candidates` versions and the exact runtime loader pin.
+For legacy 1.8.9 the bounded fallback checks the audited Realms holder's semantic
+static String value and protocol/tick discriminators; it does not guess game API
+member names. Unproven/conflicting version, family or loader still cannot reach
+Mapping verification or Ready. Candidate scope is never identity authority.
+The evidence options persist into subsequent independent captures.
+
+A complete validation-tier response with zero candidate API classes emits exit
+6 / `candidate-scope-unavailable` and target PID/start. Only an initial authored
+candidate with matching process identity may advance to the next dictionary;
+final validation and incomplete captures remain fail-closed.
+
+The 1.8.9 Vanilla/Lunar Notch `syncCurrentPlayItem` name is corrected from `j`
+to official `n()V`. `authoredMappingAuditRevision` in the legacy contract forces
+old 1.8.9 Cache proofs to miss and revalidate; the 1.20.1 sub-contract is unchanged.
+Validation strength, tier sizes and successful silent UI behavior are retained.
+`recordGameplayDiagnostic` appends authenticated, current-owner gameplay receipts
+to the existing transaction log without changing Mapping/Agent Ready state.
+See [root causes](../V56_9_3_ROOT_CAUSES.md) and
+[validation](../../../Mc_Injector-master/tests/mapping/V56_9_3_VALIDATION.md).

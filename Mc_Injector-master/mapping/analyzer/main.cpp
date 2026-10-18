@@ -12,6 +12,8 @@
 #include <QThread>
 #include <QElapsedTimer>
 #include <cstdio>
+#include <map>
+#include <set>
 using namespace mcoverlay::mapping;
 namespace {
 void event(std::string type, Json data) {
@@ -47,7 +49,7 @@ int main(int argc, char **argv) {
         for (int i = 2; i < args.size(); ++i) {
             if (!args[i].startsWith("--") || options.contains(args[i]))
                 throw std::runtime_error("invalid/duplicate option");
-            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only" || args[i]=="--binding-check") {
+            if (args[i] == "--lite" || args[i]=="--incremental" || args[i]=="--allow-empty" || args[i]=="--validation-scope" || args[i]=="--detect-only" || args[i]=="--identity-lite" || args[i]=="--required-only" || args[i]=="--binding-check" || args[i]=="--plan-capture") {
                 options[args[i]] = "true";
                 continue;
             }
@@ -75,7 +77,8 @@ int main(int argc, char **argv) {
             return Json::read(
                 filePath(options.contains("--contracts")
                              ? option("--contracts")
-                             : QCoreApplication::applicationDirPath() + "/contracts-v1.json"));
+                             : QCoreApplication::applicationDirPath() +
+                               (QFile::exists(QCoreApplication::applicationDirPath()+"/contracts-v2.json") ? "/contracts-v2.json" : "/contracts-v1.json")));
         };
         const Events events = [](const Json &value) {
             auto data = value;
@@ -83,7 +86,14 @@ int main(int argc, char **argv) {
             data.object().erase("event");
             event(type, data);
         };
-        if (command == "inspect" || command == "inspect-detail") {
+        if(command=="inspect" && options.contains("--plan-capture")) {
+            const auto request=planCaptureRequest(options,contracts());
+            const auto stats=captureRequestStats(request);
+            event("CAPTURE_REQUEST_PLAN",Json::Object{{"request",request},{"stats",stats}});
+            if(request.dump().size()>probeRequestBytes)
+                throw SnapshotLimit("file","probe-request-json",request.dump().size(),probeRequestBytes);
+            if(options.contains("--out")) writeJson(filePath(option("--out")),Json::Object{{"request",request},{"stats",stats}});
+        } else if (command == "inspect" || command == "inspect-detail") {
             Json snapshot;
             if (options.contains("--pid")) {
                 if (command == "inspect-detail") {
@@ -138,9 +148,24 @@ int main(int argc, char **argv) {
                                {"captureKind", result.at("captureKind")},
                                {"pid", result.at("pid")},
                                {"processStart", result.at("processStart")}});
+        } else if (command == "identity-proof") {
+            // Offline migration of an already verified full Cache snapshot.
+            // This command supplies proof material, never current runtime authority.
+            result=mappingIdentity(Json::read(filePath(option("--pack"))),
+                readSnapshot(filePath(option("--snapshot"))),contracts());
+            writeJson(filePath(option("--out")),result);
         } else if (command == "identify") {
-            result = mappingIdentity(Json::read(filePath(option("--pack"))),
-                                     readSnapshot(filePath(option("--snapshot"))), contracts());
+            const auto snapshot=readSnapshot(filePath(option("--snapshot")));
+            Json::Array catalog;
+            std::set<std::string> seen;
+            Json::Array paths;
+            if (options.contains("--identity-packs")) {
+                paths=Json::read(filePath(option("--identity-packs"))).at("packs").array();
+            }
+            paths.emplace_back(option("--pack").toStdString());
+            for(const auto& path:paths) if(seen.insert(path.string()).second)
+                catalog.push_back(Json::Object{{"path",path},{"pack",Json::read(filePath(QString::fromStdString(path.string())))}});
+            result = identifyRuntime(catalog, snapshot, contracts());
             writeJson(filePath(option("--out")), result);
             event("mapping-identity", result);
         } else if (command == "select") {
@@ -167,6 +192,12 @@ int main(int argc, char **argv) {
             writeJson(filePath(option("--out")), result);
             event("validation", result);
             if (!result.at("valid").boolean()) return 3;
+        } else if (command == "validate-authored") {
+            result=validateAuthoredRuntime(Json::read(filePath(option("--pack"))),
+                readSnapshot(filePath(option("--snapshot"))),contracts(),events);
+            writeJson(filePath(option("--out")),result);
+            event("validation",result);
+            if(!result.at("valid").boolean() || !result.at("injectionReady").boolean()) return 3;
         } else if (command == "validate") {
             const auto pack = Json::read(filePath(option("--pack")));
             result = options.contains("--snapshot")
@@ -211,6 +242,10 @@ int main(int argc, char **argv) {
             throw std::runtime_error("unsupported command");
         event("complete", Json::Object{{"success", true}, {"command", command.toStdString()}});
         return 0;
+    } catch (const CaptureScopeUnavailable &e) {
+        event("failure",Json::Object{{"reason",e.what()},{"failureType","candidate-scope-unavailable"},
+            {"pid",double(e.pid)},{"processStart",e.processStart},{"retryable",false}});
+        return 6;
     } catch (const RuntimeChanged &e) {
         event("failure",Json::Object{{"reason",e.what()},{"retryable",true},{"failureType","runtime-drift"}});
         return 5;

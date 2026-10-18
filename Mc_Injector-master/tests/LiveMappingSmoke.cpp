@@ -50,6 +50,8 @@ int main(int argc, char **argv) {
     const auto scenario = qEnvironmentVariable("ARCVEIL_LIVE_SCENARIO", "cold-and-same-pid");
     const bool rejectLoader = qEnvironmentVariableIsSet("ARCVEIL_LIVE_REJECT_LOADER");
     const auto cycles = qMax(1, qEnvironmentVariableIntValue("ARCVEIL_LIVE_CYCLES") == 0 ? 2 : qEnvironmentVariableIntValue("ARCVEIL_LIVE_CYCLES"));
+    const auto observeMs=qBound(0,qEnvironmentVariableIntValue("ARCVEIL_LIVE_OBSERVE_MS"),10000);
+    QElapsedTimer activeObservation;
     std::printf("LIVE_CACHE %s\n", cachePath.toUtf8().constData());
     LiveMappingSmoke::cache(manager.mappingService(), cachePath);
     bool finished = false, passed = false;
@@ -85,6 +87,7 @@ int main(int argc, char **argv) {
         if (awaitingDetach) {
             if (manager.state() == OverlayManager::State::Detached) {
                 awaitingDetach = false;
+                activeObservation.invalidate();
                 ++cycle; automaticCalls = 0; cacheHits = 0;
                 if (!manager.attachToProcess(pid)) stop(false);
             }
@@ -102,6 +105,10 @@ int main(int argc, char **argv) {
                   manager.mappingState() == "no_world"))
         {
             if (rejectLoader) { stop(false); return; }
+            if(observeMs>0) {
+                if(!activeObservation.isValid())activeObservation.start();
+                if(activeObservation.elapsed()<observeMs)return;
+            }
             auto receipt = LiveMappingSmoke::receipt(manager.mappingService());
             receipt["event"] = "LUNAR_ACCEPTANCE";
             receipt["scenario"] = scenario;

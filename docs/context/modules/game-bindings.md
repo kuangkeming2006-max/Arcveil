@@ -19,10 +19,17 @@
 | serializeLogicalPacket、silentAvailable/silentAttackAvailable、aimTargetId/aimAttackTargetId | runtime/逻辑钩子的能力、目标和包边界 |
 | enqueueDebugChatLine/enqueueWarningChatLine/publishDebugChat | 排队和在正确 JNI 上下文发布本地聊天 |
 | release/abandon | 正常 JNI 清理与 VM 不可用时停止访问 |
+| gameplayDiagnostics | 纯值诊断：当前 core publication、实际观察的 optional binding predicates、hook readiness 与真实调用/本地动作计数；不能授权 Ready 或证明服务器接受 |
 
 ## 内部边界
 
 MappingProvider 是纯字典/环境/registry：客户端 family 检测、候选映射、schema 校验、注册冻结。
+`MappingRegistry::candidatesForAnchor()` 在 family Unknown 时只返回 authored Vanilla
+成员候选，保持 Unknown 且不增加身份置信度；命中相同名称不能选择更高 priority 的
+Lunar/Forge。已知 family 继续保持原 provider priority。实际版本、客户端身份与最终
+验证授权由 mapping-pipeline 提供，registry 的候选结果不能替代它们。
+注册表也不再给“当前 pack 中唯一 anchor”增加 family 分数；Vanilla class/launch
+命名模式不能证明 Vanilla 身份。Forge/Lunar 的独立 marker 和 launch evidence 保留。
 MappingPack.h/.cpp 读取 versioned JSON pack；MappingSymbols.inc 仅维护稳定 logical keys。默认数据来自 DLL 旁 mappings/default-v2.json（源文件 P/mapping/packs/default-v2.json；v1 保留用于兼容/parity），缺失或损坏会 fail closed，没有编译进 DLL 的 symbol fallback。Gameplay 仍仅消费 BindingCache。
 BedWarsState 是语言无关的 sidebar、队伍/羊毛/皮革颜色与 threat 分类。
 AimControl、SilentLockCoordinator、TrajectoryMath、SafeWalkPolicy、SmartHotbarPolicy、KnockbackEvidence 各自提供策略或数学/证据结构。
@@ -98,3 +105,48 @@ compact/full validation receipt. findMinecraftClass rejects ambiguous anchors an
 requires this exact loader before existing JNI member lookups. bindingsReady() and
 resolver counters are read by the resolver worker after runResolver, then published
 through AgentRuntime's atomic result. Unpinned legacy smoke callers remain supported.
+
+
+## v56.7 multi-version foundation
+
+Start at `P/agent/bindings/GameVersion.h`, `VersionAdapter.h`, then
+`GameApi.internal.h` and `GameBindingsCache.internal.h::gameApi`.
+MinecraftVersion is pack-declared, independent of ClientFamily and MappingNamespace.
+Schema-1 packs remain readable (Unknown namespace); default-v2 now uses schema-2
+with authored namespace metadata and unchanged symbols/priorities. Structural
+remapping labels schema-2 output Custom. Only exact 1.8.9 has a verified Adapter.
+Analyzer full/cache/resolve and Agent profile lookup reject unsupported APIs;
+MappingService cold start and unsupported receipts terminate with a diagnostic.
+GameBindings public facade/lifecycle remains; versionCapabilities reports a support
+ceiling, further restricted by live IDs/hooks. Internal borrowed GameApi/InventoryView
+own no JNI refs/frames and must stay local to a calling operation.
+See [review and remaining assumptions](../MULTIVERSION_REVIEW.md) and
+`P/tests/mapping/V56_7_VALIDATION.md` for actual test limits.
+
+## v56.9 modern read-only API
+
+Exact 1.20.1 now selects Modern120Adapter; exact 1.8.9 retains Legacy18Adapter.
+`GameBindingsModern.cpp` owns modern lookup/sampling/mouse-capture structure;
+`ModernMappingSymbols.inc` is the small external dictionary contract. Names and
+type descriptors stay in MappingDictionary, not Adapter version branches.
+Modern publication additionally checks actual SharedConstants version, defining
+loader, core hierarchy and all required JNI IDs. Added class refs use existing
+deleteGlobalRefs/release. GameSnapshot adds rotation and enumeration truncation;
+EntityMarker adds rotation. No IPC schema change.
+Modern capabilities are EntitySnapshots + MouseCapture. Legacy gameplay/hooks,
+inventory, bed scan and world projection remain unavailable on modern; sampleCamera
+and updateGameplay explicitly gate their existing paths. Legacy capabilities include
+their prior behavior. See [1.20 audit](../MINECRAFT_1_20_REVIEW.md) and
+`P/tests/mapping/V56_9_VALIDATION.md`; private JVM tests do not prove real game support.
+
+## v56.9.3 gameplay observations
+
+`GameBindings.h::GameplayDiagnostics` / `gameplayDiagnostics()` adds a fixed-size
+value receipt. Binding bits distinguish core publication from optional predicates
+actually observed by `updateGameplay`; an unobserved zero is not a missing binding.
+Counters increment at the real consumed-key callback, successful mapped local
+hotbar operation, and actual placement JNI invocation / true client result.
+No counter claims server acknowledgment. Existing feature/input/world/interaction
+guards remain the authority. Action-specific block reasons survive a render update
+until an action retries/succeeds or the effective feature turns off. Runtime copies
+the facade into a bounded mailbox; it never performs JNI through the diagnostic.

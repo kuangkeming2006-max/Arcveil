@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 2,
+  "packVersion": 1,
+  "id": "arcveil-vanilla-1.20.1",
+  "gameVersion": "1.20.1",
+  "source": "Mojang client_mappings SHA1 6c48521eed01fe2e8ecdadbd5ae348415f3c47da; client.jar SHA1 0c3ec587af28e5a785c0b4a7b8a30f9a8f78f838; offline member-checked, runtime validation required",
+  "providers": [
+    {
+      "id": "vanilla-modern",
+      "family": "Vanilla",
+      "priority": 100,
+      "detection": [
+        {
+          "match": 0,
+          "value": "Lenn;",
+          "confidence": 10
+        }
+      ],
+      "dictionaries": [
+        {
+          "id": "vanilla-1.20.1-official",
+          "label": "Vanilla 1.20.1 (official obfuscated, read-only)",
+          "family": "Vanilla",
+          "mappingNamespace": "Notch",
+          "detection": [
+            {
+              "match": 0,
+              "value": "Lenn;",
+              "confidence": 10
+            }
+          ],
+          "symbols": {
+            "minecraftName": "enn",
+            "minecraftSignature": "Lenn;",
+            "playerName": "fiy",
+            "playerSignature": "Lfiy;",
+            "entityPlayerName": "byo",
+            "entityPlayerSignature": "Lbyo;",
+            "livingName": "bfz",
+            "livingSignature": "Lbfz;",
+            "entityName": "bfj",
+            "entitySignature": "Lbfj;",
+            "aabbName": "eed",
+            "aabbSignature": "Leed;",
+            "worldName": "cmm",
+            "worldSignature": "Lcmm;",
+            "worldClientName": "few",
+            "worldClientSignature": "Lfew;",
+            "chatComponentName": "sw",
+            "chatComponentSignature": "Lsw;",
+            "sharedConstantsName": "aa",
+            "sharedConstantsSignature": "Laa;",
+            "worldVersionName": "ad",
+            "worldVersionSignature": "Lad;",
+            "mouseHandlerName": "eno",
+            "mouseHandlerSignature": "Leno;",
+            "getMinecraft": "N",
+            "playerField": "t",
+            "worldField": "s",
+            "getHealth": "er",
+            "getMaxHealth": "eI",
+            "getEntityId": "af",
+            "getBounds": "cE",
+            "isMainThread": "bl",
+            "isSingleplayer": "R",
+            "getLoadedEntities": "e",
+            "getName": "Z",
+            "getFormattedText": "getString",
+            "getEyeHeight": "cF",
+            "isInvisible": "cb",
+            "isAlive": "bs",
+            "isRemoved": "dD",
+            "currentScreenField": "z",
+            "positionMethods": [
+              "dn",
+              "dp",
+              "dt"
+            ],
+            "previousPositionFields": [
+              "J",
+              "K",
+              "L"
+            ],
+            "rotationMethods": [
+              "dy",
+              "dA"
+            ],
+            "aabbFields": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f"
+            ],
+            "getCurrentVersion": "b",
+            "getVersionName": "c",
+            "mouseHandlerField": "n",
+            "grabMouse": "i",
+            "releaseMouse": "j",
+            "isMouseGrabbed": "h",
+            "guiScreenSignature": "Leuq;"
+          }
+        }
+      ]
+    }
+  ]
+}

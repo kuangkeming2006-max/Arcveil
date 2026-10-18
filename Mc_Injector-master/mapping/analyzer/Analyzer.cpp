@@ -1,4 +1,5 @@
 #include "Analyzer.h"
+#include "../../agent/bindings/VersionAdapter.h"
 #include "../ProbeProtocol.h"
 #include "../../agent/bindings/MappingPack.h"
 #include <QCryptographicHash>
@@ -63,6 +64,11 @@ static std::string snapshotDigest(const Json &snapshot) {
         klass["super"]["loaderKey"] = runtimeLoader(klass.at("super").at("loaderKey"));
         for (auto &item : klass["interfaces"].array()) item["loaderKey"] = runtimeLoader(item.at("loaderKey"));
         for (const auto *kind : {"fields", "methods", "interfaces"}) canonicalSort(klass[kind].array());
+    }
+    if (snapshot.contains("runtimeEvidence")) {
+        content["runtimeEvidence"] = snapshot.at("runtimeEvidence");
+        for (auto &item : content["runtimeEvidence"].array()) item["loaderKey"] = runtimeLoader(item.at("loaderKey"));
+        canonicalSort(content["runtimeEvidence"].array());
     }
     canonicalSort(content["classes"].array());
     canonicalSort(content["launchEvidence"].array());
@@ -175,6 +181,19 @@ Json inspectSnapshot(Json snapshot) {
         ref["loaderKey"] = loaderKeys.at(id);
         ref.object().erase("loader");
     };
+    if (snapshot.contains("runtimeEvidence")) {
+        auto &evidence = snapshot["runtimeEvidence"].array();
+        if (evidence.size() > 128) throw std::runtime_error("oversize runtime environment evidence");
+        for (auto &item : evidence) {
+            if (item.at("evidenceVersion").integer() != 1 || item.at("anchor").string().size() > 1024 ||
+                item.at("version").string().size() > 32 || item.at("brand").string().size() > 64)
+                throw std::runtime_error("unsupported runtime environment evidence");
+            convert(item);
+        }
+        canonicalSort(evidence);
+    }
+    if (snapshot.contains("launchEvidence")) for (auto &item : snapshot["launchEvidence"].array())
+        if (item.contains("loader")) convert(item);
     std::set<std::string> ids;
     std::size_t methods = 0, fields = 0;
     for (auto &c : classes) {
@@ -215,6 +234,8 @@ Json validatePack(const Json &pack) {
     return Json::Object{{"valid", true},
                         {"level", "schema"},
                         {"injectionReady", false},
+                        {"apiSupported", bindings::selectVersionAdapter(bindings::MinecraftVersion::parse(parsed.gameVersion)) != nullptr},
+                        {"versionSource", "pack-declared; requires live API validation"},
                         {"packId", parsed.id},
                         {"dictionaries", count}};
 }
@@ -246,12 +267,15 @@ Json diffPacks(const Json &before, const Json &after) {
                                                {"symbol", key},
                                                {"before", value},
                                                {"after", b.at(id).at("symbols").at(key)}});
-        for (const auto *key : {"label", "family", "detection"})
-            if (a.at(id).at(key) != b.at(id).at(key))
+        for (const auto *key : {"label", "family", "detection", "mappingNamespace"}) {
+            const auto oldValue=a.at(id).contains(key)?a.at(id).at(key):Json();
+            const auto newValue=b.at(id).contains(key)?b.at(id).at(key):Json();
+            if (oldValue != newValue)
                 changes.push_back(Json::Object{{"dictionary", id},
                                                {"metadata", key},
-                                               {"before", a.at(id).at(key)},
-                                               {"after", b.at(id).at(key)}});
+                                               {"before", oldValue},
+                                               {"after", newValue}});
+        }
     }
     return Json::Object{{"changed", before != after},
                         {"changes", changes},

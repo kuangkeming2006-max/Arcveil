@@ -1,8 +1,23 @@
-# Mapping pipeline — internal v55.9
+# Mapping pipeline — internal v56.9.1
 
 The controller validates mappings before loading the main Agent. Gameplay uses logical
 symbols; MappingRegistry remains the final registration boundary and freezes once.
 Default packs are external, versioned JSON. Missing or invalid packs fail closed.
+
+Supported Vanilla 1.8.9 and 1.20.1 now take a deterministic authored path:
+independent runtime version/brand evidence, exact required metadata validation,
+then a second independent live validation. No automatic resolver/window or
+installed-bytecode Cache promotion is involved. Confirmed Vanilla mismatch opens
+diagnosis and fails. Forge/Lunar retain compatible Cache -> authored recovery ->
+necessary structural fallback, without inferring their version from a pack.
+Minecraft 1.20.1 Forge is detected independently but remains Unsupported.
+
+`identify --identity-packs CATALOG` reports actual evidence, versionVerified,
+family, namespace candidates and the defining-loader receipt. Without independent
+evidence, an API candidate is diagnostic only. `validate-authored` accepts lite
+metadata only in the exact authored Vanilla proof mode; its proof cannot be used
+as installed-bytecode evidence. `identity-proof` is for offline migration of an
+already verified full Cache snapshot, never live environment authorization.
 
 ## Developer console
 Open Settings → Open Mapping Console, or Ctrl+Shift+M. It is hidden during normal
@@ -242,3 +257,34 @@ real attach/detach cycles in a persistent fresh cache and requires cycle 2 to ha
 cacheHits > 0 and autoResolveCalls == 0. Main-menu no_player/no_world is acceptable
 only after the Agent publishes a mapping profile and renderer Active. See
 ../tests/mapping/V56_4_VALIDATION.md for evidence and remaining coverage limits.
+
+
+## Internal v56.7 — version and API support
+
+Minecraft version, client family and mapping namespace are independent.
+`gameVersion` declares one target version for the whole pack; it is not an
+independent runtime version probe. Schema-1 remains readable with Unknown
+namespace. Schema-2 requires `mappingNamespace` on every dictionary, with
+Notch/SRG/MCP/Custom values. `default-v2.json` now uses schema-2 with all prior
+symbols, ordered aliases, detection and priorities preserved. Automatic structural
+remapping emits Custom. Deploy this pack together with the matching binaries.
+
+Schema validation reports `apiSupported` but always `injectionReady=false`.
+Full validation, cache validation and resolve require a verified VersionAdapter;
+currently only exact 1.8.9 qualifies. A relabelled 1.12.2 pack is rejected with
+`unsupportedApi`, a concrete reason and minecraftVersion, even against a
+descriptor-compatible synthetic snapshot. MappingService treats this as terminal.
+Current live member/descriptor/loader checks and cache digest/proof requirements
+remain mandatory. Adding a dictionary alone never proves a new API or hook works.
+
+## Internal v56.9 — minimal Vanilla 1.20.1
+
+Exact 1.20.1 now has a read-only Modern120Adapter and an independent 52-key
+Vanilla dictionary. contracts-v2.json dispatches to standalone version contracts;
+legacy symbols/priorities and unchanged cache contract digests are preserved.
+Generate-ModernPack.py requires hash-pinned official client mappings/JAR and
+audits 37 member descriptors/modifiers offline. Agent must independently verify
+exact actual version and every required JNI ID before Ready; Cache never skips
+current live checks. Forge 1.20.1 and neighboring minors remain unsupported.
+See tests/mapping/V56_9_VALIDATION.md and docs/context/MINECRAFT_1_20_REVIEW.md
+for synthetic JVM evidence and pending real Minecraft acceptance.

@@ -89,17 +89,17 @@ int main(int argc, char **argv) {
         "lunar-20", "metadata-20", "Lunar", "1.20.1");
     policy.promote(pack, snapshot, "fingerprint", "contract", proof,
         "badlion", "metadata-b", "Badlion", "1.8.9");
-    check(policy.reference("contract", "Lunar", "1.20.1", "lunar-8").revision == same.revision,
-          "exact stable identity outranks version and unrelated lastVerified");
-    check(policy.reference("contract", "Lunar", "1.7.10").revision == same.revision,
-          "same-family nearest Minecraft reference outranks newest distant version");
+    check(policy.reference("contract", "Lunar", "1.20.1", "lunar-8").revision == distant.revision,
+          "exact target API version outranks an incompatible identity hint");
+    check(!policy.reference("contract", "Lunar", "1.7.10").valid(),
+          "same-family history does not supply a different Minecraft API reference");
     check(!policy.reference("contract", "Forge", "1.8.9").valid(), "no cross-family lastVerified reference");
     QFile history(same.snapshot); history.open(QIODevice::WriteOnly | QIODevice::Append);
     history.write("corrupt historical snapshot"); history.close();
     check(policy.candidates("Lunar", "1.8.9", "contract").size() == 1,
           "live-validation candidate discovery does not read historical snapshots");
-    check(policy.reference("contract", "Lunar", "1.8.9").revision == distant.revision,
-          "structural reference checks source integrity and falls through corruption");
+    check(!policy.reference("contract", "Lunar", "1.8.9").valid(),
+          "corrupt source cannot fall through to an incompatible API version");
     QLockFile lock(dir.path() + "/cache/cache.lock");
     lock.lock();
     try {

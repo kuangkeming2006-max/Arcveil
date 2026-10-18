@@ -605,7 +605,7 @@
             "keyBindSprintField": "ae",
             "keyBindsHotbarField": "aw",
             "keyBindingIsPressed": "f",
-            "syncCurrentPlayItem": "j",
+            "syncCurrentPlayItem": "n",
             "movementKeyFields": [
               "Y",
               "aa",
@@ -1356,7 +1356,7 @@
             "keyBindSprintField": "ae",
             "keyBindsHotbarField": "aw",
             "keyBindingIsPressed": "f",
-            "syncCurrentPlayItem": "j",
+            "syncCurrentPlayItem": "n",
             "movementKeyFields": [
               "Y",
               "aa",

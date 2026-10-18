@@ -1,4 +1,4 @@
-"""Run Test-Resolver.py first. Build family-scoped real Analyzer fixtures."""
+"""Run Test-Resolver.py first. Production Analyzer over synthetic family fixtures."""
 import copy,json,struct,subprocess,sys
 from pathlib import Path
 b=Path(sys.argv[1]); f=b/'resolver-fixtures'; exe=str(b/'MappingAnalyzer.exe')
@@ -11,11 +11,15 @@ for d in p['providers'][0]['dictionaries']:
     d['family']='Lunar'; d['detection']=[{'match':2,'value':'lunar','confidence':250}]
 write('lunar-pack.json',p)
 raw=json.loads((f/'raw.json').read_text()); raw['launchEvidence']=[{'family':'Lunar','confidence':250}]; raw['loaders'][0]['instance']=123
+for evidence in raw['runtimeEvidence']:
+    evidence['brand']='lunar'
 write('lunar-raw.json',raw)
 run('inspect','--snapshot',f/'lunar-raw.json','--out',f/'lunar-reference.json')
 run('validate','--pack',f/'lunar-pack.json','--snapshot',f/'lunar-reference.json','--out',f/'lunar-validation.json')
 def update(raw):
     raw=copy.deepcopy(raw);raw['launchEvidence']=[{'family':'Lunar','confidence':250}];raw['loaders'][0]['instance']=123
+    for evidence in raw['runtimeEvidence']:
+        evidence['brand']='lunar'
     for c in raw['classes']:
         pool=bytearray.fromhex(c['constantPool']);pos=0
         while pos<len(pool):
@@ -28,6 +32,12 @@ def update(raw):
     return raw
 write('updated-raw.json',update(json.loads((f/'renamed-raw.json').read_text())))
 write('updated-reference-raw.json',update(raw)); write('updated-pack.json',p)
+write('updated-authored-raw.json',update(raw))
+broken=update(raw)
+owner='L'+p['providers'][0]['dictionaries'][0]['symbols']['minecraftName'].replace('.','/')+';'
+field=p['providers'][0]['dictionaries'][0]['symbols']['playerField']
+next(m for c in broken['classes'] if c['name']==owner for m in c['fields'] if m['name']==field)['descriptor']='I'
+write('broken-required-raw.json',broken)
 run('inspect','--snapshot',f/'updated-reference-raw.json','--out',f/'updated-reference.json')
 run('validate','--pack',f/'updated-pack.json','--snapshot',f/'updated-reference.json','--out',f/'updated-validation.json')
-print('Prepared Lunar source/renamed/installed-code-update fixtures with real validation')
+print('Prepared synthetic Lunar source/renamed/installed-code-update fixtures with production Analyzer validation')

@@ -175,6 +175,7 @@ void AgentRuntime::telemetryMain() noexcept
     bool bindingSent = false;
     const HANDLE events[2]{m_stopEvent, m_telemetryEvent};
     std::uint64_t sentGameStateRevision = 0U;
+    std::uint64_t sentGameplayDiagnosticSequence = 0U;
     std::uint32_t sentStateChangedRevision = 0U;
     std::uint32_t sentFeatureChangedRevision = 0U;
     std::uint32_t sentBindChangedRevision = 0U;
@@ -541,7 +542,29 @@ void AgentRuntime::telemetryMain() noexcept
             m_telemetryMailbox.playerRosterGeneration;
         const auto localPlayerName = m_telemetryMailbox.localPlayerName;
         const bool matchActive = m_telemetryMailbox.matchActive;
+        const auto gameplay = m_telemetryMailbox.gameplay;
         ::ReleaseSRWLockShared(&m_telemetryLock);
+        if (gameplay.sequence != 0U && gameplay.sequence != sentGameplayDiagnosticSequence) {
+            const auto &d = gameplay.bindings;
+            FixedLine<512U> line;
+            if (line.append("GAMEPLAY_DIAGNOSTIC 1 ") &&
+                line.appendInteger(gameplay.sequence) && line.append(' ') &&
+                line.appendInteger(gameplay.tickMilliseconds) && line.append(' ') &&
+                line.appendInteger(gameplay.configuredFlags) && line.append(' ') &&
+                line.appendInteger(gameplay.inputFlags) && line.append(' ') &&
+                line.appendInteger(d.bindingMask) && line.append(' ') &&
+                line.appendInteger(d.missingBindings) && line.append(' ') &&
+                line.appendInteger(d.hookMask) && line.append(' ') &&
+                line.appendInteger(d.updateCalls) && line.append(' ') &&
+                line.appendInteger(d.hotbarCallbacks) && line.append(' ') &&
+                line.appendInteger(d.hotbarActions) && line.append(' ') &&
+                line.appendInteger(d.scaffoldAttempts) && line.append(' ') &&
+                line.appendInteger(d.scaffoldAccepted) && line.append(' ') &&
+                line.appendInteger(static_cast<unsigned>(d.lastBlockReason)) &&
+                m_ipc->sendLine(line.view())) {
+                sentGameplayDiagnosticSequence = gameplay.sequence;
+            }
+        }
         if (gameStateRevision != 0U && gameStateRevision != sentGameStateRevision) {
             FixedLine<768U> line;
             if (formatGameState(line, gameState) && m_ipc->sendLine(line.view())) {
@@ -664,6 +687,33 @@ void AgentRuntime::queueTelemetry(const GameSnapshot& snapshot,
     if (m_telemetryEvent != nullptr) {
         ::SetEvent(m_telemetryEvent);
     }
+}
+
+void AgentRuntime::queueGameplayDiagnostics(const std::uint32_t configuredFlags,
+                                           const std::uint32_t inputFlags,
+                                           const std::uint64_t tickMilliseconds) noexcept
+{
+    const auto &previous = m_lastGameplayDiagnostic;
+    // Render callbacks publish fixed values only. At most one observation per
+    // second; unchanged enabled features get a five-second counter heartbeat.
+    if (m_lastGameplayDiagnosticSampleTick != 0 &&
+        tickMilliseconds - m_lastGameplayDiagnosticSampleTick < 1000U) return;
+    m_lastGameplayDiagnosticSampleTick = tickMilliseconds;
+    const auto observed = m_bindings->gameplayDiagnostics();
+    const bool changed = previous.sequence == 0 || previous.configuredFlags != configuredFlags ||
+        previous.inputFlags != inputFlags || previous.bindings.bindingMask != observed.bindingMask ||
+        previous.bindings.missingBindings != observed.missingBindings ||
+        previous.bindings.hookMask != observed.hookMask ||
+        previous.bindings.lastBlockReason != observed.lastBlockReason;
+    if (!changed && ((configuredFlags & 5U) == 0 ||
+        tickMilliseconds - previous.tickMilliseconds < 5000U)) return;
+    if (::TryAcquireSRWLockExclusive(&m_telemetryLock) == FALSE) return;
+    TelemetryMailbox::GameplayMessage message{previous.sequence + 1U, tickMilliseconds,
+        configuredFlags, inputFlags, observed};
+    m_telemetryMailbox.gameplay = message;
+    m_lastGameplayDiagnostic = message;
+    ::ReleaseSRWLockExclusive(&m_telemetryLock);
+    if (m_telemetryEvent != nullptr) ::SetEvent(m_telemetryEvent);
 }
 
 void AgentRuntime::queueStateChanged(const bool visible, const bool interactive) noexcept

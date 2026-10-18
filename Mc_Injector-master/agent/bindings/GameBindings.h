@@ -13,6 +13,7 @@
 
 #include "BedWarsState.h"
 #include "MappingProvider.h"
+#include "VersionAdapter.h"
 #include "AimControl.h"
 #include "SilentLockCoordinator.h"
 #include "LiveInteractionTransform.h"
@@ -59,6 +60,7 @@ struct EntityMarker final {
     jint entityId = -1;
     float health = 0.0F;
     float maxHealth = 0.0F;
+    float yaw = 0.0F, pitch = 0.0F;
     int hurtTime = -1;
     bool groundKnown = false;
     double distance = 0.0;
@@ -174,6 +176,8 @@ struct GameSnapshot final {
     double z = 0.0;
     AxisAlignedBox bounds{};
     jint loadedEntities = 0;
+    float yaw = 0.0F, pitch = 0.0F;
+    bool entityEnumerationTruncated = false;
     bool singlePlayer = false;
     bool integratedSinglePlayer = false;
     bool hypixelServer = false;
@@ -273,15 +277,44 @@ struct GameplaySettings final {
     int localVelocityVerticalPercent = 100;
 };
 
-// Minecraft 1.8.9-only JNI binding cache. Only jclass global references and
+// Unified game facade with a verified version adapter. Only jclass global references and
 // method/field IDs survive a frame. Minecraft/player/AABB object references
 // are always local to sample() and are discarded before SwapBuffers returns.
 struct BindingLoaderIdentity { std::string anchor, type; unsigned instance = 0; };
+// Observations only. These receipts do not grant feature or Attach readiness.
+enum class GameplayBlockReason : std::uint8_t {
+    None, BindingsUnavailable, UnsupportedVersion, FeatureDisabled, NoJni,
+    NotClientThread, NoPlayer, NoWorld, GameScreen, MouseNotCaptured,
+    NoEligibleItem, NoPlacementTarget, HookUnavailable, JniFailure,
+    ActionHeld, AwaitMovement
+};
+struct GameplayDiagnostics final {
+    // 1 Scaffold, 2 SmartHotbar; 4 means the live optional predicates were
+    // observed by updateGameplay, 8 means core bindings are published.
+    std::uint32_t bindingMask = 0;
+    // Unavailable dependency groups, meaningful only with bindingMask bits 4+8:
+    // 1 input/safewalk, 2 movement, 4 inventory, 8 items, 16 placement,
+    // 32 hotbar keys, 64 sword class, 128 window click. A short-circuited
+    // lookup also leaves null IDs: this does not identify a bad mapped symbol.
+    std::uint32_t missingBindings = 0;
+    // 1 consumed-key hook, 2 item-use hook, 4 movement packet boundary hook.
+    std::uint32_t hookMask = 0;
+    std::uint64_t updateCalls = 0, hotbarCallbacks = 0, hotbarActions = 0;
+    // Counts local JNI operations/results, never server acknowledgment. A normal
+    // fallback slot selection with no eligible mapped item is not a hotbar action.
+    std::uint64_t scaffoldAttempts = 0, scaffoldAccepted = 0;
+    GameplayBlockReason lastBlockReason = GameplayBlockReason::BindingsUnavailable;
+};
 class GameBindings final {
 public:
     using LoaderIdentity = BindingLoaderIdentity;
     GameBindings(JavaVM* vm, jvmtiEnv* jvmti, const std::filesystem::path& mappingPack = {}, std::string_view mappingHash = {}, LoaderIdentity loader = {}) noexcept;
     [[nodiscard]] bool bindingsReady() const noexcept { return m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved; }
+    // API support ceiling; optional live JNI IDs/hook readiness further restrict features.
+    [[nodiscard]] bindings::VersionCapabilities versionCapabilities() const noexcept;
+    // Frame/update owner reads hook state, then copies this value to the runtime
+    // mailbox. Telemetry must not inspect the live hook objects from another thread.
+    [[nodiscard]] GameplayDiagnostics gameplayDiagnostics() const noexcept;
     // Resolver-thread diagnostics; no bytecode/constant-pool retrieval in Agent binding.
     [[nodiscard]] std::uint64_t bindingJvmtiCalls() const noexcept { return m_bindingJvmtiCalls; }
     [[nodiscard]] std::uint64_t bindingJniCalls() const noexcept { return m_bindingJniCalls; }
@@ -374,6 +407,10 @@ private:
     struct BindingCache;
 
     [[nodiscard]] bool resolve(JNIEnv* env) noexcept;
+    [[nodiscard]] bool resolveModernProfile(JNIEnv* env, const MappingProfile& profile,
+                                            jclass minecraft, BindingCache& candidate);
+    [[nodiscard]] const GameSnapshot& sampleModern(JNIEnv* env, std::uint64_t tickMilliseconds) noexcept;
+    [[nodiscard]] bool setModernInputCaptured(JNIEnv* env, bool captured) noexcept;
     [[nodiscard]] bool resolveProfile(JNIEnv* env,
                                       const MappingProfile& profile,
                                       jclass minecraft,
@@ -444,6 +481,10 @@ private:
     bindings::MappingRegistry m_mappingRegistry;
     LoaderIdentity m_bindingLoader;
     std::uint64_t m_bindingJvmtiCalls = 0, m_bindingJniCalls = 0;
+    std::atomic<std::uint32_t> m_gameplayBindingMask{0};
+    std::atomic<std::uint64_t> m_gameplayUpdateCalls{0}, m_hotbarCallbackCount{0},
+        m_hotbarActionCount{0}, m_scaffoldAttemptCount{0}, m_scaffoldAcceptedCount{0};
+    std::atomic<GameplayBlockReason> m_gameplayBlockReason{GameplayBlockReason::BindingsUnavailable};
     std::unique_ptr<BindingCache> m_cache;
 
     enum class ResolutionPhase : std::uint8_t {

@@ -21,11 +21,12 @@ struct TransactionCacheTests {
         QTemporaryDir temp;
         MappingService service;
         service.m_root = temp.path() + "/cache"; service.m_analyzer = worker;
-        service.m_defaultPack = fixture + "/lunar-pack.json"; service.m_contracts = contracts;
+        service.m_defaultPack = service.m_legacyPack = fixture + "/lunar-pack.json"; service.m_contracts = contracts;
         service.m_watchInterval = 20; service.m_maxWatchInterval = 60; service.m_debounceMs = 5;
         MappingProgressController progress;
         QObject::connect(&service, &MappingService::eventReceived, &progress, &MappingProgressController::consume);
-        int ready = 0, failed = 0, autoCalls = 0, hits = 0, promoted = 0;
+        int ready = 0, failed = 0, autoCalls = 0, hits = 0, promoted = 0, opened = 0;
+        QObject::connect(&progress, &MappingProgressController::openRequested, [&] { ++opened; });
         QObject::connect(&service, &MappingService::ready, [&](const auto &, const auto &) { ++ready; });
         QObject::connect(&service, &MappingService::failed, [&](const auto &s) { ++failed; std::printf("FAILURE %s\n", s.toUtf8().constData()); });
         QObject::connect(&service, &MappingService::eventReceived, [&](const QJsonObject &e) {
@@ -45,10 +46,13 @@ struct TransactionCacheTests {
         start();
         check(spin([&] { return ready || failed; }) && ready == 1 && failed == 0 && autoCalls == 1 && promoted == 1,
               "A: cache miss -> real automatic resolver -> real validate -> atomic promote -> ready");
+        check(opened == 1, "A: actual automatic fallback requests the Mapping window once");
         const auto firstIdentity = service.m_mappingIdentity;
+        const auto firstStrongEntry = service.m_hit;
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 2 || failed; }) && ready == 2 && autoCalls == 0 && hits == 1,
               "B: second same-build attach uses scoped real validation with zero automatic resolve calls");
+        check(opened == 1, "B: verified Cache success does not request a Mapping window");
         check(progress.successful() && progress.status().contains("Cache HIT"),
               "B: fresh live validation retains Cache HIT -> Live validation -> Ready presentation");
         check(service.m_transaction->detailCaptureCalls == 0 && !service.m_hit.bindingIdentity.isEmpty(),
@@ -58,6 +62,7 @@ struct TransactionCacheTests {
         autoCalls = 0; hits = 0; start();
         check(spin([&] { return ready == 3 || failed; }) && ready == 3 && autoCalls == 0 && hits == 1 && service.m_mappingIdentity == firstIdentity,
               "C: class count/order/loader instance do not affect reusable mapping identity");
+        check(opened == 1, "C: restarted loader Cache validation remains silent");
         check(service.m_transaction->detailCaptureCalls == 0 && service.m_runtimeBinding.value("instance").toDouble() == 98765,
               "C: restart fast check pins current loader and performs zero detail captures");
         check(!Cache(service.m_root).reference(fileDigest(contracts), "Badlion", "1.8.9").valid(),
@@ -108,17 +113,18 @@ struct TransactionCacheTests {
         check(spin([&] { return service.m_captureSerial > earlySerial; }), "H: early-pause Resume actually starts the next capture");
         service.cancel();
         // Client update that preserves metadata but changes installed constants: reject cached
-        // identity before resolving against a new verified same-family reference.
+        // identity before revalidating a compatible same-family dictionary.
         service.m_root = temp.path() + "/cache";
         qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-raw.json").toUtf8());
         const auto updatedPack = fixture + "/updated-pack.json", updatedReference = fixture + "/updated-reference.json";
         Cache(service.m_root).promote(updatedPack, updatedReference, "updated-source", fileDigest(contracts),
             {{"valid", true}, {"injectionReady", true}, {"fingerprint", "updated-source"}}, "updated-source-id", "different-source-meta", "Lunar", "1.8.9");
         const auto previousReady = ready, previousPromote = promoted; autoCalls = 0; hits = 0; start();
-        check(spin([&] { return ready > previousReady || failed; }) && ready == previousReady + 1 && autoCalls == 1 && promoted == previousPromote + 1 && service.m_mappingIdentity != firstIdentity,
-              "J: cached live structural identity rejected -> automatic resolve -> new atomic promotion");
-        const auto legacySource = service.m_hit;
+        check(spin([&] { return ready > previousReady || failed; }) && ready == previousReady + 1 && autoCalls == 0 && promoted == previousPromote && service.m_mappingIdentity != firstIdentity && service.m_metadataFastPath && service.m_transaction->detailCaptureCalls == 0,
+              "J: stale installed proof -> compatible dictionary revalidated twice without structural migration or promotion");
+        const auto legacySource = firstStrongEntry;
         service.m_root = temp.path() + "/legacy";
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/renamed-raw.json").toUtf8());
         Cache(service.m_root).promote(legacySource.pack, legacySource.snapshot, legacySource.fingerprint, fileDigest(contracts),
             {{"valid", true}, {"injectionReady", true}, {"fingerprint", legacySource.fingerprint}},
             legacySource.mappingIdentity, legacySource.metadataIdentity, legacySource.family, legacySource.minecraftVersion);
@@ -128,6 +134,60 @@ struct TransactionCacheTests {
             !Cache(service.m_root).preferred(fileDigest(contracts)).bindingIdentity.isEmpty(),
             "K: PR #6 verified source upgrades offline, compact live validation, atomic proof publication, zero details");
         check(failed == 0, "all real transaction/cache scenarios complete without unexpected failure");
+        // A transformed client can change installed content without changing any
+        // authored binding. Reject the old cache proof, then independently validate
+        // the authored dictionary and recapture before publishing a new proof.
+        service.m_root = temp.path() + "/authored-drift";
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/lunar-raw.json").toUtf8());
+        const auto authoredReady = ready, beforeAuthoredWindows = opened;
+        start();
+        check(spin([&] { return ready > authoredReady || failed; }) && ready == authoredReady + 1,
+              "M: establish current authored mapping with real validation");
+        check(opened == beforeAuthoredWindows, "M: first authored mapping validation succeeds without Mapping window");
+        check(service.m_transaction->detailCaptureCalls==0 && service.m_metadataFastPath &&
+              !Cache(service.m_root).preferred(fileDigest(contracts)).valid(),
+              "M: authored compact validation is not mislabeled as a structural Cache reference");
+        // Seed a genuine full reference/proof from the prevalidated synthetic
+        // source, not from the metadata-only authored receipt.
+        const auto fullAuthored=readObject(fixture+"/lunar-validation.json");
+        const auto fullIdentity=fullAuthored.value("identity").toObject();
+        Cache(service.m_root).promote(service.m_defaultPack,fixture+"/lunar-reference.json",
+            fullAuthored.value("fingerprint").toString(),fileDigest(contracts),fullAuthored,
+            fullIdentity.value("mappingIdentity").toString(),fullIdentity.value("metadataIdentity").toString(),"Lunar","1.8.9");
+        const auto authoredIdentity = service.m_mappingIdentity;
+        const auto driftReady = ready, driftPromoted = promoted;
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/updated-authored-raw.json").toUtf8());
+        autoCalls = 0; hits = 0; start();
+        check(spin([&] { return ready > driftReady || failed; }) && ready == driftReady + 1 &&
+              promoted == driftPromoted && hits == 0 && autoCalls == 0 &&
+              service.m_mappingIdentity != authoredIdentity && service.m_transaction->detailCaptureCalls == 0 &&
+              !service.m_validation.value("identity").toObject().value("bindingIdentity").toString().isEmpty(),
+              "M: stale Cache -> authored compact installed-code revalidation twice, no structural capture/promotion/migration");
+        check(opened == beforeAuthoredWindows,
+              "M: stale Cache followed by successful authored revalidation never opens automatic Mapping UI");
+        // The same recovery must not grant loading authority for an incorrect
+        // required descriptor, even with a previously verified cache/reference.
+        const auto brokenReady = ready, brokenPromoted = promoted, beforeBrokenWindows = opened;
+        qputenv("ARCVEIL_TRANSACTION_RAW", (fixture + "/broken-required-raw.json").toUtf8());
+        start();
+        check(spin([&] { return (service.m_dynamic && !service.m_process && !service.m_matchingState.isEmpty()) || failed; }) &&
+              !failed && ready == brokenReady && promoted == brokenPromoted && service.busy() &&
+              !service.m_matchingState.value("requiredComplete").toBool() && !service.m_unresolved.isEmpty(),
+              "N: missing required descriptor after cache failure never authorizes ready or promotion");
+        check(opened == beforeBrokenWindows + 1, "N: failed authored mapping opens fallback UI once while preserving pending Attach");
+        service.cancel();
+        // Unsupported API is terminal, even when names/descriptors match a fixture.
+        auto unsupportedPack=readObject(service.m_defaultPack);
+        unsupportedPack["gameVersion"]="1.12.2";
+        service.m_defaultPack=temp.path()+"/unsupported-pack.json";
+        writeObject(service.m_defaultPack,unsupportedPack);
+        qputenv("ARCVEIL_TRANSACTION_VERSION", "1.12.2"); // Explicit synthetic runtime evidence, independent of pack metadata.
+        service.m_root=temp.path()+"/unsupported-cache";
+        const auto unsupportedReady=ready, unsupportedPromoted=promoted;
+        start();
+        check(spin([&]{return failed>0;}) && failed==1 && ready==unsupportedReady && promoted==unsupportedPromoted &&
+              !service.busy() && !service.m_watchTimer.isActive() && service.status().contains("Version Adapter"),
+              "L: unsupported API reports terminal failure, never ready/promote/retry");
         std::printf("Transaction/cache: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }
