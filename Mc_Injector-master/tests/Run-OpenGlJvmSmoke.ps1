@@ -477,6 +477,78 @@ try {
             -Received $received
     } while ($line -cne 'FEATURE_STATE_APPLIED')
 
+    # Owned synthetic JVM only. Config receipts prove the Agent parser accepted
+    # the requested switches; they must remain distinct from optional JNI/hook
+    # observations and actual actions. The interactive GUI keeps gameplay input
+    # closed, so these requests must not fabricate successful gameplay.
+    $diagnosticFeatures = $featureV3Payload.Trim() -split ' '
+    $diagnosticFeatures[24] = '1'
+    $writer.WriteLine('FEATURE_STATE_V3 ' + ($diagnosticFeatures -join ' '))
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'receiving synthetic Scaffold config receipt' `
+            -Received $received
+    } while ($line -cne 'SCAFFOLD_CONFIG_APPLIED 1 1')
+    $writer.WriteLine('SMART_HOTBAR 2147483649')
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'receiving synthetic SmartHotbar config receipt' `
+            -Received $received
+    } while ($line -cne 'SMART_HOTBAR_APPLIED 2147483649')
+    $gameplayDiagnosticFields = $null
+    while ($null -eq $gameplayDiagnosticFields) {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'receiving synthetic gameplay diagnostic' `
+            -Received $received
+        if (-not $line.StartsWith('GAMEPLAY_DIAGNOSTIC ', [System.StringComparison]::Ordinal)) { continue }
+        $parts = $line.Split([char[]] @(' '), [System.StringSplitOptions]::RemoveEmptyEntries)
+        if ($parts.Count -ne 15 -or $parts[1] -cne '1') {
+            throw "Invalid gameplay diagnostic schema: '$line'."
+        }
+        foreach ($index in 2..14) {
+            [UInt64] $parsed = 0
+            if (-not [UInt64]::TryParse($parts[$index], [ref] $parsed)) {
+                throw "Invalid gameplay diagnostic counter: '$line'."
+            }
+        }
+        if ([UInt64] $parts[7] -gt 255) { throw "Invalid missing-bindings group mask: '$line'." }
+        if (([UInt32] $parts[4] -band 5) -eq 5) { $gameplayDiagnosticFields = $parts }
+    }
+    if (([UInt32] $gameplayDiagnosticFields[5] -band 2) -eq 0 -or
+        ([UInt32] $gameplayDiagnosticFields[5] -band 16) -ne 0) {
+        throw 'Synthetic gameplay diagnostic did not distinguish the interactive input guard.'
+    }
+    foreach ($index in 10..13) {
+        if ([UInt64] $gameplayDiagnosticFields[$index] -ne 0) {
+            throw 'Synthetic config receipt fabricated a hook callback or successful gameplay action.'
+        }
+    }
+    $writer.WriteLine('SMART_HOTBAR 0')
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'restoring synthetic SmartHotbar configuration' `
+            -Received $received
+    } while ($line -cne 'SMART_HOTBAR_APPLIED 0')
+    $writer.WriteLine('FEATURE_STATE_V3' + $featureV3Payload)
+    do {
+        $line = Read-ProtocolLine -Reader $reader -Stopwatch $protocolWatch `
+            -LimitSeconds $TimeoutSeconds -Operation 'restoring synthetic Scaffold configuration' `
+            -Received $received
+    } while ($line -cne 'SCAFFOLD_CONFIG_APPLIED 0 1')
+    $scaffoldReceipts = @($received | Where-Object { $_.StartsWith('SCAFFOLD_CONFIG_APPLIED ') })
+    $hotbarReceipts = @($received | Where-Object { $_.StartsWith('SMART_HOTBAR_APPLIED ') })
+    if ($scaffoldReceipts.Count -ne 3 -or $hotbarReceipts.Count -ne 2) {
+        throw 'Unchanged feature/layout snapshots repeated gameplay config diagnostics.'
+    }
+    [UInt64] $previousDiagnosticTick = 0
+    foreach ($observation in @($received | Where-Object { $_.StartsWith('GAMEPLAY_DIAGNOSTIC ') })) {
+        $observedTick = [UInt64] ($observation.Split(' ')[3])
+        if ($previousDiagnosticTick -ne 0 -and ($observedTick - $previousDiagnosticTick) -lt 1000) {
+            throw 'Gameplay diagnostic publication exceeded the one-second observation limit.'
+        }
+        $previousDiagnosticTick = $observedTick
+    }
+
     # The synthetic JVM intentionally has no Minecraft classes, so telemetry
     # must still arrive with valid=0. This checks that mapping failure never
     # suppresses the controller dashboard protocol or blocks the render hook.
@@ -584,6 +656,15 @@ try {
     }
     Write-Host "Target PID: $($targetProcess.Id) (owned smoke harness; no external PID accepted)"
     Write-Host "Threads: HWND=$windowThreadId HGLRC=$renderThreadId mode=$threadMode"
+    Write-Host ("SYNTHETIC_GAMEPLAY_DIAGNOSTICS configAck=true bindingMask=" +
+        $gameplayDiagnosticFields[6] + " optionalPredicatesObserved=" +
+        (([UInt32] $gameplayDiagnosticFields[6] -band 4) -ne 0) + " missingBindings=" +
+        $gameplayDiagnosticFields[7] + " hookMask=" + $gameplayDiagnosticFields[8] +
+        " updateCalls=" + $gameplayDiagnosticFields[9] +
+        " hotbarCallbacks=" + $gameplayDiagnosticFields[10] + " hotbarActions=" +
+        $gameplayDiagnosticFields[11] + " scaffoldAttempts=" + $gameplayDiagnosticFields[12] +
+        " scaffoldAccepted=" + $gameplayDiagnosticFields[13] +
+        " lastBlockReason=" + $gameplayDiagnosticFields[14] + " evidence=owned-synthetic-jvm")
     Write-Host "Protocol: $([string]::Join(' | ', $received))"
 }
 catch {

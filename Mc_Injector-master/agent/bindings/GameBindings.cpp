@@ -28,6 +28,43 @@ bindings::VersionCapabilities GameBindings::versionCapabilities() const noexcept
     return m_cache->adapter->capabilities;
 }
 
+GameplayDiagnostics GameBindings::gameplayDiagnostics() const noexcept
+{
+    GameplayDiagnostics result;
+    result.bindingMask=m_gameplayBindingMask.load(std::memory_order_relaxed) |
+        (bindingsReady()?8U:0U);
+    if((result.bindingMask&12U)==12U && m_cache) {
+        const auto& c=*m_cache;
+        const auto complete=[](const auto& ids) noexcept {
+            return std::all_of(ids.begin(),ids.end(),[](auto id) {return id!=nullptr;});
+        };
+        if(!c.gameSettingsField||!c.keyBindingClass||!c.keyBindSneakField||!c.getKeyCode||
+           !c.setKeyBindState||!c.isAirBlock||!c.mouseSensitivity||!c.rotationYaw||
+           !c.rotationPitch||!c.previousRotationYaw||!c.previousRotationPitch)
+            result.missingBindings|=1U;
+        if(!complete(c.movementKeyFields)||!complete(c.motionFields)||!c.onGround||!c.jump)
+            result.missingBindings|=2U;
+        if(!c.inventoryField||!c.currentItem||!c.mainInventory) result.missingBindings|=4U;
+        if(!c.itemStackClass||!c.itemBlockClass||!c.getItem||!c.getBlockFromItem)
+            result.missingBindings|=8U;
+        if(!c.playerControllerClass||!c.playerControllerField||!c.enumFacingClass||!c.vec3Class||
+           !c.onPlayerRightClick||!c.getIdFromBlock||!c.getFacingByIndex||!c.vec3Constructor||
+           !c.syncCurrentPlayItem) result.missingBindings|=16U;
+        if(!c.keyBindsHotbar||!c.keyBindingIsPressed) result.missingBindings|=32U;
+        if(!c.itemSwordClass) result.missingBindings|=64U;
+        if(!c.windowClick) result.missingBindings|=128U;
+    }
+    result.hookMask=(m_smartHotbarHook.ready()?1U:0U) |
+        (m_itemUseHook.ready()?2U:0U) | (m_silentRotationHook.ready()?4U:0U);
+    result.updateCalls=m_gameplayUpdateCalls.load(std::memory_order_relaxed);
+    result.hotbarCallbacks=m_hotbarCallbackCount.load(std::memory_order_relaxed);
+    result.hotbarActions=m_hotbarActionCount.load(std::memory_order_relaxed);
+    result.scaffoldAttempts=m_scaffoldAttemptCount.load(std::memory_order_relaxed);
+    result.scaffoldAccepted=m_scaffoldAcceptedCount.load(std::memory_order_relaxed);
+    result.lastBlockReason=m_gameplayBlockReason.load(std::memory_order_relaxed);
+    return result;
+}
+
 GameBindings::GameBindings(JavaVM* const vm, jvmtiEnv* const jvmti, const std::filesystem::path& mappingPack, std::string_view mappingHash, LoaderIdentity loader) noexcept
     : m_vm(vm), m_jvmti(jvmti), m_mappingRegistry(mappingPack, mappingHash), m_bindingLoader(std::move(loader))
 {

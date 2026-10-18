@@ -38,7 +38,7 @@ try:
     assert process.stdout.readline().strip()=='FIXTURE_READY'
     snapshot=folder/'installed.jsonl'
     installed_capture=run(['inspect','--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
-         '--probe',build/'tools/MappingProbe-v16.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
+         '--probe',build/'tools/MappingProbe-v17.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
          '--pack',pack,'--contracts',contracts,'--out',snapshot])
     requests=[json.loads(line) for line in installed_capture.stdout.splitlines()
               if json.loads(line).get('event')=='CAPTURE_REQUEST']
@@ -47,11 +47,13 @@ try:
     # observed runtime identity without adding those fixed anchors to its scope.
     assert requests[-1]['runtimeAnchorCount']==4;checks+=1
     captured,selected,chunks=set(),set(),{}
+    captured_process_start=None
     for line in snapshot.read_text().splitlines()[1:]:
         frame=json.loads(line);key=(frame['kind'],frame['index'])
         chunks[key]=chunks.get(key,'')+frame['data']
         if frame['last']:
             value=json.loads(chunks.pop(key))
+            if 'processStart' in value:captured_process_start=value['processStart']
             if frame['kind']=='class':captured.add(value['name'])
             elif 'captureScope' in value:selected={item['name'] for item in value['captureScope']['classes']}
     assert captured and captured==selected;checks+=1
@@ -61,11 +63,39 @@ try:
     assert receipt['injectionReady'] and receipt['identity']['bindingIdentity'] and receipt['identity']['runtimeBinding']['instance'];checks+=1
     assert receipt['identity']['versionVerified'] and receipt['identity']['minecraftVersion']=='1.20.1';checks+=1
     assert receipt['identity']['family']=='Vanilla';checks+=1
+    # A complete, successfully transported capture may contain none of a scoped
+    # authored candidate's classes. This is a candidate miss, not broken Attach
+    # transport or a zero-byte size failure, and must not retry NativeLoader.
+    legacy_candidate=copy.deepcopy(read(root/'mapping/packs/default-v2.json'))
+    vanilla_provider=next(provider for provider in legacy_candidate['providers'] if provider['family']=='Vanilla')
+    vanilla_provider['dictionaries']=[next(dictionary for dictionary in vanilla_provider['dictionaries']
+                                             if dictionary['id']=='minecraft-1.8.9-vanilla-notch')]
+    legacy_candidate['providers']=[vanilla_provider]
+    pin=receipt['identity']['runtimeBinding']
+    miss=run(['inspect','--lite','--required-only','--binding-check','--capture-tier','modded-validation',
+         '--pid',process.pid,'--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar',
+         '--probe',build/'tools/MappingProbe-v17.dll','--native-loader',build/'tools/McOverlayNativeLoader.exe',
+         '--runtime-anchor',pin['anchor'],'--runtime-loader-type',pin['type'],
+         '--runtime-loader-instance',int(pin['instance']),'--pack',write('absent-legacy-candidate.json',legacy_candidate),
+         '--contracts',contracts,'--out',folder/'absent-candidate.jsonl'],6)
+    miss_events=[json.loads(line) for line in miss.stdout.splitlines()]
+    miss_failures=[event for event in miss_events if event.get('event')=='failure']
+    assert len(miss_failures)==1 and miss_failures[0]['failureType']=='candidate-scope-unavailable';checks+=1
+    assert miss_failures[0]['pid']==process.pid and captured_process_start and \
+           miss_failures[0]['processStart']==captured_process_start;checks+=1
+    miss_requests=[event for event in miss_events if event.get('event')=='CAPTURE_REQUEST']
+    miss_stats=[event for event in miss_events if event.get('event')=='SNAPSHOT_STATS']
+    assert len(miss_requests)==1 and miss_requests[0]['transport']=='StandardAttach';checks+=1
+    assert len(miss_stats)==1 and miss_stats[0]['capturedClassCount']==0 and \
+           miss_stats[0]['jvmtiBytecodeBytes']==0 and miss_stats[0]['jvmtiConstantPoolBytes']==0;checks+=1
+    miss_paths=[event for event in miss_events if event.get('event')=='CAPTURE_PATH']
+    assert miss_paths[-1]['standardAttach']['status']=='candidate-scope-unavailable' and \
+           miss_paths[-1]['fallback']['status']=='not-attempted';checks+=1
     # Positively identified Vanilla uses exact authored metadata without installed
     # bytecode capture, structural resolution, or structural-cache authorization.
     metadata=folder/'authored-metadata.jsonl'
     capture=run(['inspect','--lite','--required-only','--identity-lite','--pid',process.pid,
-         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v16.dll',
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v17.dll',
          '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',metadata])
     stats=[json.loads(line) for line in capture.stdout.splitlines() if json.loads(line).get('event')=='SNAPSHOT_STATS']
     assert stats and all(event['jvmtiBytecodeBytes']==0 and event['jvmtiConstantPoolBytes']==0 for event in stats);checks+=1
@@ -77,7 +107,7 @@ try:
     # A cache proof never replaces a fresh compact capture from this JVM.
     compact=folder/'compact.jsonl'
     run(['inspect','--lite','--binding-check','--required-only','--identity-lite','--pid',process.pid,
-         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v16.dll',
+         '--java',java,'--helper',build/'tools/McOverlayAttachHelper.jar','--probe',build/'tools/MappingProbe-v17.dll',
          '--native-loader',build/'tools/McOverlayNativeLoader.exe','--pack',pack,'--contracts',contracts,'--out',compact])
     run(['validate-cache','--pack',pack,'--snapshot',compact,'--contracts',contracts,
          '--binding-identity',receipt['identity']['bindingIdentity'],'--out',folder/'cached.json'])

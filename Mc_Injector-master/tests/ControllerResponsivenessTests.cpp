@@ -21,6 +21,61 @@ struct ControllerResponsivenessTests {
             guarded.m_agentTransactionId = owner->transactionId;
             guarded.m_authenticated = true;
             guarded.setState(OverlayManager::State::WaitingForAgent);
+            int diagnostics = 0;
+            QJsonObject lastDiagnostic;
+            QObject::connect(&guarded, &OverlayManager::agentGameplayDiagnostic,
+                [&](const QJsonObject &value) { ++diagnostics; lastDiagnostic = value; });
+            guarded.m_authenticated = false;
+            guarded.processAgentLine("SCAFFOLD_CONFIG_APPLIED 1 1");
+            guarded.processAgentLine("SMART_HOTBAR_APPLIED 2147483649");
+            if (diagnostics != 0) { std::puts("FAIL unauthenticated gameplay diagnostic"); return false; }
+            guarded.m_authenticated = true;
+            const auto previousScaffold = guarded.m_scaffoldEnabled;
+            const auto previousHotbar = guarded.m_smartHotbarConfig;
+            guarded.processAgentLine("SCAFFOLD_CONFIG_APPLIED 1 1");
+            guarded.processAgentLine("SMART_HOTBAR_APPLIED 2147483649");
+            if (diagnostics != 2 || lastDiagnostic.value("packed").toInteger() != 2147483649LL ||
+                guarded.m_scaffoldEnabled != previousScaffold || guarded.m_smartHotbarConfig != previousHotbar ||
+                guarded.state() != OverlayManager::State::WaitingForAgent || guarded.m_runtimeBindingsReady) {
+                std::puts("FAIL configuration receipt became settings or Ready authority"); return false;
+            }
+            guarded.processAgentLine("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 25 15 0 7 9 2 1 3 1 0");
+            if (diagnostics != 3 || lastDiagnostic.value("bindingMask").toInt() != 15 ||
+                lastDiagnostic.value("missingBindings").toInt(-1) != 0 ||
+                lastDiagnostic.value("hotbarCallbacks").toString() != "2" ||
+                lastDiagnostic.value("scaffoldAccepted").toString() != "1" || guarded.m_runtimeBindingsReady ||
+                guarded.state() != OverlayManager::State::WaitingForAgent) {
+                std::puts("FAIL runtime diagnostic conflated hook/action data or Ready"); return false;
+            }
+            for (const auto &invalid : {
+                QByteArray("SCAFFOLD_CONFIG_APPLIED 2 1"), QByteArray("SCAFFOLD_CONFIG_APPLIED 1 1 extra"),
+                QByteArray("SMART_HOTBAR_APPLIED 4294967296"), QByteArray("SMART_HOTBAR_APPLIED 2147483663"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 2 1 5000 7 25 15 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 0 5000 7 25 15 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 8 25 15 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 64 15 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 25 4294967296 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 25 15 256 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 +1 5000 7 25 15 0 7 9 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 25 15 0 7 -1 2 1 3 1 0"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 1 5000 7 25 15 0 7 9 2 1 3 1 256"),
+                QByteArray("GAMEPLAY_DIAGNOSTIC 1 ") + QByteArray(1100, '1')})
+                guarded.processAgentLine(invalid);
+            if (diagnostics != 3) { std::puts("FAIL malformed gameplay diagnostic accepted"); return false; }
+            // uint64 counters survive the JSON diagnostic signal without double rounding.
+            guarded.processAgentLine("GAMEPLAY_DIAGNOSTIC 1 2 5001 0 0 12 255 0 18446744073709551615 0 0 0 0 1");
+            if (diagnostics != 4 || lastDiagnostic.value("missingBindings").toInt() != 255 ||
+                lastDiagnostic.value("updateCalls").toString() != "18446744073709551615") {
+                std::puts("FAIL gameplay uint64 diagnostic rounded"); return false;
+            }
+            const auto currentAgentOwner = guarded.m_agentTransactionId;
+            guarded.m_agentTransactionId = "old-owner";
+            guarded.processAgentLine("SCAFFOLD_CONFIG_APPLIED 1 1");
+            guarded.m_agentTransactionId = currentAgentOwner;
+            if (diagnostics != 4 || lastDiagnostic.value("transactionId").toString() != owner->transactionId ||
+                lastDiagnostic.value("pid").toInteger() != owner->pid) {
+                std::puts("FAIL stale-owner gameplay diagnostic"); return false;
+            }
             guarded.processAgentLine("RENDERER_READY OpenGL");
             if (guarded.state() == OverlayManager::State::Active || guarded.statusMessage().contains("is active")) {
                 std::puts("FAIL renderer authorized an unbound mapping"); return false;

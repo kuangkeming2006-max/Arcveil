@@ -237,3 +237,15 @@ transaction-owned Verified Runtime Context before normal Agent loading.
 Agent control IPC, game-module dependency or JNI ownership boundary is introduced.
 See [mapping-pipeline](modules/mapping-pipeline.md) and
 [Snapshot review](V56_9_2_SNAPSHOT_REVIEW.md).
+
+## v56.9.3 gameplay diagnosis boundary
+
+Agent-runtime reads the public, value-only
+`GameBindings::gameplayDiagnostics()` facade; it does not inspect BindingCache or
+infer optional JNI/hook/action readiness from UI toggles. The frame publishes a
+bounded observation in the existing telemetry mailbox. Telemetry sends optional
+protocol-1 receipts; Controller authenticates and bounds them before logging and
+emitting `agentGameplayDiagnostic(QJsonObject)`. This is an observation edge,
+also persisted through MappingService's current-owner transaction event log,
+with no path to settings, capability overrides, or Attach Ready authorization.
+See [agent-runtime](modules/agent-runtime.md) and [ipc](modules/ipc.md).

@@ -111,31 +111,54 @@ bool semanticVersion(const std::string &text) {
     }
     return parts == 3 && digits;
 }
-jclass evidenceClass(JNIEnv *env, jvmtiEnv *ti, jobject loader, const char *name) {
+std::string evidenceExceptionType(JNIEnv *env) {
+    if (!env->ExceptionCheck()) return {};
+    auto error=env->ExceptionOccurred(); env->ExceptionClear();
+    auto type=env->GetObjectClass(error), classType=env->FindClass("java/lang/Class");
+    auto getName=classType?env->GetMethodID(classType,"getName","()Ljava/lang/String;"):nullptr;
+    std::string result="JNI exception";
+    if (!evidenceException(env) && getName) {
+        auto name=static_cast<jstring>(env->CallObjectMethod(type,getName));
+        if (!evidenceException(env)) result=evidenceString(env,name,128);
+        if(name)env->DeleteLocalRef(name);
+    }
+    if(type)env->DeleteLocalRef(type); if(classType)env->DeleteLocalRef(classType); if(error)env->DeleteLocalRef(error);
+    return result;
+}
+jclass evidenceClass(JNIEnv *env, jvmtiEnv *ti, jobject loader, const char *name,
+                     std::string *diagnostic=nullptr) {
+    const auto failed=[&](std::string reason)->jclass {
+        const auto error=evidenceExceptionType(env); if(!error.empty())reason+="; "+error;
+        if(diagnostic)*diagnostic=std::move(reason); return nullptr;
+    };
     auto type = env->FindClass("java/lang/Class");
     auto load = type ? env->GetStaticMethodID(type, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;") : nullptr;
-    if (evidenceException(env) || !load) return nullptr;
+    if (env->ExceptionCheck() || !load) return failed("Class.forName unavailable");
     auto text = env->NewStringUTF(name);
-    if (evidenceException(env) || !text) return nullptr;
+    if (env->ExceptionCheck() || !text) return failed("class name allocation failed");
     auto klass = static_cast<jclass>(env->CallStaticObjectMethod(type, load, text, JNI_FALSE, loader));
-    if (evidenceException(env) || !klass) return nullptr;
+    if (env->ExceptionCheck() || !klass) return failed(std::string("class not resolvable: ")+name);
     jobject defining = nullptr;
     countCall("GetClassLoader:runtime-evidence");
-    if (ti->GetClassLoader(klass, &defining) != JVMTI_ERROR_NONE || !defining || !env->IsSameObject(loader, defining)) return nullptr;
+    const auto result=ti->GetClassLoader(klass, &defining);
+    if (result!=JVMTI_ERROR_NONE) return failed("defining loader lookup failed: "+std::to_string(result));
+    if (!defining || !env->IsSameObject(loader, defining)) return failed("resolved class belongs to a different defining loader");
     return klass;
 }
 struct VersionResource {
     std::string version, diagnostic;
+    std::string observed;
     bool operator==(const VersionResource &) const = default;
 };
 VersionResource resourceVersion(JNIEnv *env, jobject loader) {
     EvidenceFrame frame(env);
     auto type = env->FindClass("java/lang/ClassLoader");
     auto open = type ? env->GetMethodID(type, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;") : nullptr;
-    if (evidenceException(env) || !open) return {};
+    if (env->ExceptionCheck() || !open) return {{}, "version.json resource API unavailable; "+evidenceExceptionType(env)};
     auto name = env->NewStringUTF("version.json");
     auto input = name ? env->CallObjectMethod(loader, open, name) : nullptr;
-    if (evidenceException(env) || !input) return {};
+    if (env->ExceptionCheck()) return {{}, "version.json resource lookup threw; "+evidenceExceptionType(env)};
+    if (!input) return {{}, "version.json resource not visible to anchor loader"};
     auto inputType = env->FindClass("java/io/InputStream");
     auto read = inputType ? env->GetMethodID(inputType, "read", "([B)I") : nullptr;
     auto close = inputType ? env->GetMethodID(inputType, "close", "()V") : nullptr;
@@ -156,21 +179,55 @@ VersionResource resourceVersion(JNIEnv *env, jobject loader) {
     if (evidenceException(env) || !valid || !eof) return {{}, "runtime version resource unreadable or exceeds 65536 bytes"};
     try {
         const auto json = Json::parse(content); const auto id = json.at("id").string();
-        return semanticVersion(id) ? VersionResource{id, {}} : VersionResource{{}, "unsupported runtime version resource id"};
+        return semanticVersion(id) ? VersionResource{id, {}, id} : VersionResource{{}, "unsupported runtime version resource id",id.substr(0,64)};
     } catch (...) { return {{}, "malformed runtime version resource"}; }
 }
-std::string legacyRuntimeVersion(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+VersionResource legacyRuntimeVersion(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
     EvidenceFrame frame(env);
-    auto klass = evidenceClass(env, ti, loader, "net.minecraft.realms.RealmsSharedConstants");
-    if (!klass) return {};
+    std::string reason;
+    auto klass = evidenceClass(env, ti, loader, "net.minecraft.realms.RealmsSharedConstants",&reason);
+    if (!klass) return {{},reason};
     const auto field = env->GetStaticFieldID(klass, "VERSION_STRING", "Ljava/lang/String;");
-    if (evidenceException(env) || !field) return {};
+    if (env->ExceptionCheck() || !field) return {{},"VERSION_STRING:Ljava/lang/String; unavailable; "+evidenceExceptionType(env)};
     auto value = static_cast<jstring>(env->GetStaticObjectField(klass, field));
-    if (evidenceException(env)) return {};
+    if (env->ExceptionCheck()) return {{},"VERSION_STRING read/initialization failed; "+evidenceExceptionType(env)};
+    if(!value) return {{},"VERSION_STRING is null"};
     const auto text = evidenceString(env, value, 32);
-    return semanticVersion(text) ? text : "";
+    return semanticVersion(text) ? VersionResource{text,{},text} : VersionResource{{},"VERSION_STRING is not an exact semantic version",text};
 }
-std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+// Bounded independent semantic witness for a modified legacy constants holder.
+// No field name is inferred for GameBindings. Protocol/tick fields and the exact
+// version value belong to the audited game class in the pinned anchor loader.
+VersionResource legacyCandidateVersion(JNIEnv *env,jvmtiEnv *ti,jobject loader,const Json *candidates) {
+    if(!candidates || std::none_of(candidates->array().begin(),candidates->array().end(),
+        [](const Json& value){return value.string()=="1.8.9";})) return {{},"no audited legacy candidate requested"};
+    EvidenceFrame frame(env); std::string reason;
+    auto klass=evidenceClass(env,ti,loader,"net.minecraft.realms.RealmsSharedConstants",&reason);
+    if(!klass)return {{},reason};
+    const auto protocol=env->GetStaticFieldID(klass,"NETWORK_PROTOCOL_VERSION","I");
+    if(env->ExceptionCheck() || !protocol)return {{},"legacy protocol discriminator unavailable; "+evidenceExceptionType(env)};
+    const auto ticks=env->GetStaticFieldID(klass,"TICKS_PER_SECOND","I");
+    if(env->ExceptionCheck() || !ticks)return {{},"legacy tick discriminator unavailable; "+evidenceExceptionType(env)};
+    const auto p=env->GetStaticIntField(klass,protocol),t=env->GetStaticIntField(klass,ticks);
+    if(evidenceException(env) || p!=47 || t!=20)return {{},"legacy protocol/tick discriminators do not match audited 1.8.9 structure"};
+    jint count=0;Buffer<jfieldID> fields{ti};
+    const auto result=ti->GetClassFields(klass,&count,&fields.data);countCall("GetClassFields:version-candidate");
+    if(result!=JVMTI_ERROR_NONE || count>32)return {{},"legacy candidate field inventory unavailable or exceeds 32"};
+    std::set<std::string> versions;
+    for(int i=0;i<count;++i) {
+        Buffer<char> name{ti},descriptor{ti};jint modifiers=0;
+        require(ti->GetFieldName(klass,fields.data[i],&name.data,&descriptor.data,nullptr),"GetFieldName:version-candidate");
+        require(ti->GetFieldModifiers(klass,fields.data[i],&modifiers),"GetFieldModifiers:version-candidate");
+        if(!(modifiers&8) || !descriptor.data || std::string(descriptor.data)!="Ljava/lang/String;")continue;
+        auto value=static_cast<jstring>(env->GetStaticObjectField(klass,fields.data[i]));
+        if(env->ExceptionCheck())return {{},"legacy candidate static field read failed; "+evidenceExceptionType(env)};
+        const auto text=evidenceString(env,value,32);if(value)env->DeleteLocalRef(value);
+        if(semanticVersion(text))versions.insert(text);
+    }
+    if(versions.size()!=1 || *versions.begin()!="1.8.9")return {{},"legacy candidate has no unique exact 1.8.9 version value"};
+    return {"1.8.9",{},"protocol=47;ticks=20;unique-version=1.8.9"};
+}
+std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader,std::string *observed=nullptr) {
     EvidenceFrame frame(env);
     auto klass = evidenceClass(env, ti, loader, "net.minecraft.client.ClientBrandRetriever");
     if (!klass) return {};
@@ -179,6 +236,7 @@ std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
     auto value = static_cast<jstring>(env->CallStaticObjectMethod(klass, getter));
     if (evidenceException(env)) return {};
     auto text = evidenceString(env, value, 64);
+    if(observed)*observed=text;
     // Audited Forge 1.8.9 FMLCommonHandler.getModName(): Joiner.on(',')
     // joins the canonical fml + forge tokens. Do not accept arbitrary comma lists.
     std::transform(text.begin(),text.end(),text.begin(),[](unsigned char ch){return char(std::tolower(ch));});
@@ -190,12 +248,19 @@ std::string runtimeBrand(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
     }
     return text;
 }
-Json readRuntimeEvidence(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
+Json readRuntimeEvidence(JNIEnv *env, jvmtiEnv *ti, jobject loader,const Json *candidates=nullptr) {
     const auto resource = resourceVersion(env, loader);
-    const auto legacy = legacyRuntimeVersion(env, ti, loader), brand = runtimeBrand(env, ti, loader);
-    if (resource != resourceVersion(env, loader) || legacy != legacyRuntimeVersion(env, ti, loader) || brand != runtimeBrand(env, ti, loader))
+    const auto legacy = legacyRuntimeVersion(env, ti, loader);
+    std::string observedBrand,checkedBrand;
+    const auto brand = runtimeBrand(env, ti, loader,&observedBrand);
+    const auto structural=legacy.version.empty() && candidates?legacyCandidateVersion(env,ti,loader,candidates):VersionResource{};
+    if (resource != resourceVersion(env, loader) || legacy != legacyRuntimeVersion(env, ti, loader) ||
+        brand != runtimeBrand(env, ti, loader,&checkedBrand) || observedBrand!=checkedBrand)
         throw RuntimeChanged("runtime version/brand evidence changed during capture");
+    if(candidates && legacy.version.empty() && structural!=legacyCandidateVersion(env,ti,loader,candidates))
+        throw RuntimeChanged("candidate version evidence changed during capture");
     Json result = Json::Object{{"evidenceVersion", 1}, {"version", ""}, {"versionSource", ""}, {"brand", brand},
+        {"brandObserved",observedBrand},
         {"brandSource", brand.empty() ? "" : "ClientBrandRetriever.getClientModName"}};
     bool resourceWitness=false;
     {
@@ -203,15 +268,26 @@ Json readRuntimeEvidence(JNIEnv *env, jvmtiEnv *ti, jobject loader) {
         resourceWitness=evidenceClass(env,ti,loader,"net.minecraft.client.ClientBrandRetriever") ||
             evidenceClass(env,ti,loader,"net.minecraft.client.main.Main");
     }
-    if (!resource.diagnostic.empty()) result["diagnostic"] = resource.diagnostic;
-    else if (!resource.version.empty() && legacy.empty() && !resourceWitness)
-        result["diagnostic"] = "version resource has no independent game witness in anchor defining loader";
-    else if (!resource.version.empty() && !legacy.empty() && resource.version != legacy)
+    const auto attempt=[](const char *source,const VersionResource& value) {
+        return Json::Object{{"source",source},{"status",value.version.empty()?"unavailable":"verified-value"},
+            {"value",value.version},{"observed",value.observed},{"reason",value.diagnostic}};
+    };
+    Json::Array attempts{attempt("loader-version-json",resource),attempt("realms-shared-constants",legacy)};
+    if(candidates)attempts.push_back(attempt("realms-semantic-candidate",structural));
+    result["attempts"]=attempts;
+    const auto independent=legacy.version.empty()?structural.version:legacy.version;
+    if (!resource.version.empty() && !independent.empty() && resource.version != independent)
         result["diagnostic"] = "conflicting runtime version evidence";
-    else if (!resource.version.empty() || !legacy.empty()) {
-        result["version"] = resource.version.empty() ? legacy : resource.version;
-        result["versionSource"] = resource.version.empty() ? "realms-shared-constants" : "loader-version-json";
-    } else result["diagnostic"] = "independent runtime version evidence unavailable";
+    else if (!independent.empty()) {
+        result["version"]=independent;
+        result["versionSource"]=legacy.version.empty()?"realms-semantic-candidate":"realms-shared-constants";
+        if(!resource.diagnostic.empty())result["diagnostic"]="unusable version.json ignored; "+resource.diagnostic;
+    } else if (!resource.version.empty() && !resourceWitness)
+        result["diagnostic"] = "version resource has no independent game witness in anchor defining loader";
+    else if (!resource.version.empty()) {
+        result["version"] = resource.version;result["versionSource"]="loader-version-json";
+    } else result["diagnostic"] = "independent runtime version evidence unavailable; resource: "+resource.diagnostic+"; legacy: "+legacy.diagnostic+
+        (candidates?"; candidate: "+structural.diagnostic:"");
     return result;
 }
 struct Capture {
@@ -228,6 +304,7 @@ struct Capture {
     bool detectionOnly = false;
     const Json *runtimeLoader = nullptr;
     std::map<int, bool> loaderMatches;
+    const Json *versionCandidates = nullptr;
     bool acceptsLoader(jclass klass) {
         if (!runtimeLoader) return true;
         const auto id=loaderId(klass);
@@ -503,7 +580,7 @@ struct Capture {
             if (runtimeAnchors && std::any_of(runtimeAnchors->array().begin(), runtimeAnchors->array().end(),
                     [&](const Json &anchor) { return anchor.string() == name; })) {
                 const auto id = loaderId(classes.data[i]);
-                if (!loaderEvidence.contains(id)) loaderEvidence.emplace(id, readRuntimeEvidence(env, ti, loaders.at(std::size_t(id - 1))));
+                if (!loaderEvidence.contains(id)) loaderEvidence.emplace(id, readRuntimeEvidence(env, ti, loaders.at(std::size_t(id - 1)),versionCandidates));
                 auto receipt = loaderEvidence.at(id); receipt["anchor"] = name; receipt["loader"] = id;
                 runtimeEvidence.push_back(std::move(receipt));
             }
@@ -685,6 +762,14 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         const auto tier=request.contains("captureTier")?request.at("captureTier").string():"structural";
         const bool detection=tier=="detection";
         stats["captureTier"]=tier; stats["requestBytes"]=double(request.dump().size());
+        stats["versionEvidenceStage"]=request.contains("versionCandidates")?"candidate":"initial";
+        if(request.contains("versionCandidates")) {
+            const auto& candidates=request.at("versionCandidates").array();
+            if(candidates.empty() || candidates.size()>2 || !request.contains("runtimeLoader"))
+                throw std::runtime_error("candidate evidence scope requires 1-2 versions and a pinned loader");
+            for(const auto& candidate:candidates)if(candidate.string()!="1.8.9" && candidate.string()!="1.20.1")
+                throw std::runtime_error("unaudited candidate version evidence request");
+        }
         stats["requestedClassCount"]=request.contains("liteClasses")?double(request.at("liteClasses").array().size()):0.;
         stats["runtimeAnchorCount"]=request.contains("runtimeAnchors")?double(request.at("runtimeAnchors").array().size()):0.;
         stats["warmupClassCount"]=0;
@@ -743,6 +828,7 @@ extern "C" __declspec(dllexport) jint JNICALL Agent_OnAttach(JavaVM *vm, char *o
         Json snapshot;
         {
             Capture capture{env, ti, {}, lite, &stats, &stream, detail ? &selected : nullptr, &request, request.contains("bindingCheck"), request.contains("runtimeAnchors") ? &request.at("runtimeAnchors") : nullptr, detection, request.contains("runtimeLoader") ? &request.at("runtimeLoader") : nullptr, {}};
+            capture.versionCandidates=request.contains("versionCandidates")?&request.at("versionCandidates"):nullptr;
             stats["compactBindingCheck"] = capture.bindingCheck;
             if (request.contains("warmup")) {
                 progress(path, "authored-class-warmup");

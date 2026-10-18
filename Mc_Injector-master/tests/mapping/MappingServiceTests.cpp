@@ -5,6 +5,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QTemporaryDir>
@@ -20,6 +21,31 @@ struct MappingServiceTests {
             }
         };
         QTemporaryDir dir;
+        {
+            MappingService diagnostics;
+            diagnostics.m_transaction = std::make_shared<AttachTransaction>();
+            diagnostics.m_pid = diagnostics.m_transaction->pid = quint32(QCoreApplication::applicationPid());
+            diagnostics.m_start = diagnostics.m_transaction->processStart = MappingService::processStartFor(diagnostics.m_pid);
+            diagnostics.m_run = dir.path() + "/diagnostics";
+            QDir().mkpath(diagnostics.m_run);
+            int recorded=0;
+            QObject::connect(&diagnostics,&MappingService::eventReceived,[&](const auto &e){
+                if(e.value("event")=="AGENT_GAMEPLAY_DIAGNOSTIC") ++recorded;
+            });
+            QJsonObject receipt{{"transactionId",diagnostics.transactionId()},{"pid",qint64(diagnostics.m_pid)},
+                {"kind","runtime"},{"updateCalls","18446744073709551615"}};
+            diagnostics.recordGameplayDiagnostic(receipt);
+            QFile persisted(diagnostics.logPath()); persisted.open(QIODevice::ReadOnly);
+            const auto row=QJsonDocument::fromJson(persisted.readLine()).object();
+            check(recorded==1 && row.value("diagnostic").toObject()==receipt &&
+                row.value("transactionId")==diagnostics.transactionId(),"gameplay receipt persists under its current transaction without uint64 rounding");
+            receipt["transactionId"]="old-owner";diagnostics.recordGameplayDiagnostic(receipt);
+            receipt["transactionId"]=diagnostics.transactionId();receipt["pid"]=qint64(diagnostics.m_pid)+1;diagnostics.recordGameplayDiagnostic(receipt);
+            receipt["pid"]=qint64(diagnostics.m_pid);receipt["oversize"]=QString(2049,'x');diagnostics.recordGameplayDiagnostic(receipt);
+            check(recorded==1,"stale, foreign-process and oversized diagnostic persistence is refused");
+            receipt.remove("oversize");diagnostics.m_transaction->valid=false;diagnostics.recordGameplayDiagnostic(receipt);
+            check(recorded==1,"invalid transaction cannot persist gameplay receipts");
+        }
         MappingService service;
         // Versioned contract packaging must preserve the v56.8 cache domain,
         // while a changed sub-contract must invalidate the previous proof.
@@ -43,13 +69,14 @@ struct MappingServiceTests {
         MappingProgressController progress;
         QObject::connect(&service,&MappingService::eventReceived,&progress,&MappingProgressController::consume);
         bool prematureMatch=false;
-        int windows=0, automatic=0, structural=0;
+        int windows=0, automatic=0, structural=0,versionRecoveries=0;
         QStringList captureTiers;
         bool validationScoped=true;
         QObject::connect(&progress,&MappingProgressController::openRequested,[&]{++windows;});
         QObject::connect(&service,&MappingService::eventReceived,[&](const QJsonObject &e){
             if(e.value("event")=="symbol-matched" && service.busy()) prematureMatch=true;
             automatic += e.value("event")=="AUTO_RESOLVE";
+            versionRecoveries += e.value("event")=="VERSION_EVIDENCE_RECOVERY";
             if(e.value("event")=="CAPTURE_REQUEST") {
                 const auto tier=e.value("captureTier").toString(); captureTiers.append(tier);
                 structural += tier=="structural";
@@ -199,6 +226,24 @@ struct MappingServiceTests {
         check(wait() && ready == 6 && failed == 6 && windows == finalMismatchWindows+1 &&
               automatic == priorAutomatic && !service.m_watchTimer.isActive(),
               "Mock Vanilla final independent descriptor mismatch diagnoses once and never authorizes Ready/resolver");
+        const auto recoveryWindows=windows,recoveryStructural=structural;
+        qputenv("ARCVEIL_MAPPING_TEST_MODE", "recover-version");start();
+        check(wait() && ready==7 && failed==6 && versionRecoveries==1 && windows==recoveryWindows &&
+              automatic==priorAutomatic && structural==recoveryStructural && service.m_versionEvidenceTried &&
+              service.m_transaction->verifiedRuntimeContext.value("versionVerified").toBool(),
+              "Mock missing modified-client version permits one bounded proof capture then silent authored validation twice");
+        for(const auto* mode:{"recover-version-missing","recover-version-wrong-loader","recover-version-wrong-family","recover-version-wrong-version"}) {
+            const auto beforeFailed=failed,beforeRecoveries=versionRecoveries;
+            qputenv("ARCVEIL_MAPPING_TEST_MODE",mode);start();
+            check(wait() && ready==7 && failed==beforeFailed+1 && versionRecoveries==beforeRecoveries+1 &&
+                  automatic==priorAutomatic && structural==recoveryStructural && !service.m_watchTimer.isActive(),
+                  "Mock bounded version proof failure/conflict never grants Ready, loops, resolves or changes loader/family/version");
+        }
+        const auto beforeEmptyReady=ready,beforeEmptyFailed=failed;
+        qputenv("ARCVEIL_MAPPING_TEST_MODE","empty-authored-candidate");start();
+        check(wait() && ready==beforeEmptyReady+1 && failed==beforeEmptyFailed && service.m_authoredCandidateIndex>0 &&
+              windows==recoveryWindows && automatic==priorAutomatic && structural==recoveryStructural,
+              "Mock empty authored namespace scope advances to the next trusted dictionary, not a transport failure/resolver/Ready bypass");
         std::printf("MappingService: %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }

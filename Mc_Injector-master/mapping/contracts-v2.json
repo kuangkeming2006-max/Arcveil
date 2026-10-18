@@ -3,6 +3,7 @@
   "versions": {
     "1.8.9": {
       "contractVersion": 1,
+      "authoredMappingAuditRevision": "v56.9.3-official-1.8.9-sync",
       "symbols": {
         "minecraftName": {
           "kind": "class",

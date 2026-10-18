@@ -242,6 +242,10 @@ int main(int argc, char **argv) {
             throw std::runtime_error("unsupported command");
         event("complete", Json::Object{{"success", true}, {"command", command.toStdString()}});
         return 0;
+    } catch (const CaptureScopeUnavailable &e) {
+        event("failure",Json::Object{{"reason",e.what()},{"failureType","candidate-scope-unavailable"},
+            {"pid",double(e.pid)},{"processStart",e.processStart},{"retryable",false}});
+        return 6;
     } catch (const RuntimeChanged &e) {
         event("failure",Json::Object{{"reason",e.what()},{"retryable",true},{"failureType","runtime-drift"}});
         return 5;

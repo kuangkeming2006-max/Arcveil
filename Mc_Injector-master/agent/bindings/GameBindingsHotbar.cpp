@@ -69,21 +69,27 @@ bool GameBindings::onItemUse(JNIEnv* env,jobject minecraft,const bool entering) 
 
 bool GameBindings::consumeSmartHotbarPress(JNIEnv* env,jobject binding) noexcept
 {
+    m_hotbarCallbackCount.fetch_add(1,std::memory_order_relaxed);
+    const auto observe=[this](GameplayBlockReason reason) noexcept {m_gameplayBlockReason.store(reason,std::memory_order_relaxed);};
     const auto config=m_smartHotbarConfig.load(std::memory_order_acquire);
     const auto* cache=m_cache.get();
-    if(!env||!binding||!cache||!hotbar::enabled(config)) return false;
+    if(!env||!binding||!cache||!hotbar::enabled(config)) {
+        observe(!env?GameplayBlockReason::NoJni:!cache?GameplayBlockReason::BindingsUnavailable:GameplayBlockReason::FeatureDisabled);
+        return false;
+    }
     if(env->PushLocalFrame(96)<0) {clearException(env);return false;}
     struct Locals {JNIEnv* env;~Locals(){env->PopLocalFrame(nullptr);}} locals{env};
-    const auto fail=[&]() noexcept {clearException(env);return false;};
+    const auto fail=[&]() noexcept {if(env->ExceptionCheck()) observe(GameplayBlockReason::JniFailure);clearException(env);return false;};
     jobject minecraft=cache->gameApi().minecraft(env);
     if(!minecraft||env->ExceptionCheck()) return fail();
     if(env->CallBooleanMethod(minecraft,cache->isMainThread)!=JNI_TRUE||
-       env->ExceptionCheck()) return fail();
+       env->ExceptionCheck()) {observe(GameplayBlockReason::NotClientThread);return fail();}
     jobject screen=cache->currentScreen
         ? env->GetObjectField(minecraft,cache->currentScreen):nullptr;
     bool grabbed=false;
-    if(screen||env->ExceptionCheck()||!queryLwjglMouseGrabbed(env,grabbed)||!grabbed)
-        return fail();
+    if(screen||env->ExceptionCheck()||!queryLwjglMouseGrabbed(env,grabbed)||!grabbed) {
+        observe(screen?GameplayBlockReason::GameScreen:GameplayBlockReason::MouseNotCaptured);return fail();
+    }
     jobject settings=env->GetObjectField(minecraft,cache->gameSettingsField);
     if(!settings||env->ExceptionCheck()) return fail();
     jobjectArray bindings=static_cast<jobjectArray>(
@@ -222,15 +228,18 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
     const int source=refill?hotbar::selectRefillSource(available,current):
         hotbar::selectSource(available,current,wanted);
     if(source<0) {
+        m_gameplayBlockReason.store(GameplayBlockReason::NoEligibleItem,std::memory_order_relaxed);
         if(m_hotbarPausePhase==HotbarPausePhase::AwaitNeutralPacket) restoreHotbarMovement(env);
         // A configured shortcut with no matching item keeps the normal hotbar
         // selection instead of silently swallowing the player's key press.
         if(refill) return false;
         env->SetIntField(inventory,c->currentItem,destination);
         // No eager C09: the vanilla controller owns held-item publication.
+        if(env->ExceptionCheck()) m_gameplayBlockReason.store(GameplayBlockReason::JniFailure,std::memory_order_relaxed);
         return env->ExceptionCheck()!=JNI_TRUE;
     }
     if(source>=9) {
+        m_gameplayBlockReason.store(GameplayBlockReason::AwaitMovement,std::memory_order_relaxed);
         if(hotbarKeyPhase) {requeue();return false;}
         // Inventory clicks require action release and a post-use boundary.
         const bool actionHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0||
@@ -238,10 +247,11 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
             m_logicalController.pendingAttack().kind!=silent::InteractionCommandKind::None;
         if(actionHeld||(refill&&serial<=
             m_refillQueuedPacketSerial.load(std::memory_order_acquire))) {
+            m_gameplayBlockReason.store(actionHeld?GameplayBlockReason::ActionHeld:GameplayBlockReason::AwaitMovement,std::memory_order_relaxed);
             if(actionHeld) restoreHotbarMovement(env);
             requeue();return false;
         }
-        if(!m_silentRotationHook.ready()) {requeue();return false;}
+        if(!m_silentRotationHook.ready()) {m_gameplayBlockReason.store(GameplayBlockReason::HookUnavailable,std::memory_order_relaxed);requeue();return false;}
         // Use raw key states, not residual velocity. A held key is temporarily
         // masked across a real movement POST before CLICK_WINDOW, then restored
         // from raw LWJGL state after another POST. Held input resumes without
@@ -317,7 +327,12 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
     }
     env->SetIntField(inventory,c->currentItem,source<9?source:destination);
     if(source>=9&&!env->ExceptionCheck()) env->CallVoidMethod(controller,c->syncCurrentPlayItem);
-    return env->ExceptionCheck()!=JNI_TRUE;
+    const bool succeeded=env->ExceptionCheck()!=JNI_TRUE;
+    if(succeeded) {
+        m_hotbarActionCount.fetch_add(1,std::memory_order_relaxed);
+        m_gameplayBlockReason.store(GameplayBlockReason::None,std::memory_order_relaxed);
+    } else m_gameplayBlockReason.store(GameplayBlockReason::JniFailure,std::memory_order_relaxed);
+    return succeeded;
 }
 
 

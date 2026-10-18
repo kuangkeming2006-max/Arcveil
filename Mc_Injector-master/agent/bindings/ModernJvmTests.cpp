@@ -34,11 +34,18 @@ int main(int argc,char** argv) {
     HANDLE stop=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     {
         mcoverlay::GameBindings bindings(vm,ti,std::filesystem::path(argv[3]));
+        check(!bindings.updateGameplay(env,{}, {},1),"pre-resolver update cannot run gameplay");
+        const auto pendingDiagnostics=bindings.gameplayDiagnostics();
+        check(!pendingDiagnostics.bindingMask && !pendingDiagnostics.missingBindings && pendingDiagnostics.updateCalls==1,
+              "pre-resolver update does not mark optional predicates as observed");
         bindings.runResolver(env,stop);
         check(bindings.bindingsReady(),"modern production JNI resolver ready");
         check(bindings.versionCapabilities().supports(mcoverlay::bindings::VersionCapability::EntitySnapshots),"entity capability enabled");
         check(!bindings.versionCapabilities().supports(mcoverlay::bindings::VersionCapability::InventoryAccess),"legacy inventory disabled");
         check(!bindings.versionCapabilities().supports(mcoverlay::bindings::VersionCapability::LegacyGameplay),"legacy gameplay disabled");
+        const auto idleDiagnostics=bindings.gameplayDiagnostics();
+        check(idleDiagnostics.bindingMask==8 && idleDiagnostics.updateCalls==1 && !idleDiagnostics.hookMask && !idleDiagnostics.missingBindings,
+              "published modern bindings do not imply observed legacy optional bindings or hooks");
         if (bindings.bindingsReady()) {
             const auto first=bindings.sample(env,100);
             check(first.state==mcoverlay::GameSnapshot::State::Ready,"world sample ready");
@@ -53,6 +60,13 @@ int main(int argc,char** argv) {
             check(bindings.maintainInputReleased(env),"modern mouse release maintenance");
             check(bindings.setInputCaptured(env,false),"modern mouse restore");
             check(!bindings.updateGameplay(env,{},first,100),"no legacy gameplay enters modern objects");
+            const auto blocked=bindings.gameplayDiagnostics();
+            check(blocked.updateCalls==2 && blocked.lastBlockReason==mcoverlay::GameplayBlockReason::UnsupportedVersion,
+                  "diagnostic reports actual Adapter gate after a real update invocation");
+            check(blocked.bindingMask==8 && !blocked.missingBindings,
+                  "modern Adapter rejection clears stale legacy observations and cannot report legacy binding gaps");
+            check(!blocked.hotbarCallbacks && !blocked.hotbarActions && !blocked.scaffoldAttempts && !blocked.scaffoldAccepted,
+                  "Adapter rejection cannot invent feature callbacks or successful actions");
             check(call("badPosition"),"NaN fixture enabled");
             check(bindings.sample(env,200).state==mcoverlay::GameSnapshot::State::JniError,"invalid position fails closed");
             check(call("resetPosition"),"NaN fixture reset");
@@ -63,6 +77,7 @@ int main(int argc,char** argv) {
         }
         bindings.release(env);
         check(!bindings.bindingsReady(),"bindings release clears publication");
+        check(!(bindings.gameplayDiagnostics().bindingMask&8U),"diagnostic core publication clears after release");
     }
     check(call("wrongVersion"),"fixture reports 1.20.2");
     {

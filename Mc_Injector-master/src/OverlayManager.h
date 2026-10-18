@@ -407,6 +407,8 @@ signals:
     void mediaNextRequested();
     void mediaToggleRequested();
     void agentSessionReady();
+    // Authenticated, bounded diagnostics; never configuration or Ready authority.
+    void agentGameplayDiagnostic(const QJsonObject &diagnostic);
     void targetChanged();
     void rendererChanged();
     void statusMessageChanged();

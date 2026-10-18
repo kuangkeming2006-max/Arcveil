@@ -388,7 +388,7 @@ preserving legacy cache keys; changed sub-contracts invalidate previous proofs.
 Cache format, confidence, final check and v56.8 recovery rules are unchanged.
 See [audit](../MINECRAFT_1_20_REVIEW.md), generator/provenance and V56_9_VALIDATION.
 
-## v56.9.2 unified, demand-scoped Snapshot validation (current)
+## v56.9.2 unified, demand-scoped Snapshot validation
 
 Start at `P/mapping/analyzer/CaptureClient.h::planCaptureRequest/captureRequestStats`,
 then `main.cpp`'s `inspect --plan-capture` and
@@ -413,7 +413,7 @@ Unknown cannot inherit a family from provider priority; foreign-loader family
 markers cannot overwrite current-loader brand evidence. Conflicting Vanilla/foreign
 modified-client evidence remains conservative Unknown.
 
-The native resident protocol is `MappingProbe-v16.dll`, preventing reuse of an old
+The v56.9.2 native resident protocol was `MappingProbe-v16.dll`, preventing reuse of an old
 resident Probe that lacks tier semantics. `ProbeProtocol.h::probeRequestBytes`
 remains 32768. `CAPTURE_REQUEST` reports actual request bytes, section sizes,
 requested class/anchor/hint/warmup counts and transport before enforcing that cap.
@@ -429,3 +429,37 @@ silent. See [review and measured tiers](../V56_9_2_SNAPSHOT_REVIEW.md),
 `P/tests/mapping/ModernMappingServiceTests.cpp`, `Test-RuntimeDetection.py`,
 `Test-CaptureRequestStress.py` and `TransactionCacheTests.cpp` for separately scoped
 synthetic, recorded Snapshot and real-runtime evidence.
+
+## v56.9.3: bounded identity recovery and audited legacy binding
+
+The resident protocol is now `MappingProbe-v17.dll`. Start at
+`MappingProbe.cpp::readRuntimeEvidence`, `Resolver.cpp::identifyRuntime`,
+`MappingServiceDynamic.cpp::captureCandidateVersionEvidence` and
+`CaptureClient.h::CaptureScopeUnavailable`.
+Per-source version attempts expose exact failure reasons. An unusable resource
+id cannot mask a valid same-loader legacy version; conflicting exact versions
+still reject. A narrowly audited Lunar release brand requires strong Lunar
+evidence in that same loader and never supplies a Minecraft version.
+
+Without independent version evidence, a known modified family with one trusted
+candidate loader may request one additional Detection capture using at most two
+audited `--evidence-candidates` versions and the exact runtime loader pin.
+For legacy 1.8.9 the bounded fallback checks the audited Realms holder's semantic
+static String value and protocol/tick discriminators; it does not guess game API
+member names. Unproven/conflicting version, family or loader still cannot reach
+Mapping verification or Ready. Candidate scope is never identity authority.
+The evidence options persist into subsequent independent captures.
+
+A complete validation-tier response with zero candidate API classes emits exit
+6 / `candidate-scope-unavailable` and target PID/start. Only an initial authored
+candidate with matching process identity may advance to the next dictionary;
+final validation and incomplete captures remain fail-closed.
+
+The 1.8.9 Vanilla/Lunar Notch `syncCurrentPlayItem` name is corrected from `j`
+to official `n()V`. `authoredMappingAuditRevision` in the legacy contract forces
+old 1.8.9 Cache proofs to miss and revalidate; the 1.20.1 sub-contract is unchanged.
+Validation strength, tier sizes and successful silent UI behavior are retained.
+`recordGameplayDiagnostic` appends authenticated, current-owner gameplay receipts
+to the existing transaction log without changing Mapping/Agent Ready state.
+See [root causes](../V56_9_3_ROOT_CAUSES.md) and
+[validation](../../../Mc_Injector-master/tests/mapping/V56_9_3_VALIDATION.md).

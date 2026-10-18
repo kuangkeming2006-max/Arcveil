@@ -74,5 +74,18 @@ its result, elapsed milliseconds and JVMTI/JNI counters before a release-store;
 telemetry acquire-loads it and sends BINDING_READY or ERROR RUNTIME_BINDING_FAILED.
 Renderer initialization can run concurrently; it cannot authorize mapping success.
 
+v56.9.3 gameplay diagnosis: accepted `FEATURE_STATE*` and `SMART_HOTBAR`
+configuration now has separate value-carrying Scaffold/Hotbar receipts. These do
+not describe execution. `beforeSwapBuffers` keeps the existing input/server
+guards and publishes configuration/input flags plus the public, value-only
+`GameBindings::gameplayDiagnostics()` observation through the telemetry mailbox.
+The facade is sampled at most once per second; state changes publish at that
+rate and unchanged enabled features have a five-second counter heartbeat.
+Disabled unchanged features do not emit a heartbeat. Publication uses the
+existing try-lock; formatting and pipe I/O remain on telemetry, with a 512-byte
+fixed output buffer. Optional JNI predicates, actual hooks, callbacks, accepted
+actions and the most recent blocking reason remain separate evidence.
+Controller logs/signals are diagnostic only and cannot authorize Ready.
+
 已有验证为 Attach、NativeLoader、OpenGL/JVM smoke（含 split threads），以及相邻 renderer/controller 测试。
 没有独立全面的 runtime command codec 测试，协议版本/feature round-trip 是后续验证缺口。2026-09-26 构建、Attach、NativeLoader（含驻留重附加）、OpenGL unified/split smoke 均通过。

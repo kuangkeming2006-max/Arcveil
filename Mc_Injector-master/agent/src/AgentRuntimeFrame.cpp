@@ -279,6 +279,11 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     snapshot.gameScreenOpen = gameScreenOpen;
     snapshot.entityRenderTick = m_entityRenderClock.update(snapshot.entitySampleGeneration,
         snapshot.worldGeneration, snapshot.camera.partialTicks);
+    // Configuration intent is separate from the input/server guards below.
+    const std::uint32_t gameplayConfiguredFlags =
+        (activeFeatures.scaffoldEnabled ? 1U : 0U) |
+        (activeFeatures.scaffoldSameLayerOnly ? 2U : 0U) |
+        (activeFeatures.smartHotbarEnabled ? 4U : 0U);
 
     // Server guard is evaluated from currentServerData.serverIP and therefore
     // remains active in lobbies and during respawn. The explicit override is
@@ -311,12 +316,11 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
             "[Local Guard] Local diagnostics require an integrated single-player world.");
     }
 
+    const bool gameForeground =
+        ::GetForegroundWindow() == ::WindowFromDC(deviceContext);
+    const bool gameplayInput = !interactiveNow && !gameScreenOpen && gameForeground;
     if (env != nullptr) {
         GameplaySettings gameplay{};
-        const bool gameForeground =
-            ::GetForegroundWindow() == ::WindowFromDC(deviceContext);
-        const bool gameplayInput = !interactiveNow && !gameScreenOpen &&
-            gameForeground;
         gameplay.safewalk = activeFeatures.safewalkEnabled && gameplayInput;
         gameplay.scaffold = activeFeatures.scaffoldEnabled && gameplayInput;
         gameplay.scaffoldSameLayerOnly = activeFeatures.scaffoldSameLayerOnly;
@@ -378,6 +382,12 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         snapshot.aimAttackTargetEntityId=m_bindings->aimAttackTargetId();
         snapshot.silentAimAvailable=m_bindings->silentAvailable();
     }
+    queueGameplayDiagnostics(gameplayConfiguredFlags,
+        (env != nullptr ? 1U : 0U) | (interactiveNow ? 2U : 0U) |
+        (gameScreenOpen ? 4U : 0U) | (gameForeground ? 8U : 0U) |
+        (gameplayInput ? 16U : 0U) |
+        (snapshot.hypixelServer && !activeFeatures.allowHypixelMovement ? 32U : 0U),
+        tickMilliseconds);
     const std::uint32_t currentBlacklistRevision =
         m_blacklistRevision.load(std::memory_order_acquire);
     if (currentBlacklistRevision != m_runtimeBlacklistRevision) {

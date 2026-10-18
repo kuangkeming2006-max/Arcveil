@@ -19,6 +19,7 @@
 | serializeLogicalPacket、silentAvailable/silentAttackAvailable、aimTargetId/aimAttackTargetId | runtime/逻辑钩子的能力、目标和包边界 |
 | enqueueDebugChatLine/enqueueWarningChatLine/publishDebugChat | 排队和在正确 JNI 上下文发布本地聊天 |
 | release/abandon | 正常 JNI 清理与 VM 不可用时停止访问 |
+| gameplayDiagnostics | 纯值诊断：当前 core publication、实际观察的 optional binding predicates、hook readiness 与真实调用/本地动作计数；不能授权 Ready 或证明服务器接受 |
 
 ## 内部边界
 
@@ -137,3 +138,15 @@ inventory, bed scan and world projection remain unavailable on modern; sampleCam
 and updateGameplay explicitly gate their existing paths. Legacy capabilities include
 their prior behavior. See [1.20 audit](../MINECRAFT_1_20_REVIEW.md) and
 `P/tests/mapping/V56_9_VALIDATION.md`; private JVM tests do not prove real game support.
+
+## v56.9.3 gameplay observations
+
+`GameBindings.h::GameplayDiagnostics` / `gameplayDiagnostics()` adds a fixed-size
+value receipt. Binding bits distinguish core publication from optional predicates
+actually observed by `updateGameplay`; an unobserved zero is not a missing binding.
+Counters increment at the real consumed-key callback, successful mapped local
+hotbar operation, and actual placement JNI invocation / true client result.
+No counter claims server acknowledgment. Existing feature/input/world/interaction
+guards remain the authority. Action-specific block reasons survive a render update
+until an action retries/succeeds or the effective feature turns off. Runtime copies
+the facade into a bounded mailbox; it never performs JNI through the diagnostic.

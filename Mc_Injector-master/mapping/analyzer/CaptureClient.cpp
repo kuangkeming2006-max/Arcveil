@@ -136,6 +136,17 @@ Json planCaptureRequest(const std::map<QString, QString> &options, const Json &c
             throw std::runtime_error("invalid runtime loader receipt");
         request["runtimeLoader"]=Json::Object{{"type",option("--runtime-loader-type").toStdString()},{"instance",double(instance)}};
     }
+    if(options.contains("--evidence-candidates")) {
+        if(!request.contains("runtimeLoader"))throw std::runtime_error("candidate evidence requires a pinned defining loader");
+        std::set<std::string> versions;
+        for(const auto& value:option("--evidence-candidates").split(',',Qt::SkipEmptyParts)) {
+            if(value!="1.8.9" && value!="1.20.1")throw std::runtime_error("candidate evidence version has not been audited");
+            versions.insert(value.toStdString());
+        }
+        if(versions.empty() || versions.size()>2)throw std::runtime_error("invalid bounded candidate evidence request");
+        Json::Array candidates;for(const auto& version:versions)candidates.push_back(version);
+        request["versionCandidates"]=candidates;
+    }
     // These are supported installed API anchors, not version evidence. Detection never
     // reads old Cache packs or expands their game API symbols/launch patterns.
     std::set<std::string> anchors, names;
@@ -205,7 +216,7 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
     const auto directory = QCoreApplication::applicationDirPath();
     const auto java = option("--java", targetJava(pid));
     const auto helper = option("--helper", directory + "/McOverlayAttachHelper.jar");
-    const auto probe = option("--probe", directory + "/MappingProbe-v16.dll");
+    const auto probe = option("--probe", directory + "/MappingProbe-v17.dll");
     const auto nativeLoader = option("--native-loader", directory + "/McOverlayNativeLoader.exe");
     const auto output = filePath(QFileInfo(option("--out")).absoluteFilePath());
     const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
@@ -330,6 +341,9 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             stats["event"] = "SNAPSHOT_STATS";
             stats["capturePath"] = key;
             events(stats);
+            const auto tier=request.at("captureTier").string();
+            if((tier=="vanilla-validation" || tier=="modded-validation") && snapshot.at("complete").boolean() && snapshot.at("classes").array().empty())
+                throw CaptureScopeUnavailable(pid,snapshot.at("processStart").string());
             if (options.contains("--candidates"))
                 for (auto &klass : snapshot["classes"].array()) {
                     Json::Array graph;
@@ -380,6 +394,10 @@ Json captureLive(const std::map<QString, QString> &options, const Json &contract
             QFile::remove(qtPath(rawPath));
             QFile::remove(qtPath(statusPath));
             return normalized;
+        } catch (const CaptureScopeUnavailable &e) {
+            diagnostic["status"]="candidate-scope-unavailable";diagnostic["reason"]=e.what();paths[key]=diagnostic;events(paths);
+            QFile::remove(qtPath(rawPath));QFile::remove(qtPath(statusPath));
+            throw;
         } catch (const RuntimeChanged &e) {
             diagnostic["status"]="changed";diagnostic["reason"]=e.what();paths[key]=diagnostic;events(paths);
             throw;

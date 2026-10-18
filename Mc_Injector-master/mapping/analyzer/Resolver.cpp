@@ -236,14 +236,32 @@ Json retargetPack(Json pack, const std::string &family) {
     return pack;
 }
 Json selectedPack(const Json& pack,const Json& provider,const Json& dictionary){auto result=pack;auto p=provider;p["dictionaries"]=Json::Array{dictionary};result["providers"]=Json::Array{p};return result;}
+bool auditedLunarBrand(std::string text) {
+    // Client release syntax only; never Minecraft version evidence.
+    constexpr std::string_view prefix="lunarclient:v",suffix=",fml,forge";
+    if(!text.starts_with(prefix) || text.size()>64)return false;
+    text.erase(0,prefix.size());
+    if(text.ends_with(suffix))text.resize(text.size()-suffix.size());
+    const auto dash=text.find('-');if(dash==std::string::npos)return false;
+    const auto release=text.substr(0,dash),build=text.substr(dash+1);
+    if(build.empty() || build.size()>8 || !std::all_of(build.begin(),build.end(),[](unsigned char c){return c>='0'&&c<='9';}))return false;
+    int parts=1,digits=0;
+    for(unsigned char c:release) {
+        if(c=='.'){if(!digits || ++parts>3)return false;digits=0;}
+        else if(c>='0'&&c<='9'){if(++digits>4)return false;}
+        else return false;
+    }
+    return parts==3 && digits;
+}
 std::string detectedFamily(const Json& pack,const Model& model){
     bindings::ClientEnvironment environment;
     const auto parsed=bindings::parseMappingPack(pack);
     const auto scope=runtimeScope(model);
     if(scope.ambiguous) return "Unknown";
-    bool foreignModifiedMarker=false;
+    bool foreignModifiedMarker=false,scopedLunarMarker=false;
     const auto add=[&](bindings::ClientFamily family,int confidence,const std::string& loader) {
         if(scope.verified && !loader.empty() && loader!=scope.loader) {foreignModifiedMarker=true;return;}
+        if(scope.verified && loader==scope.loader && family==bindings::ClientFamily::Lunar && confidence>=200)scopedLunarMarker=true;
         environment.addEvidence(family,confidence);
     };
     // Family evidence is independent of which versions/families a pack supports.
@@ -259,6 +277,7 @@ std::string detectedFamily(const Json& pack,const Model& model){
             !model.find(e.at("anchor").string(),scope.loader) || e.at("brandSource").string().empty()) continue;
         auto brand=e.at("brand").string();
         std::transform(brand.begin(),brand.end(),brand.begin(),[](unsigned char c){return char(std::tolower(c));});
+        if(brand=="modified" && scopedLunarMarker && e.contains("brandObserved") && auditedLunarBrand(e.at("brandObserved").string()))brand="lunarclient";
         if (!brand.empty()) brands.insert(brand);
     }
     if (brands.size()>1) return "Unknown";
@@ -323,6 +342,32 @@ Json identifyRuntime(const Json::Array& catalog,const Json& snapshot,const Json&
     Json result=Json::Object{{"family",family},{"minecraftVersion",scope.version},{"versionVerified",scope.verified},
         {"selectedPack",""},{"mappingNamespace","Unknown"},{"runtimeBinding",Json()},
         {"candidates",candidates},{"detectionReason",scope.verified?"independent version evidence in defining loader":"independent runtime version evidence unavailable; API candidate is diagnostic only"}};
+    if(model.snapshot.contains("runtimeEvidence"))result["versionEvidence"]=model.snapshot.at("runtimeEvidence");
+    // A metadata-empty Detection is not a failed API validation. These candidates
+    // may request bounded independent evidence, but supply no version/Ready authority.
+    if(!scope.verified && !scope.ambiguous && family!="Unknown" && family!="Vanilla") {
+        std::set<std::string> loaders,versions;
+        std::string anchor;
+        bool conflict=false;
+        if(model.snapshot.contains("runtimeEvidence"))for(const auto& row:model.snapshot.at("runtimeEvidence").array())
+            conflict|=row.contains("diagnostic") && row.at("diagnostic").string().find("conflicting")!=std::string::npos;
+        for(const auto& row:candidates) {
+            loaders.insert(row.at("loaderKey").string());versions.insert(row.at("version").string());
+            anchor=row.at("anchor").string();
+        }
+        if(!conflict && loaders.size()==1 && !versions.empty() && versions.size()<=2) {
+            Json binding=Json::Object{{"anchor",anchor},{"loaderKey",*loaders.begin()}};
+            if(model.snapshot.contains("loaderInstances"))for(const auto& loader:model.snapshot.at("loaderInstances").array())
+                if(loader.at("loaderKey").string()==*loaders.begin()) {
+                    binding["type"]=loader.at("type");binding["instance"]=loader.at("instance");
+                }
+            if(binding.contains("type") && binding.contains("instance")) {
+                Json::Array values;for(const auto& version:versions)values.push_back(version);
+                result["evidenceRecovery"]=Json::Object{{"eligible",true},{"family",family},{"versions",values},{"runtimeBinding",binding},
+                    {"authority","candidate scope only; independent version proof still required"}};
+            }
+        }
+    }
     if(scope.verified) {
         Json binding=Json::Object{{"anchor",scope.anchor},{"loaderKey",scope.loader}};
         if(model.snapshot.contains("loaderInstances")) for(const auto& loader:model.snapshot.at("loaderInstances").array())

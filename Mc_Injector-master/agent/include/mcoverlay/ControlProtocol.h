@@ -18,6 +18,12 @@ namespace mcoverlay::protocol {
 //   GUI_TYPOGRAPHY_APPLIED <size:14..24> <weight:400|600|700>\n
 //   GUI_ELEMENT_SCALE_CHANGED <percent:60..150>\n
 //   GUI_ELEMENT_SCALE_APPLIED <percent:60..150>\n
+//   SCAFFOLD_CONFIG_APPLIED <enabled:0|1> <same-layer:0|1>\n
+//   SMART_HOTBAR_APPLIED <validated-packed-config>\n
+//   GAMEPLAY_DIAGNOSTIC 1 <seq> <tick-ms> <configured-flags> <input-flags>
+//     <binding-mask> <missing-bindings> <hook-mask> <update-calls> <hotbar-callbacks> <hotbar-actions>
+//     <scaffold-attempts> <scaffold-accepted> <last-block-reason>\n
+// Optional diagnostic receipts never authorize Ready or override configuration.
 //   DETACH_COMPLETE\n
 //   STATUS <single-line-text>\n
 //   ERROR <code> <single-line-text>\n

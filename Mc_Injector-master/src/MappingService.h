@@ -46,6 +46,7 @@ class MappingService final : public QObject {
     void loaderStarted(const QString &transport);
     void loaderFinished();
     void agentReady(qint64 milliseconds, qint64 jvmtiCalls, qint64 jniCalls);
+    void recordGameplayDiagnostic(const QJsonObject &diagnostic);
     QJsonObject runtimeBinding() const { return m_runtimeBinding; }
     Q_INVOKABLE void cancel();
     Q_INVOKABLE bool rollback();
@@ -76,6 +77,7 @@ class MappingService final : public QObject {
     void launch(QStringList arguments, std::function<void(int)> finished);
     void inspect(bool finalCheck);
     void identifyTarget();
+    void captureCandidateVersionEvidence(const QJsonObject &recovery);
     void captureAuthoredMetadata(bool finalCheck);
     void beginAuthoredValidation();
     void nextAuthoredCandidate(const QString &reason);
@@ -139,6 +141,9 @@ class MappingService final : public QObject {
     QString m_validationPack;
     int m_authoredCandidateIndex = 0;
     bool m_metadataFastPath = false, m_fallbackShown = false, m_referenceAuthoredTried = false;
+    bool m_versionEvidenceTried = false;
+    QStringList m_versionEvidenceCandidates;
+    QJsonObject m_candidateEnvironment;
     QString m_family, m_minecraftVersion, m_mappingIdentity, m_metadataIdentity, m_transport;
     QHash<QString, QString> m_transports; // pid + processStart; never reused for a recycled PID.
 

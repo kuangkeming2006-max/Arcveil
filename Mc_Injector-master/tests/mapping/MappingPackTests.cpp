@@ -30,6 +30,12 @@ int main() {
                 symbols[name.string()] = actual.at("symbols").at(name.string());
             check(symbols.object().size() == 247, "all original schema fields covered");
             actual["symbols"] = std::move(symbols);
+            if(d.id=="minecraft-1.8.9-vanilla-notch" || d.id=="minecraft-1.8.9-lunar-notch") {
+                check(d.syncCurrentPlayItem=="n","official 1.8.9 sync uses bda.n()V; bda.j returns boolean");
+                // Keep the historical mechanical-parity digest for every other
+                // value. This one audited correction has its own artifact test.
+                actual["symbols"]["syncCurrentPlayItem"]="j";
+            }
             std::uint64_t hash = 14695981039346656037ULL;
             for (unsigned char c : actual.dump()) {
                 hash ^= c;

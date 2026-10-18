@@ -83,6 +83,8 @@ bool AgentRuntime::sendHandshake() noexcept
     if (!m_ipc->sendLine("HOOK_READY OpenGL")) {
         return false;
     }
+    m_scaffoldReceiptFlags = 0xffU;
+    m_hotbarReceiptSent = false;
     m_handshakeSent.store(true, std::memory_order_release);
     if (m_telemetryEvent != nullptr) {
         ::SetEvent(m_telemetryEvent);
@@ -143,6 +145,13 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
             return true;
         }
         m_smartHotbarConfig.store(packed,std::memory_order_release);
+        // A receipt confirms accepted configuration only. JNI capabilities,
+        // hook callbacks and actions are reported independently.
+        if ((!m_hotbarReceiptSent || m_hotbarReceiptConfig != packed) &&
+            m_ipc->sendLine("SMART_HOTBAR_APPLIED " + std::to_string(packed))) {
+            m_hotbarReceiptConfig = packed;
+            m_hotbarReceiptSent = true;
+        }
         return true;
     }
     if (command == "FEATURE_STATE" || command == "FEATURE_STATE_V2" ||
@@ -484,6 +493,14 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         m_localAttackDelayMs.store(localAttackDelayMs, std::memory_order_release);
         m_localVelocityPercent.store(localVelocityPercent, std::memory_order_release);
         (void)m_ipc->sendLine("FEATURE_STATE_APPLIED");
+        const auto scaffoldReceipt = static_cast<std::uint8_t>(
+            (settings.scaffoldEnabled ? 1U : 0U) | (settings.scaffoldSameLayerOnly ? 2U : 0U));
+        if (m_scaffoldReceiptFlags != scaffoldReceipt &&
+            m_ipc->sendLine(std::string("SCAFFOLD_CONFIG_APPLIED ") +
+                (settings.scaffoldEnabled ? "1 " : "0 ") +
+                (settings.scaffoldSameLayerOnly ? "1" : "0"))) {
+            m_scaffoldReceiptFlags = scaffoldReceipt;
+        }
         return true;
     }
     if (command == "BIND") {

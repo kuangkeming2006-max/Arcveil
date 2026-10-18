@@ -44,7 +44,39 @@ QStringList MappingService::runtimeScopeArguments(const QString &tier) const {
     if(!binding.isEmpty()) args << "--runtime-anchor" << binding.value("anchor").toString()
         << "--runtime-loader-type" << binding.value("type").toString()
         << "--runtime-loader-instance" << QString::number(quint32(binding.value("instance").toDouble()));
+    if(!m_versionEvidenceCandidates.isEmpty())args << "--evidence-candidates" << m_versionEvidenceCandidates.join(',');
     return args;
+}
+void MappingService::captureCandidateVersionEvidence(const QJsonObject& recovery) {
+    const auto binding=recovery.value("runtimeBinding").toObject();
+    if(m_versionEvidenceTried || !recovery.value("eligible").toBool() || binding.value("type").toString().isEmpty() ||
+       !binding.contains("instance")) {fail("Independent runtime version evidence unavailable after bounded recovery");return;}
+    m_versionEvidenceTried=true;m_candidateEnvironment=binding;
+    m_candidateEnvironment["family"]=recovery.value("family");
+    for(const auto& value:recovery.value("versions").toArray()) {
+        const auto version=value.toString();if(version=="1.8.9" || version=="1.20.1")m_versionEvidenceCandidates.append(version);
+    }
+    m_versionEvidenceCandidates.removeDuplicates();
+    if(m_versionEvidenceCandidates.isEmpty() || m_versionEvidenceCandidates.size()>2) {fail("No audited bounded version candidate");return;}
+    const auto output=m_run+"/candidate-version-evidence.jsonl";
+    QStringList args{"inspect","--lite","--capture-tier","detection","--evidence-candidates",m_versionEvidenceCandidates.join(','),
+        "--runtime-anchor",binding.value("anchor").toString(),"--runtime-loader-type",binding.value("type").toString(),
+        "--runtime-loader-instance",QString::number(quint32(binding.value("instance").toDouble())),
+        "--pid",QString::number(m_pid),"--java",m_java,"--helper",m_helper,"--probe",m_probe,
+        "--native-loader",m_tools+"/McOverlayNativeLoader.exe","--pack",m_defaultPack,"--contracts",m_contracts,"--out",output};
+    if(m_transport=="NativeLoader")args << "--transport" << "native";
+    if(!m_modular)args << "--tools-jar" << m_toolsJar;
+    event({{"event","VERSION_EVIDENCE_RECOVERY"},{"versions",QJsonArray::fromStringList(m_versionEvidenceCandidates)},
+           {"runtimeBinding",binding},{"authority","candidate evidence only; not Mapping Ready"}});
+    if(!current() || !m_busy)return;
+    m_capture={};
+    launch(args,[this,output](int code) {
+        if(code || !identityValid() || m_capture.value("pid").toDouble()!=m_pid || m_capture.value("processStart").toString()!=m_start) {
+            fail("Candidate version evidence capture failed or target JVM changed");return;
+        }
+        m_litePath=output;m_snapshot=output;m_fingerprint=m_capture.value("fingerprint").toString();
+        identifyTarget();
+    });
 }
 void MappingService::beginAuthoredValidation() {
     m_metadataFastPath=true;
@@ -187,6 +219,11 @@ void MappingService::captureAuthoredMetadata(bool finalCheck) {
     m_status = finalCheck ? "Final independent authored mapping validation" : "Validating scoped authored mapping";
     emit changed();
     launch(args, [this, finalCheck, output](int code) {
+        if(code==6 && !finalCheck && identityValid() &&
+           m_analyzerFailure.value("failureType")=="candidate-scope-unavailable" &&
+           m_analyzerFailure.value("pid").toDouble()==m_pid && m_analyzerFailure.value("processStart").toString()==m_start) {
+            nextAuthoredCandidate("Selected authored names are absent from the pinned defining loader");return;
+        }
         if (code || !identityValid() || m_capture.value("pid").toDouble() != m_pid ||
             m_capture.value("processStart").toString() != m_start) {
             fail("Authored mapping metadata capture failed or target JVM changed"); return;
@@ -608,11 +645,19 @@ void MappingService::identifyTarget() {
         const auto identity = readObject(m_run + "/identity.json");
         const auto family = identity.value("family").toString();
         const auto version = identity.value("minecraftVersion").toString();
+        if(!identity.value("versionVerified").toBool() && !m_versionEvidenceTried &&
+           family!="Unknown" && family!="Vanilla" && identity.value("evidenceRecovery").toObject().value("eligible").toBool()) {
+            captureCandidateVersionEvidence(identity.value("evidenceRecovery").toObject());return;
+        }
         if (!identity.value("versionVerified").toBool() || version.isEmpty() ||
             family.isEmpty() || family == "Unknown" ||
             !sameRuntimeBinding(identity.value("runtimeBinding").toObject(), identity.value("runtimeBinding").toObject())) {
             fail("Unsupported runtime identity: version/family/defining ClassLoader could not be verified: " +
                  identity.value("detectionReason").toString()); return;
+        }
+        if(m_versionEvidenceTried && (family!=m_candidateEnvironment.value("family").toString() || !m_versionEvidenceCandidates.contains(version) ||
+            !sameRuntimeBinding(identity.value("runtimeBinding").toObject(),m_candidateEnvironment))) {
+            fail("Candidate evidence changed version scope or defining loader");return;
         }
         if (!m_environment.isEmpty() && !matchesEnvironment(identity)) {
             fail("Runtime identity changed while recovering a mapping candidate"); return;

@@ -44,7 +44,21 @@ int main(int argc, char **argv) {
         {"mappingIdentity", "fixture-mapping-identity"}, {"metadataIdentity", "fixture-metadata-identity"},
         {"bindingIdentity", QString(64, QLatin1Char('a'))},
         {"runtimeBinding", QJsonObject{{"anchor", "net.minecraft.client.Minecraft"}, {"type", "fixture.Loader"}, {"instance", 1}, {"loaderKey", "fixture-loader"}}}};
-    if (args[1] == "identify" || args[1] == "identity-proof") { writeObject(get("--out"), identity); return 0; }
+    if (args[1] == "identify" || args[1] == "identity-proof") {
+        auto result=identity;
+        if(mode.startsWith("recover-version")) {
+            const bool recovered=get("--snapshot").endsWith("candidate-version-evidence.jsonl");
+            if(!recovered || mode=="recover-version-missing") {
+                result["versionVerified"]=false;result["minecraftVersion"]="";
+                result["evidenceRecovery"]=QJsonObject{{"eligible",true},{"family","Forge"},
+                    {"versions",QJsonArray{"1.8.9"}},{"runtimeBinding",identity.value("runtimeBinding")}};
+            } else if(mode=="recover-version-wrong-loader") {
+                auto binding=result.value("runtimeBinding").toObject();binding["instance"]=2;result["runtimeBinding"]=binding;
+            } else if(mode=="recover-version-wrong-family")result["family"]="Lunar";
+            else if(mode=="recover-version-wrong-version")result["minecraftVersion"]="1.20.1";
+        }
+        writeObject(get("--out"), result); return 0;
+    }
     if(args[1]=="select") {
         const auto snapshot=readObject(get("--snapshot"));
         writeObject(get("--out"),{{"identity", identity},{"relevantFingerprint",snapshot.value("fingerprint")},{"classes",QJsonArray{QJsonObject{{"name","Fixture"}}}}});
@@ -61,6 +75,11 @@ int main(int argc, char **argv) {
         if (mode == "changed" && get("--out").endsWith("authored-metadata-3.jsonl"))
             fp = "unrelated-metadata-fingerprint";
         const auto tier=get("--capture-tier");
+        if(mode=="empty-authored-candidate" && tier=="modded-validation" && get("--pack").endsWith("authored-candidate-0.json")) {
+            event({{"event","failure"},{"failureType","candidate-scope-unavailable"},{"reason","Mock selected names absent in pinned loader"},
+                   {"pid",double(pid)},{"processStart",QString::number((quint64(c.dwHighDateTime)<<32)|c.dwLowDateTime)}});
+            return 6;
+        }
         int dictionaryCount=0;
         if(!get("--pack").isEmpty()) for(const auto &provider:readObject(get("--pack")).value("providers").toArray())
             dictionaryCount+=provider.toObject().value("dictionaries").toArray().size();

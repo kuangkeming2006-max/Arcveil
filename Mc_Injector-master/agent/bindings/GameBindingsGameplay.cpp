@@ -27,12 +27,19 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                                   const GameSnapshot& snapshot,
                                   const std::uint64_t tickMilliseconds) noexcept
 {
-    if (bindingsReady() && !versionCapabilities().supports(bindings::VersionCapability::LegacyGameplay))
-        return false;
+    m_gameplayUpdateCalls.fetch_add(1,std::memory_order_relaxed);
+    const auto observe=[this](GameplayBlockReason reason) noexcept {
+        m_gameplayBlockReason.store(reason,std::memory_order_relaxed);
+    };
+    if(!requested.scaffold&&!requested.smartHotbar) observe(GameplayBlockReason::FeatureDisabled);
+    if (bindingsReady() && !versionCapabilities().supports(bindings::VersionCapability::LegacyGameplay)) {
+        m_gameplayBindingMask.store(0,std::memory_order_relaxed);
+        observe(GameplayBlockReason::UnsupportedVersion); return false;
+    }
     m_logicalController.debug().configure(requested.silentFileDebug,requested.silentChatDebug);
     if(!m_logicalController.debug().enabled() && m_interactionObserver.ready())
         m_interactionObserver.setEnabled(false);
-    if (env == nullptr) return false;
+    if (env == nullptr) {observe(GameplayBlockReason::NoJni);return false;}
     if(!requested.aimAssist||!requested.aimSilentLock||
        !requested.silentControlAdaptation) {
         m_sprintFeatureEnabled.store(false,std::memory_order_release);
@@ -42,6 +49,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     BindingCache* const cache =
         m_resolutionPhase.load(std::memory_order_acquire) == ResolutionPhase::Resolved
         ? m_cache.get() : nullptr;
+    if(!cache) observe(GameplayBlockReason::BindingsUnavailable);
     if(m_hotbarPausePhase!=HotbarPausePhase::None&&
        (!requested.smartHotbar||!cache||gameScreenOpen(env)))
         restoreHotbarMovement(env);
@@ -301,6 +309,12 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         cache->getItem!=nullptr&&cache->itemSwordClass!=nullptr&&
         cache->itemBlockClass!=nullptr&&cache->playerControllerField!=nullptr&&
         cache->windowClick!=nullptr&&cache->syncCurrentPlayItem!=nullptr;
+    const bool legacyPredicatesObserved=cache&&cache->adapter&&
+        cache->adapter->capabilities.supports(bindings::VersionCapability::LegacyGameplay);
+    m_gameplayBindingMask.store(legacyPredicatesObserved?
+        (4U|(placementCapability?1U:0U)|(smartHotbarCapability?2U:0U)):0U,std::memory_order_relaxed);
+    if((requested.scaffold&&!placementCapability)||(requested.smartHotbar&&!smartHotbarCapability))
+        observe(GameplayBlockReason::BindingsUnavailable);
     const bool smartHotbarRequested=requested.smartHotbar&&
         smartHotbarCapability;
     m_smartHotbarConfig.store(hotbar::pack(smartHotbarRequested,
@@ -350,6 +364,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         return result;
     };
     const auto fail = [&]() noexcept {
+        if(env->ExceptionCheck()) observe(GameplayBlockReason::JniFailure);
         deactivateSilentOutput();
         clearException(env);
         restoreHotbarMovement(env);
@@ -366,13 +381,29 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if (env->ExceptionCheck() == JNI_TRUE || minecraft == nullptr) return fail();
     const jboolean mainThread = env->CallBooleanMethod(minecraft,
                                                        cache->isMainThread);
-    if (env->ExceptionCheck() == JNI_TRUE || mainThread != JNI_TRUE) return fail();
+    if (env->ExceptionCheck() == JNI_TRUE || mainThread != JNI_TRUE) {
+        observe(env->ExceptionCheck()?GameplayBlockReason::JniFailure:GameplayBlockReason::NotClientThread);
+        return fail();
+    }
 
     jobject player = cache->gameApi().player(env, minecraft);
     jobject settings = env->GetObjectField(minecraft, cache->gameSettingsField);
     jobject world = cache->gameApi().world(env, minecraft);
     if (env->ExceptionCheck() == JNI_TRUE || player == nullptr ||
-        settings == nullptr || world == nullptr) return fail();
+        settings == nullptr || world == nullptr) {
+        observe(env->ExceptionCheck()?GameplayBlockReason::JniFailure:
+            !player?GameplayBlockReason::NoPlayer:!world?GameplayBlockReason::NoWorld:GameplayBlockReason::BindingsUnavailable);
+        return fail();
+    }
+    // Keep an action-specific block visible until that action succeeds or is
+    // retried. A following render update alone cannot prove an item was found.
+    const auto priorBlock=m_gameplayBlockReason.load(std::memory_order_relaxed);
+    if((requested.scaffold||requested.smartHotbar) &&
+       (!requested.scaffold||placementCapability) && (!requested.smartHotbar||smartHotbarCapability) &&
+       priorBlock!=GameplayBlockReason::NoEligibleItem && priorBlock!=GameplayBlockReason::NoPlacementTarget &&
+       priorBlock!=GameplayBlockReason::HookUnavailable && priorBlock!=GameplayBlockReason::ActionHeld &&
+       priorBlock!=GameplayBlockReason::AwaitMovement)
+        observe(GameplayBlockReason::None);
     // Ask vanilla's input path to sprint. Writing setSprinting(true) from
     // moveFlying occurs after the movement-speed decision and produces a
     // client/server mismatch, especially on diagonal input.
@@ -1490,6 +1521,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             }
         }
         if (selectedSlot >= 0 && selectedStack != nullptr) {
+            observe(GameplayBlockReason::NoPlacementTarget);
             const double centerX = (minX + maxX) * 0.5;
             const double centerZ = (minZ + maxZ) * 0.5;
             std::array<std::array<int, 3U>, 32U> targets{};
@@ -1601,7 +1633,12 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                     // placement, original held slot. Some clients override the
                     // right-click method and do not perform vanilla's sync.
                     env->CallVoidMethod(controller,cache->syncCurrentPlayItem);
-                    const jboolean accepted = env->ExceptionCheck() ? JNI_FALSE : env->CallBooleanMethod(controller,
+                    const bool canAttempt=env->ExceptionCheck()!=JNI_TRUE;
+                    if(canAttempt) {
+                        m_scaffoldAttemptCount.fetch_add(1,std::memory_order_relaxed);
+                        observe(GameplayBlockReason::None);
+                    }
+                    const jboolean accepted = !canAttempt ? JNI_FALSE : env->CallBooleanMethod(controller,
                         cache->onPlayerRightClick, player, world, selectedStack,
                         neighbour, face, hit);
                     const bool placementFailed=env->ExceptionCheck()==JNI_TRUE;
@@ -1609,8 +1646,11 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                     env->SetIntField(inventory,cache->currentItem,previousSlot);
                     if(!env->ExceptionCheck())
                         env->CallVoidMethod(controller,cache->syncCurrentPlayItem);
-                    if(placementFailed||env->ExceptionCheck()) return fail();
+                    if(placementFailed||env->ExceptionCheck()) {
+                        observe(GameplayBlockReason::JniFailure); return fail();
+                    }
                     if (accepted == JNI_TRUE) {
+                        m_scaffoldAcceptedCount.fetch_add(1,std::memory_order_relaxed);
                         m_lastScaffoldPlacementTick = tickMilliseconds;
                         placed = true;
                         break;
@@ -1618,7 +1658,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 }
                 if (placed) break;
             }
-        }
+        } else observe(GameplayBlockReason::NoEligibleItem);
     } else if (!requested.scaffold) {
         m_scaffoldPlatformYValid = false;
     }

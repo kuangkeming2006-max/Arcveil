@@ -26,7 +26,7 @@ struct MappingServiceTests {
         service.m_root=cache.path()+"/cache";
         service.m_tools=build+"/tools";
         service.m_analyzer=build+"/MappingAnalyzer.exe";
-        service.m_probe=build+"/tools/MappingProbe-v16.dll";
+        service.m_probe=build+"/tools/MappingProbe-v17.dll";
         service.m_contracts=source+"/mapping/contracts-v2.json";
         service.m_defaultPack=service.m_legacyPack=source+"/mapping/packs/default-v2.json";
         service.m_modernPack=source+"/mapping/packs/vanilla-1.20.1.json";

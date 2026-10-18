@@ -251,6 +251,36 @@ identity, _ = identify("same-loader-lunar", normalize("same-loader-lunar", lunar
 check(identity["family"] == "Lunar" and identity["minecraftVersion"] == "1.8.9", identity)
 check(identity["mappingNamespace"] == "Notch", identity)
 
+# The observed Lunar release brand is client identity only, combined with an
+# independently scoped strong marker. Its v2.23.4 release is never an MC version.
+for index, observed in enumerate(("lunarclient:v2.23.4-2642,fml,forge", "lunarclient:v2.23.4-2642")):
+    raw = lunar_marker(legacy_raw, 1)
+    raw["runtimeEvidence"][0].update(brand="modified", brandObserved=observed)
+    name = f"audited-lunar-brand-{index}"
+    identity, _ = identify(name, normalize(name, raw))
+    check(identity["family"] == "Lunar" and identity["minecraftVersion"] == "1.8.9" and
+          identity["versionVerified"] and identity["mappingNamespace"] == "Notch", identity)
+for index, observed in enumerate(("lunarclient:v2.23.4-2642,fml,forge,unknown",
+                                  "lunarclient:v2.23-2642,fml,forge",
+                                  "lunarclient:v2.23.4-2642,unknown")):
+    raw = lunar_marker(legacy_raw, 1)
+    raw["runtimeEvidence"][0].update(brand="modified", brandObserved=observed)
+    name = f"unaudited-lunar-brand-{index}"
+    snapshot = normalize(name, raw)
+    identity, _ = identify(name, snapshot)
+    check(identity["family"] == "Unknown" and identity["versionVerified"], identity)
+    check(not authored(name, snapshot, legacy_path)["injectionReady"], identity)
+for name, marker_loader in (("audited-brand-foreign-marker", 2), ("audited-brand-no-marker", None)):
+    raw = lunar_marker(legacy_raw, marker_loader) if marker_loader else copy.deepcopy(legacy_raw)
+    raw["runtimeEvidence"][0].update(brand="modified", brandObserved="lunarclient:v2.23.4-2642,fml,forge")
+    identity, _ = identify(name, normalize(name, raw))
+    check(identity["family"] == "Unknown" and identity["versionVerified"], identity)
+weak_marker = copy.deepcopy(legacy_raw)
+weak_marker["runtimeEvidence"][0].update(brand="modified", brandObserved="lunarclient:v2.23.4-2642,fml,forge")
+weak_marker["launchEvidence"] = [{"family": "Lunar", "confidence": 199, "loader": 1}]
+identity, _ = identify("audited-brand-weak-marker", normalize("audited-brand-weak-marker", weak_marker))
+check(identity["family"] == "Unknown" and identity["versionVerified"], identity)
+
 # Detection intentionally contains no API members or hierarchy. Independent
 # loader evidence may choose a candidate, but it cannot validate that mapping.
 def detection_only(raw, extra_anchor=None):
@@ -313,6 +343,60 @@ check(identity["family"] == "Forge" and identity["minecraftVersion"] == "1.20.1"
       identity["versionVerified"], identity)
 check(not identity.get("selectedPack") and identity["mappingNamespace"] == "Unknown", identity)
 
+# A known modified family with one unverified candidate loader may request one
+# bounded independent-evidence pass. That receipt is scope, never a Ready proof.
+recovery_raw = detection_only(metadata(legacy, dictionary(legacy, "Lunar", "-mcp"),
+                                      brand="lunar", launch=[{"family": "Lunar", "confidence": 250}]))
+for item in recovery_raw["runtimeEvidence"]:
+    item.update(version="", versionSource="", diagnostic="independent runtime version evidence unavailable")
+recovery_snapshot = normalize("modified-candidate-recovery", recovery_raw)
+identity, _ = identify("modified-candidate-recovery", recovery_snapshot)
+recovery = identity.get("evidenceRecovery", {})
+check(recovery.get("eligible") and recovery["family"] == "Lunar" and recovery["versions"] == ["1.8.9"], identity)
+check(recovery["runtimeBinding"]["type"] == "LSyntheticFixtureLoader;" and
+      recovery["runtimeBinding"]["instance"] == 101, identity)
+check(not identity["versionVerified"] and not identity["minecraftVersion"] and
+      not identity.get("selectedPack") and not identity.get("runtimeBinding") and
+      identity["mappingNamespace"] == "Unknown", identity)
+check(not authored("modified-candidate-recovery", recovery_snapshot, legacy_path)["injectionReady"], identity)
+
+unknown_recovery = copy.deepcopy(recovery_raw)
+unknown_recovery["launchEvidence"] = []
+unknown_recovery["runtimeEvidence"][0].update(brand="", brandSource="")
+identity, _ = identify("unknown-candidate-recovery", normalize("unknown-candidate-recovery", unknown_recovery))
+check(not identity.get("evidenceRecovery", {}).get("eligible") and not identity["versionVerified"], identity)
+
+conflicted_recovery = copy.deepcopy(recovery_raw)
+conflicted_recovery["runtimeEvidence"][0].update(diagnostic="conflicting runtime version evidence", attempts=[
+    {"source": "loader-version-json", "status": "verified-value", "value": "1.20.1", "observed": "1.20.1", "reason": ""},
+    {"source": "realms-shared-constants", "status": "verified-value", "value": "1.8.9", "observed": "1.8.9", "reason": ""},
+])
+identity, _ = identify("conflicting-candidate-recovery", normalize("conflicting-candidate-recovery", conflicted_recovery))
+check(not identity.get("evidenceRecovery", {}).get("eligible") and not identity["versionVerified"], identity)
+
+ambiguous_recovery = copy.deepcopy(recovery_raw)
+ambiguous_recovery["loaders"].append({"id": 2, "type": "LOtherCandidateLoader;", "instance": 202})
+duplicate_classes = copy.deepcopy(ambiguous_recovery["classes"])
+for item in duplicate_classes:
+    item["loader"] = 2
+ambiguous_recovery["classes"].extend(duplicate_classes)
+duplicate_evidence = copy.deepcopy(ambiguous_recovery["runtimeEvidence"][0])
+duplicate_evidence["loader"] = 2
+ambiguous_recovery["runtimeEvidence"].append(duplicate_evidence)
+identity, _ = identify("multiple-candidate-loaders", normalize("multiple-candidate-loaders", ambiguous_recovery))
+check(not identity.get("evidenceRecovery", {}).get("eligible") and not identity["versionVerified"], identity)
+
+# Even a successfully observed semantic version candidate does not supply the
+# API classes/members omitted by Detection; authored validation is still required.
+proved_recovery = copy.deepcopy(recovery_raw)
+proved_recovery["runtimeEvidence"][0].update(version="1.8.9", versionSource="realms-semantic-candidate",
+                                           diagnostic="unusable version.json ignored; unsupported runtime version resource id")
+proved_snapshot = normalize("semantic-candidate-detection", proved_recovery)
+identity, _ = identify("semantic-candidate-detection", proved_snapshot)
+check(identity["family"] == "Lunar" and identity["minecraftVersion"] == "1.8.9" and
+      identity["versionVerified"] and identity["mappingNamespace"] == "MCP", identity)
+check(not authored("semantic-candidate-detection", proved_snapshot, legacy_path)["injectionReady"], identity)
+
 unsupported = copy.deepcopy(modern_raw)
 unsupported["runtimeEvidence"][0]["version"] = "1.20.4"
 identity, _ = identify("unsupported-1204", normalize("unsupported-1204", unsupported))
@@ -325,6 +409,7 @@ wrong_loader["loaders"].append({"id": 2, "type": "LOtherFixtureLoader;", "instan
 wrong_loader["runtimeEvidence"][0]["loader"] = 2
 identity, _ = identify("wrong-evidence-loader", normalize("wrong-evidence-loader", wrong_loader))
 check(not identity["versionVerified"] and identity["family"] == "Unknown", identity)
+check(not identity.get("evidenceRecovery", {}).get("eligible"), identity)
 
 # An exact version/brand does not bypass the necessary member descriptor checks.
 wrong_descriptor = copy.deepcopy(modern_raw)
@@ -364,6 +449,7 @@ cases = (
     ("recorded-vanilla-189", "beef1e76-6c07-410a-acd9-f5ad9cf6776d", "Unknown", "1.8.9"),
     ("recorded-vanilla-1201", "36ff0828-0084-434a-813e-1db334c3b63a", "Unknown", "1.20.1"),
     ("recorded-forge-1201", "fb9c53cb-053c-42c5-8275-26c16c26eba5", "Forge", None),
+    ("recorded-lunar-detection", "068eed5d-71ec-4e1e-9bd0-25d754046947", "Lunar", None),
 )
 for name, run_id, family, candidate_version in cases:
     source = recorded / run_id / "index-1.jsonl"
@@ -379,7 +465,14 @@ for name, run_id, family, candidate_version in cases:
         check(identity["minecraftVersion"] != "1.8.9", identity)
     check(hashlib.sha256(source.read_bytes()).hexdigest() == original_digest,
           "historical Snapshot must remain unchanged")
-    recorded_checks += 3
+    if name == "recorded-lunar-detection":
+        check(identity.get("evidenceRecovery", {}).get("eligible") and
+              identity["evidenceRecovery"]["versions"] == ["1.8.9"], identity)
+        check(not identity.get("selectedPack") and not identity.get("runtimeBinding") and
+              identity["mappingNamespace"] == "Unknown", identity)
+        recorded_checks += 5
+    else:
+        recorded_checks += 3
 
 print(f"{checks} runtime detection checks passed; {recorded_checks} assertions used unchanged "
       "historical Minecraft metadata. Remaining checks use synthetic offline metadata; "
