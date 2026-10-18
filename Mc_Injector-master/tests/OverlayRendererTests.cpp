@@ -199,6 +199,11 @@ struct OverlayRendererTestAccess {
         r.m_blacklist.panelEnabled = r.m_blacklist.showWithClickGui = false;
         r.m_blacklistPanelProgress=r.m_blacklistPanelVelocity=0;
     }
+    static void hotbarPreview(OverlayRenderer& r) {
+        r.m_features.smartHotbarEnabled=true;
+        r.m_features.smartHotbarActions[0]=0x876;
+        r.m_features.smartHotbarActions[1]=0x42;
+    }
     static void startOpening(OverlayRenderer& r) {
         r.m_clickGuiProgress=r.m_clickGuiVelocity=0;
     }
@@ -826,6 +831,7 @@ int main(int argc, char** argv)
     for (int theme=0;theme<2;++theme) for(int size=0;size<4;++size) for(int page=0;page<26;++page) {
         mcoverlay::OverlayRendererTestAccess::prepare(*renderer,page,size,theme!=0);
         if(page==22) mcoverlay::OverlayRendererTestAccess::freeLookPreview(*renderer);
+        if(page==23) mcoverlay::OverlayRendererTestAccess::hotbarPreview(*renderer);
         frame(true);
         // Content metrics are finalized at the next Begin, so sample twice.
         frame(true);
@@ -844,6 +850,13 @@ int main(int argc, char** argv)
         if(page==23&&size==0) saveFrame(theme?"smart-hotbar-v49-light.png":"smart-hotbar-v49-dark.png");
         if(page==24&&size==0) saveFrame(theme?"sprint-v50-light.png":"sprint-v50-dark.png");
         if(page==25&&size==0) saveFrame(theme?"shield-v50-light.png":"shield-v50-dark.png");
+    }
+    for(bool light:{false,true}) {
+        mcoverlay::OverlayRendererTestAccess::prepare(*renderer,23,0,light);
+        mcoverlay::OverlayRendererTestAccess::layout(*renderer,100,140,100);
+        mcoverlay::OverlayRendererTestAccess::hotbarPreview(*renderer);
+        for(int n=0;n<24;++n) frame(true);
+        saveFrame(light?"smart-hotbar-priorities-light.png":"smart-hotbar-priorities-dark.png");
     }
     ImVec2 referenceSize{};
     float previousContentHeight=0;

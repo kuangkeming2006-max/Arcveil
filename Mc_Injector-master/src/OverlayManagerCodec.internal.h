@@ -4,7 +4,7 @@
 #include <QString>
 
 namespace overlay_detail {
-bool validSmartHotbarConfig(const quint32 packed) noexcept;
+bool validSmartHotbarConfig(const QByteArray& packed) noexcept;
 QString normalizedRgbColor(const QString &value);
 QString decodeProtocolToken(const QByteArray &token);
 QByteArray encodeProtocolToken(const QString &value);

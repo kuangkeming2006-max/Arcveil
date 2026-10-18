@@ -141,3 +141,11 @@ rechecks transaction ownership/process identity after observable callbacks befor
 starting either loader. HELLO authenticates transport; BINDING_READY reports successful
 exact JNI lookup and counters; Active/TRANSACTION_COMMIT requires it and RENDERER_READY.
 The attach timeout remains armed until binding succeeds. Invalid receipts fail closed.
+
+## v56.9.4 Smart Hotbar persistence
+
+The private smartHotbarConfig storage is a validated QByteArray protocol token,
+allowing ordered per-key categories beyond the old 32-bit config. Existing numeric
+QSettings values migrate through the shared policy codec; named profiles use the
+same save/load path. The independent SMART_HOTBAR message carries v3 tokens;
+Qt properties and session/readiness authorization remain unchanged.

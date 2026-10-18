@@ -383,11 +383,11 @@ void AgentRuntime::telemetryMain() noexcept
                     if(cps.append("AIM_ATTACK_CPS_CHANGED ")&&
                        cps.appendInteger(m_featureChangedAimAttackCps.load(
                            std::memory_order_acquire))&&m_ipc->sendLine(cps.view())) {
-                        FixedLine<48U> smartHotbar;
+                        FixedLine<192U> smartHotbar;
                         if(smartHotbar.append("SMART_HOTBAR_CHANGED ")&&
-                           smartHotbar.appendInteger(
+                           smartHotbar.append(hotbar::encode(
                                m_featureChangedSmartHotbarConfig.load(
-                                   std::memory_order_acquire))&&
+                                   std::memory_order_acquire)))&&
                            m_ipc->sendLine(smartHotbar.view()))
                             sentFeatureChangedRevision=featureRevision;
                     }

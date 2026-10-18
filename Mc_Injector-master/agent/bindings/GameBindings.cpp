@@ -261,7 +261,7 @@ void GameBindings::release(JNIEnv* const env) noexcept
     m_itemUseHook.stop();
     m_impulseHook.stop();
     m_velocityHook.stop();
-    m_smartHotbarConfig.store(0U,std::memory_order_release);
+    m_smartHotbarConfig.store({},std::memory_order_release);
     m_smartHotbarRequest.store(0,std::memory_order_release);
     m_smartHotbarRefillRequest.store(0,std::memory_order_release);
     m_refillSlot=-1;
@@ -366,7 +366,7 @@ void GameBindings::abandon() noexcept
     m_itemUseHook.abandon();
     m_impulseHook.abandon();
     m_velocityHook.abandon();
-    m_smartHotbarConfig.store(0U,std::memory_order_release);
+    m_smartHotbarConfig.store({},std::memory_order_release);
     m_silentRotationHook.abandon();
     m_logicalController.reset();
     // Used only when the JVM is already shutting down and no JNIEnv can be

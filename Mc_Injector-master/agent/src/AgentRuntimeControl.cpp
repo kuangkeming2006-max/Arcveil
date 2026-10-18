@@ -138,17 +138,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         return true;
     }
     if(command=="SMART_HOTBAR") {
-        std::uint32_t packed=0U; std::string trailing;
-        if(!(stream>>packed)||(stream>>trailing)||!hotbar::validPacked(packed)) {
+        hotbar::Config packed{}; std::string token,trailing;
+        if(!(stream>>token)||(stream>>trailing)||!hotbar::decode(token,packed)) {
             (void)m_ipc->sendLine(
-                "ERROR BAD_SMART_HOTBAR expected-packed-v1-config");
+                "ERROR BAD_SMART_HOTBAR expected-valid-hotbar-config");
             return true;
         }
         m_smartHotbarConfig.store(packed,std::memory_order_release);
         // A receipt confirms accepted configuration only. JNI capabilities,
         // hook callbacks and actions are reported independently.
         if ((!m_hotbarReceiptSent || m_hotbarReceiptConfig != packed) &&
-            m_ipc->sendLine("SMART_HOTBAR_APPLIED " + std::to_string(packed))) {
+            m_ipc->sendLine("SMART_HOTBAR_APPLIED " + hotbar::encode(packed))) {
             m_hotbarReceiptConfig = packed;
             m_hotbarReceiptSent = true;
         }

@@ -249,3 +249,11 @@ emitting `agentGameplayDiagnostic(QJsonObject)`. This is an observation edge,
 also persisted through MappingService's current-owner transaction event log,
 with no path to settings, capability overrides, or Attach Ready authorization.
 See [agent-runtime](modules/agent-runtime.md) and [ipc](modules/ipc.md).
+
+## v56.9.4 Smart Hotbar value boundary
+
+Renderer FeatureSettings -> runtime -> GameBindings GameplaySettings retains nine
+ints, now packed ordered category lists (eight nibbles each). Runtime publishes
+complete hotbar::Config snapshots. Controller <-> runtime uses validated v3 tokens
+through the existing independent SMART_HOTBAR message family and QSettings field.
+Controller continues using only the pure-value policy/codec, never JNI.

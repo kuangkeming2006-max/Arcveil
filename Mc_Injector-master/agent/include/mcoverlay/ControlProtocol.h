@@ -19,7 +19,7 @@ namespace mcoverlay::protocol {
 //   GUI_ELEMENT_SCALE_CHANGED <percent:60..150>\n
 //   GUI_ELEMENT_SCALE_APPLIED <percent:60..150>\n
 //   SCAFFOLD_CONFIG_APPLIED <enabled:0|1> <same-layer:0|1>\n
-//   SMART_HOTBAR_APPLIED <validated-packed-config>\n
+//   SMART_HOTBAR_APPLIED <validated-config-token>\n
 //   GAMEPLAY_DIAGNOSTIC 1 <seq> <tick-ms> <configured-flags> <input-flags>
 //     <binding-mask> <missing-bindings> <hook-mask> <update-calls> <hotbar-callbacks> <hotbar-actions>
 //     <scaffold-attempts> <scaffold-accepted> <last-block-reason>\n
@@ -42,3 +42,9 @@ inline constexpr std::string_view kDetachCommand = "DETACH";
 inline constexpr std::size_t kMaximumLineBytes = 1024;
 
 } // namespace mcoverlay::protocol
+
+// Smart Hotbar v3 (Controller and Agent must be upgraded together):
+// SMART_HOTBAR / SMART_HOTBAR_CHANGED / SMART_HOTBAR_APPLIED carry one token:
+// v3:<flags>:<key1>...:<key9>. Each key is an unsigned decimal uint32 with
+// low-to-high nibbles in priority order, unique category IDs 1..8, zero=vanilla.
+// flags preserve enabled/refill/sprint/all-names bits. v1/v2 numeric input migrates.

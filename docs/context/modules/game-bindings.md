@@ -150,3 +150,15 @@ No counter claims server acknowledgment. Existing feature/input/world/interactio
 guards remain the authority. Action-specific block reasons survive a render update
 until an action retries/succeeds or the effective feature turns off. Runtime copies
 the facade into a bounded mailbox; it never performs JNI through the diagnostic.
+
+## v56.9.4 Smart Hotbar priorities
+
+`SmartHotbarPolicy.h` adds `Config` / coherent `AtomicConfig`, v3 token codecs,
+ordered unique category IDs and the shared legacy-item classifier. The existing
+`smartHotbarActions` nine-int value boundary now carries up to eight priority
+nibbles per key (low nibble first); zero retains vanilla slot selection.
+`selectSource` resolves category priority before held/hotbar/inventory preference.
+Pearl, Bow and TNT are separate categories. Legacy pressure plates 70/72/147/148
+are excluded from Blocks and refill; TNT is also distinct from general Blocks.
+Legacy inventory APIs supply the item IDs; modern inventory remains unsupported.
+No Java hook signature or mapping symbol changed.

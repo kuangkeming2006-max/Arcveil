@@ -325,8 +325,8 @@ void OverlayManager::loadFeatureSettings()
     m_featureExtraBits = settings.value(
         QStringLiteral("featureExtraBits"), 0x43U).toUInt() & ~0x10U;
     m_smartHotbarConfig=settings.value(
-        QStringLiteral("smartHotbarConfig"),quint32(0U)).toUInt();
-    if(!validSmartHotbarConfig(m_smartHotbarConfig)) m_smartHotbarConfig=0U;
+        QStringLiteral("smartHotbarConfig"),QByteArray("0")).toByteArray();
+    if(!validSmartHotbarConfig(m_smartHotbarConfig)) m_smartHotbarConfig="0";
     m_textGuiAlignment = std::clamp(settings.value(
         QStringLiteral("textGuiAlignment"), 2).toInt(), 0, 2);
     m_localMobReach = std::clamp(settings.value(

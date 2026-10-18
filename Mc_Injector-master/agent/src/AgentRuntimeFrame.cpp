@@ -214,7 +214,7 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         m_localAttackDelayMs.load(std::memory_order_acquire),
         m_localVelocityPercent.load(std::memory_order_acquire),
         m_featureHotkeysPackedC.load(std::memory_order_acquire));
-    const std::uint32_t smartHotbarConfig=m_smartHotbarConfig.load(
+    const auto smartHotbarConfig=m_smartHotbarConfig.load(
         std::memory_order_acquire);
     activeFeatures.smartHotbarEnabled=hotbar::enabled(smartHotbarConfig);
     activeFeatures.smartHotbarActions=hotbar::unpack(smartHotbarConfig);

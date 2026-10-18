@@ -1,4 +1,5 @@
 #pragma once
+#include "SmartHotbarPolicy.h"
 
 #include <jni.h>
 #include <jvmti.h>
@@ -595,7 +596,7 @@ private:
     bool m_safewalkSneakForced = false;
     bool m_sprintKeyForced = false;
     int m_sprintKeyCode = 0;
-    std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
+    hotbar::AtomicConfig m_smartHotbarConfig{};
     std::atomic<int> m_smartHotbarRequest{0};
     std::atomic<int> m_smartHotbarRefillRequest{0};
     std::atomic<std::uint64_t> m_movementPacketSerial{0U};

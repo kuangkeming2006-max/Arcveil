@@ -760,10 +760,11 @@ int main()
         std::array<int,SlotCount> actions{};
         actions[0]=static_cast<int>(Action::Sword);
         actions[3]=static_cast<int>(Action::Blocks);
-        const std::uint32_t packed=pack(true,actions);
+        const auto packed=pack(true,actions);
         check(validPacked(packed)&&enabled(packed)&&unpack(packed)==actions,
               "smart hotbar configuration has an exact bounded roundtrip");
-        check(!validPacked(packed|(7U<<(1U+2U*3U))),
+        auto invalid=packed;invalid.actions[2]=9;
+        check(!validPacked(invalid),
               "smart hotbar rejects reserved action values");
         check(validPacked(1U|(2U<<7U))&&unpack(1U|(2U<<7U))[3]==2,
               "v49 two-bit hotbar settings remain readable without shifting assignments");
@@ -775,6 +776,29 @@ int main()
         for(int id:{257,270,274,278,285}) check(toolKind(id)==ItemKind::Pickaxe,"every vanilla pickaxe material matches");
         for(int id:{258,271,275,279,286}) check(toolKind(id)==ItemKind::Axe,"every vanilla axe material matches");
         check(toolKind(359)==ItemKind::Shears&&toolKind(1)==ItemKind::Other,"shears classify without treating unrelated items as tools");
+        Config parsed{};
+        check(decode(encode(expanded),parsed)&&parsed==expanded,"v3 preferences and all keys roundtrip");
+        check(decode(std::to_string(packLegacy(true,actions,true,true,true)),parsed)&&parsed==expanded,
+              "v2 settings migrate to v3 without losing flags or keys");
+        check(decode("257",parsed)&&parsed.actions[3]==2,"v1 numeric settings migrate");
+        for(const auto bad:{"", "v3:", "v3:0:0", "-1", "4294967296", "v3:0:17:0:0:0:0:0:0:0:0",
+            "v3:0:16:0:0:0:0:0:0:0:0", "v3:2:0:0:0:0:0:0:0:0:0",
+            "v3:0:9:0:0:0:0:0:0:0:0", "v3:0:0:0:0:0:0:0:0:0:0:0"})
+            check(!decode(bad,parsed),"malformed, duplicate, sparse or unknown configuration is rejected");
+        for(int id:{70,72,147,148}) check(classify(id,false,true)==ItemKind::Other,"all legacy pressure plates excluded");
+        check(classify(46,false,true)==ItemKind::Tnt,"TNT is distinct from general blocks");
+        check(classify(1,false,true)==ItemKind::Blocks,"ordinary building blocks still match");
+        check(classify(368,false,false)==ItemKind::Pearl&&classify(261,false,false)==ItemKind::Bow,"pearl and bow identify correctly");
+        std::array<ItemKind,36> priorityInventory{};
+        priorityInventory[2]=ItemKind::Bow;priorityInventory[20]=ItemKind::Pearl;
+        check(selectSource(priorityInventory,2,0x76)==20,"inventory pearl beats a held lower-priority bow");
+        priorityInventory[20]=ItemKind::Empty;
+        check(selectSource(priorityInventory,2,0x76)==2,"missing first priority falls back to held bow");
+        check(selectSource(priorityInventory,2,8)==-1,"missing TNT leaves normal fallback available");
+        std::array<int,9> full{};full.fill(std::bit_cast<int>(0x87654321U));
+        const auto all=pack(true,full,true,true,true);
+        check(decode(encode(all),parsed)&&parsed==all,"eight priorities on all nine keys roundtrip including signed high nibble");
+        check(encode(all).size()<160,"v3 token stays within telemetry and transport budget");
         std::array<ItemKind,36U> inventory{};
         inventory[7]=ItemKind::Sword;
         inventory[18]=ItemKind::Blocks;

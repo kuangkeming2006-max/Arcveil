@@ -293,7 +293,7 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
 void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
 {
     const unsigned aimOptions=packAimOptions(settings);
-    const std::uint32_t smartHotbarConfig=hotbar::pack(
+    const hotbar::Config smartHotbarConfig=hotbar::pack(
         settings.smartHotbarEnabled,settings.smartHotbarActions,
         settings.smartHotbarRefill,settings.sprintEnabled,settings.nametagAlways);
     m_aimOptions.store(aimOptions,std::memory_order_release);

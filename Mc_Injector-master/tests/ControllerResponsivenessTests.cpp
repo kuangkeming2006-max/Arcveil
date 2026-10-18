@@ -91,6 +91,19 @@ struct ControllerResponsivenessTests {
                 std::puts("FAIL malformed binding receipt accepted"); return false;
             }
         }
+        // v3 changes roundtrip through settings without becoming readiness authority.
+        {
+            OverlayManager hotbar;
+            hotbar.m_authenticated=true;
+            const QByteArray token="v3:1879048193:2166:66:0:0:0:0:0:0:0";
+            hotbar.processAgentLine("SMART_HOTBAR_CHANGED "+token);
+            if(hotbar.m_smartHotbarConfig!=token) {std::puts("FAIL v3 hotbar change");return false;}
+            hotbar.flushFeatureSettings();
+            OverlayManager restored;
+            if(restored.m_smartHotbarConfig!=token) {std::puts("FAIL persisted v3 priorities");return false;}
+            hotbar.processAgentLine("SMART_HOTBAR_CHANGED v3:0:17:0:0:0:0:0:0:0:0");
+            if(hotbar.m_smartHotbarConfig!=token) {std::puts("FAIL duplicate category accepted");return false;}
+        }
         OverlayManager manager;
         manager.m_transaction = std::make_shared<AttachTransaction>();
         const QByteArray attachDisabled =

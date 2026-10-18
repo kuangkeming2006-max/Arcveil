@@ -153,3 +153,13 @@ on the modern Adapter. WGL hook and controller D3D11 remain unchanged.
 CoreProfileRendererTests runs real WGL core rendering; OpenGlJvmSmoke optionally
 uses `-CoreProfile -FixturePath -MappingPack` for a private modern JVM. Neither
 test is real Minecraft render-pipeline verification.
+
+## v56.9.4 Smart Hotbar editor
+
+ClickGui page 23 presents one card per live Minecraft hotbar binding. Each card
+adds unused categories through +, edits a category, reorders with up/down, and
+removes entries (empty restores vanilla). Stable category IDs animate rank changes;
+card height and shared button/popup motion respect reduced motion. Narrow layouts
+stack controls. FeatureSettings.smartHotbarActions retains nine ints, each now an
+ordered list of up to eight nonzero category nibbles. Dirty/echo ownership stays
+in the existing renderer mailbox.
