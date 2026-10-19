@@ -249,3 +249,34 @@ emitting `agentGameplayDiagnostic(QJsonObject)`. This is an observation edge,
 also persisted through MappingService's current-owner transaction event log,
 with no path to settings, capability overrides, or Attach Ready authorization.
 See [agent-runtime](modules/agent-runtime.md) and [ipc](modules/ipc.md).
+
+## v56.9.4 Smart Hotbar value boundary
+
+Renderer FeatureSettings -> runtime -> GameBindings GameplaySettings retains nine
+ints, now packed ordered category lists (eight nibbles each). Runtime publishes
+complete hotbar::Config snapshots. Controller <-> runtime uses validated v3 tokens
+through the existing independent SMART_HOTBAR message family and QSettings field.
+Controller continues using only the pure-value policy/codec, never JNI.
+
+## v56.9.5 Silent Aim identity boundary
+
+GameBindingsSnapshot -> EntityMarker.player remains actual class / exact world-player
+object classification. Correction in v56.9.6: Renderer and game-bindings share only
+existing classification/geometry data, never a target eligibility predicate. ESP
+keeps its pre-Force863b92b rendering behavior; only Silent Force broadens aim
+identity qualification. Presentation switches, teammate visibility and projection
+are not targeting authorization. Both run in the Agent and share GameSnapshot;
+no new entity wire protocol is needed. Controller/runtime add the independent
+AIM_TARGET_FILTER 0|1 message family; GameplaySettings projects the typed policy.
+LogicalFrameInput includes the effective filter in existing context cancellation.
+
+## v56.9.7 Force transaction health boundary
+
+AimTargetPolicy removes only Force's target-health requirement. Gameplay and final
+JNI stages share CombatTargetValidation's current-world player classification;
+Normal retains its old health gates. InteractionCommand carries frozen targetFilter
+with intent/target/rotation proof inside the Agent. LogicalStateController checks
+that policy when revising, executing or completing a command; this adds no wire
+fields and does not change ESP or Smart Hotbar. Health-independent target validity
+is never a rendering predicate. New JNI validator tests use function-table doubles;
+historical/current production WGL parity still guards original ESP output.

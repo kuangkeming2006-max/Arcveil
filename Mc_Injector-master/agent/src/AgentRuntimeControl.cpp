@@ -128,6 +128,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         m_aimOptions.store(value,std::memory_order_release);
         return true;
     }
+    if (command == "AIM_TARGET_FILTER") {
+        std::string token, trailing;
+        if (!(stream >> token) || (stream >> trailing) ||
+            (token != "0" && token != "1")) {
+            (void)m_ipc->sendLine("ERROR BAD_AIM_TARGET_FILTER expected-0-or-1");
+            return true;
+        }
+        m_aimTargetFilter.store(token == "1" ? 1 : 0, std::memory_order_release);
+        (void)m_ipc->sendLine("AIM_TARGET_FILTER_APPLIED " + token);
+        return true;
+    }
     if(command=="AIM_ATTACK_CPS") {
         int value=0; std::string trailing;
         if(!(stream>>value)||value<1||value>20||(stream>>trailing)) {
@@ -138,17 +149,17 @@ bool AgentRuntime::handleControlLine(const std::string_view line) noexcept
         return true;
     }
     if(command=="SMART_HOTBAR") {
-        std::uint32_t packed=0U; std::string trailing;
-        if(!(stream>>packed)||(stream>>trailing)||!hotbar::validPacked(packed)) {
+        hotbar::Config packed{}; std::string token,trailing;
+        if(!(stream>>token)||(stream>>trailing)||!hotbar::decode(token,packed)) {
             (void)m_ipc->sendLine(
-                "ERROR BAD_SMART_HOTBAR expected-packed-v1-config");
+                "ERROR BAD_SMART_HOTBAR expected-valid-hotbar-config");
             return true;
         }
         m_smartHotbarConfig.store(packed,std::memory_order_release);
         // A receipt confirms accepted configuration only. JNI capabilities,
         // hook callbacks and actions are reported independently.
         if ((!m_hotbarReceiptSent || m_hotbarReceiptConfig != packed) &&
-            m_ipc->sendLine("SMART_HOTBAR_APPLIED " + std::to_string(packed))) {
+            m_ipc->sendLine("SMART_HOTBAR_APPLIED " + hotbar::encode(packed))) {
             m_hotbarReceiptConfig = packed;
             m_hotbarReceiptSent = true;
         }

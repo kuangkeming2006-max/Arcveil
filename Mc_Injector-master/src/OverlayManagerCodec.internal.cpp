@@ -31,9 +31,10 @@ using namespace overlay_detail;
 #include "../agent/bindings/SmartHotbarPolicy.h"
 
 namespace overlay_detail {
-bool validSmartHotbarConfig(const quint32 packed) noexcept
+bool validSmartHotbarConfig(const QByteArray& packed) noexcept
 {
-    return mcoverlay::hotbar::validPacked(packed);
+    mcoverlay::hotbar::Config config{};
+    return mcoverlay::hotbar::decode(std::string_view(packed.constData(),packed.size()),config);
 }
 
 QString normalizedRgbColor(const QString &value)

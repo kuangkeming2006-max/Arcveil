@@ -50,7 +50,11 @@ bool GameBindings::onItemUse(JNIEnv* env,jobject minecraft,const bool entering) 
     if(entering) {
         jobject item=held?env->CallObjectMethod(held,c->getItem):nullptr;
         if(!env->ExceptionCheck()&&item&&count>0&&
-           env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE) m_refillSlot=selected;
+           env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE&&c->itemClass&&c->getIdFromItem) {
+            const int id=env->CallStaticIntMethod(c->itemClass,c->getIdFromItem,item);
+            if(!env->ExceptionCheck()&&hotbar::classify(id,false,true)==hotbar::ItemKind::Blocks)
+                m_refillSlot=selected;
+        }
         return false;
     }
     // Check after Minecraft has removed the consumed stack. Never redirect
@@ -208,15 +212,14 @@ bool GameBindings::processSmartHotbarRequests(JNIEnv* env,jobject minecraft,
         jobject item=amount>0?env->CallObjectMethod(stack,c->getItem):nullptr;
         if(env->ExceptionCheck()) {requeue();return false;}
         if(item) {
-            if(env->IsInstanceOf(item,c->itemSwordClass)==JNI_TRUE)
-                kinds[static_cast<std::size_t>(slot)]=hotbar::ItemKind::Sword;
-            else if(env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE)
-                kinds[static_cast<std::size_t>(slot)]=hotbar::ItemKind::Blocks;
-            else if(c->itemClass&&c->getIdFromItem) {
-                const jint id=env->CallStaticIntMethod(c->itemClass,c->getIdFromItem,item);
-                if(env->ExceptionCheck()) {requeue();return false;}
-                kinds[static_cast<std::size_t>(slot)]=hotbar::toolKind(id);
-            }
+            // IDs come from the validated legacy inventory API. Unknown IDs
+            // cannot admit pressure plates into the building-block category.
+            if(!c->itemClass||!c->getIdFromItem) continue;
+            const jint id=env->CallStaticIntMethod(c->itemClass,c->getIdFromItem,item);
+            if(env->ExceptionCheck()) {requeue();return false;}
+            kinds[static_cast<std::size_t>(slot)]=hotbar::classify(id,
+                env->IsInstanceOf(item,c->itemSwordClass)==JNI_TRUE,
+                env->IsInstanceOf(item,c->itemBlockClass)==JNI_TRUE);
         }
     }
     const int current=std::clamp(static_cast<int>(env->GetIntField(inventory,c->currentItem)),0,8);

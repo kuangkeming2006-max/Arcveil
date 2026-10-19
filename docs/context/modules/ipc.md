@@ -130,3 +130,28 @@ does not prove completeness; a missing group may include IDs left null by an
 earlier short circuit and is not an exact failed-symbol diagnosis.
 
 2026-09-26 导航更新：控制器接收/快照在 OverlayManagerProtocol.cpp，服务消息在 Services.cpp，读写在 Transport.cpp，公共 token helper 在 Codec.internal.cpp；Agent 接收在 AgentRuntimeControl.cpp，发送在 Telemetry.cpp，feature 编码在 Features.cpp。消息格式与字段顺序未改，生命周期 smoke 和控制器响应性测试已运行通过。
+
+## v56.9.4 Smart Hotbar v3
+
+SMART_HOTBAR, SMART_HOTBAR_CHANGED and SMART_HOTBAR_APPLIED accept/carry one bounded
+`v3:<flags>:<key1>:...:<key9>` token. Flags retain enabled/refill/sprint/all-names
+bits; each key is unsigned decimal uint32, low-to-high nibbles are unique category
+IDs 1..8. Zero means vanilla. Invalid flags, duplicates, holes, overflow and extra
+fields are rejected. v1/v2 numeric input migrates; new output uses v3. Both shipped
+processes must be upgraded together. Controller persists the validated token in
+the existing smartHotbarConfig QSettings key, including named profiles. Numeric
+legacy config receipts retain numeric JSON packed values; v3 receipts use strings.
+No FEATURE_STATE_V3 positional fields changed; receipts remain diagnostic only.
+
+## Silent Aim target filter
+
+Controller `sendFeatureSnapshot` sends `AIM_TARGET_FILTER <filter>` independently
+of `FEATURE_STATE*` and `AIM_OPTIONS`. The Agent control worker requires exactly
+one literal `0` (Normal) or `1` (Force), rejects any other token/extra field with
+`ERROR BAD_AIM_TARGET_FILTER`, and replies `AIM_TARGET_FILTER_APPLIED <filter>`.
+That acknowledgement confirms accepted configuration only. Renderer settings
+changes travel through the feature revision mailbox to telemetry as
+`AIM_TARGET_FILTER_CHANGED <filter>`; authenticated Controller parsing applies
+the same exact-token validation and persists the Qt property. Old/missing
+configuration fields default to Normal. Existing messages and positional
+schemas retain their field counts and meanings.

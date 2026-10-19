@@ -153,3 +153,38 @@ on the modern Adapter. WGL hook and controller D3D11 remain unchanged.
 CoreProfileRendererTests runs real WGL core rendering; OpenGlJvmSmoke optionally
 uses `-CoreProfile -FixturePath -MappingPack` for a private modern JVM. Neither
 test is real Minecraft render-pipeline verification.
+
+## v56.9.4 Smart Hotbar editor
+
+ClickGui page 23 presents one card per live Minecraft hotbar binding. Each card
+adds unused categories through +, edits a category, reorders with up/down, and
+removes entries (empty restores vanilla). Stable category IDs animate rank changes;
+card height and shared button/popup motion respect reduced motion. Narrow layouts
+stack controls. FeatureSettings.smartHotbarActions retains nine ints, each now an
+ordered list of up to eight nonzero category nibbles. Dirty/echo ownership stays
+in the existing renderer mailbox.
+
+## Silent Aim Target Filter
+
+ClickGui page 8 exposes Target Filter (Normal/Force) inside SILENT CONTROL,
+enabled only for Silent Lock. `FeatureSettings.aimTargetFilter` defaults to 0
+(Normal); 1 is Force. The selection uses the existing animated combo and feature
+dirty mailbox. Its explanation separates Player ESP Hitbox identity eligibility
+from unchanged FOV, distance, ray, block occlusion and attack reach checks. The
+renderer passes the value through the existing FeatureSettings contract; it does
+not derive target eligibility or perform gameplay selection.
+
+## v56.9.6 Player ESP regression correction
+
+The Player ESP rendering baseline is PR11 pre-Force commit863b92b. The v56.9.5
+`playerEspHitboxEligible` global guard was incorrect: targeting validity must not
+shrink the pre-existing renderer's entity set, including what it draws during
+transitional/dead or otherwise aim-ineligible snapshots. That guard is removed;
+`overlay_renderer_world.cpp` is byte-for-byte identical in Git to863b92b.
+Entity collection, Nametag, team-box/arrow rules and render settings are unchanged.
+Normal/Force is a one-way aim policy and is never consulted when drawing ESP.
+Only the existing EntityMarker classification and geometry data are shared.
+Regression validation compiles the historical world renderer and repaired world
+renderer against identical fixture inputs, then compares actual WGL draw results
+with Force off/on. Expected visibility is produced by the historical renderer,
+not derived from an aim policy helper. See V56_9_6_VALIDATION.md for results/limits.

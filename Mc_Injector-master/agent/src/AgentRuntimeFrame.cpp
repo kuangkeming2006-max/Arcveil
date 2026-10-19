@@ -214,7 +214,7 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
         m_localAttackDelayMs.load(std::memory_order_acquire),
         m_localVelocityPercent.load(std::memory_order_acquire),
         m_featureHotkeysPackedC.load(std::memory_order_acquire));
-    const std::uint32_t smartHotbarConfig=m_smartHotbarConfig.load(
+    const auto smartHotbarConfig=m_smartHotbarConfig.load(
         std::memory_order_acquire);
     activeFeatures.smartHotbarEnabled=hotbar::enabled(smartHotbarConfig);
     activeFeatures.smartHotbarActions=hotbar::unpack(smartHotbarConfig);
@@ -237,6 +237,7 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
     activeFeatures.featureHotkeys[16U]=static_cast<int>((aimOptions>>19U)&0xFFU);
     activeFeatures.aimAttackCps=std::clamp(
         m_aimAttackCps.load(std::memory_order_acquire),1,20);
+    activeFeatures.aimTargetFilter = m_aimTargetFilter.load(std::memory_order_acquire);
     activeFeatures.longJumpEnabled=false;
     activeFeatures.localMobAuraEnabled=false;
     if (env != nullptr) {
@@ -342,6 +343,8 @@ void AgentRuntime::beforeSwapBuffers(HDC const deviceContext)
                             snapshot.integratedSinglePlayer;
         gameplay.aimLockOnMode = activeFeatures.aimLockOnMode;
         gameplay.aimSilentLock = activeFeatures.aimSilentLock;
+        gameplay.aimTargetFilter = activeFeatures.aimTargetFilter == 1
+            ? aim::AimTargetFilter::Force : aim::AimTargetFilter::Normal;
         gameplay.silentFileDebug = activeFeatures.silentFileDebug;
         gameplay.silentChatDebug = activeFeatures.silentChatDebug;
         gameplay.aimAttackViability = activeFeatures.aimAttackViability;

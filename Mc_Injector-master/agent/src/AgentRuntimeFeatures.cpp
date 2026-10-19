@@ -293,7 +293,7 @@ FeatureSettings unpackFeatures(const std::uint32_t bits,
 void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
 {
     const unsigned aimOptions=packAimOptions(settings);
-    const std::uint32_t smartHotbarConfig=hotbar::pack(
+    const hotbar::Config smartHotbarConfig=hotbar::pack(
         settings.smartHotbarEnabled,settings.smartHotbarActions,
         settings.smartHotbarRefill,settings.sprintEnabled,settings.nametagAlways);
     m_aimOptions.store(aimOptions,std::memory_order_release);
@@ -387,6 +387,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
                           std::memory_order_release);
     m_aimAttackCps.store(std::clamp(settings.aimAttackCps,1,20),
                          std::memory_order_release);
+    m_aimTargetFilter.store(settings.aimTargetFilter == 1 ? 1 : 0,
+                            std::memory_order_release);
     m_clickGuiWidthPercent.store(std::clamp(settings.clickGuiWidthPercent, 40, 150),
                                  std::memory_order_release);
     m_clickGuiHeightPercent.store(std::clamp(settings.clickGuiHeightPercent, 40, 150),
@@ -508,6 +510,8 @@ void AgentRuntime::queueFeatureChanged(const FeatureSettings& settings) noexcept
         std::clamp(settings.aimFovDegrees, 1, 360), std::memory_order_relaxed);
     m_featureChangedAimAttackCps.store(
         std::clamp(settings.aimAttackCps,1,20),std::memory_order_relaxed);
+    m_featureChangedAimTargetFilter.store(
+        settings.aimTargetFilter == 1 ? 1 : 0, std::memory_order_relaxed);
     m_featureChangedClickGuiWidthPercent.store(
         std::clamp(settings.clickGuiWidthPercent, 40, 150), std::memory_order_relaxed);
     m_featureChangedClickGuiHeightPercent.store(

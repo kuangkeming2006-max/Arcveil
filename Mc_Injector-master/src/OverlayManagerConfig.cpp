@@ -283,6 +283,9 @@ void OverlayManager::loadFeatureSettings()
     m_aimLockOnMode = settings.value(
         QStringLiteral("aimLockOnMode"), false).toBool();
     m_aimSilentLock=settings.value(QStringLiteral("aimSilentLock"),false).toBool();
+    // Older profiles have no filter field and retain strict Normal targeting.
+    m_aimTargetFilter = settings.value(QStringLiteral("aimTargetFilter"), 0).toInt() == 1
+        ? 1 : 0;
     m_silentFileDebug=settings.value(QStringLiteral("silentFileDebug"),false).toBool();
     m_silentChatDebug=settings.value(QStringLiteral("silentChatDebug"),false).toBool();
     m_aimScannerEnabled=settings.value(QStringLiteral("aimScannerEnabled"),true).toBool();
@@ -325,8 +328,8 @@ void OverlayManager::loadFeatureSettings()
     m_featureExtraBits = settings.value(
         QStringLiteral("featureExtraBits"), 0x43U).toUInt() & ~0x10U;
     m_smartHotbarConfig=settings.value(
-        QStringLiteral("smartHotbarConfig"),quint32(0U)).toUInt();
-    if(!validSmartHotbarConfig(m_smartHotbarConfig)) m_smartHotbarConfig=0U;
+        QStringLiteral("smartHotbarConfig"),QByteArray("0")).toByteArray();
+    if(!validSmartHotbarConfig(m_smartHotbarConfig)) m_smartHotbarConfig="0";
     m_textGuiAlignment = std::clamp(settings.value(
         QStringLiteral("textGuiAlignment"), 2).toInt(), 0, 2);
     m_localMobReach = std::clamp(settings.value(
@@ -476,6 +479,7 @@ void OverlayManager::flushFeatureSettings()
     settings.setValue(QStringLiteral("aimAssistEnabled"), m_aimAssistEnabled);
     settings.setValue(QStringLiteral("aimLockOnMode"), m_aimLockOnMode);
     settings.setValue(QStringLiteral("aimSilentLock"), m_aimSilentLock);
+    settings.setValue(QStringLiteral("aimTargetFilter"), m_aimTargetFilter);
     settings.setValue(QStringLiteral("silentFileDebug"), m_silentFileDebug);
     settings.setValue(QStringLiteral("silentChatDebug"), m_silentChatDebug);
     settings.setValue(QStringLiteral("aimScannerEnabled"), m_aimScannerEnabled);

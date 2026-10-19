@@ -1,4 +1,5 @@
 #pragma once
+#include "bindings/SmartHotbarPolicy.h"
 
 #include "AgentOptions.h"
 #include "overlay_renderer.h"
@@ -135,6 +136,7 @@ private:
     std::atomic<int> m_aimMaximumDistance{16};
     std::atomic<int> m_aimFovDegrees{90};
     std::atomic<int> m_aimAttackCps{10};
+    std::atomic<int> m_aimTargetFilter{0};
     std::atomic<int> m_clickGuiWidthPercent{100};
     std::atomic<int> m_clickGuiHeightPercent{100};
     std::atomic<int> m_clickGuiOpacity{96};
@@ -142,10 +144,10 @@ private:
     // 32-bit feature mask. Bits: nearest, text line, knockback, bow,
     // local-hostile aura, local incoming-velocity scaling.
     std::atomic<std::uint32_t> m_featureExtraBits{0x43U};
-    std::atomic<std::uint32_t> m_smartHotbarConfig{0U};
+    hotbar::AtomicConfig m_smartHotbarConfig{};
     // Diagnostic receipt deduplication is owned by the control-pipe thread.
     std::uint8_t m_scaffoldReceiptFlags = 0xffU;
-    std::uint32_t m_hotbarReceiptConfig = 0U;
+    hotbar::Config m_hotbarReceiptConfig{};
     bool m_hotbarReceiptSent = false;
     std::atomic<unsigned> m_aimOptions{412810U};
     std::atomic<unsigned> m_featureChangedAimOptions{412810U};
@@ -265,11 +267,12 @@ private:
     std::atomic<int> m_featureChangedAimMaximumDistance{16};
     std::atomic<int> m_featureChangedAimFovDegrees{90};
     std::atomic<int> m_featureChangedAimAttackCps{10};
+    std::atomic<int> m_featureChangedAimTargetFilter{0};
     std::atomic<int> m_featureChangedClickGuiWidthPercent{100};
     std::atomic<int> m_featureChangedClickGuiHeightPercent{100};
     std::atomic<int> m_featureChangedClickGuiOpacity{96};
     std::atomic<std::uint32_t> m_featureChangedExtraBits{0x03U};
-    std::atomic<std::uint32_t> m_featureChangedSmartHotbarConfig{0U};
+    hotbar::AtomicConfig m_featureChangedSmartHotbarConfig{};
     std::atomic<int> m_featureChangedTextGuiAlignment{2};
     std::atomic<int> m_featureChangedLocalMobReach{4};
     std::atomic<int> m_featureChangedLocalAttackDelayMs{500};

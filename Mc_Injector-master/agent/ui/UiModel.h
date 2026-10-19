@@ -115,6 +115,9 @@ struct FeatureSettings final {
     int aimMaximumDistance = 16;
     int aimFovDegrees = 90;
     int aimAttackCps = 10;
+    // Silent Aim identity policy only: 0=Normal, 1=Force. Other aim modes
+    // retain Normal filtering even when the saved selection is Force.
+    int aimTargetFilter = 0;
     int textGuiAlignment = 2; // 0=left, 1=center, 2=right
     int localMobReach = 4;
     int localAttackDelayMs = 500;

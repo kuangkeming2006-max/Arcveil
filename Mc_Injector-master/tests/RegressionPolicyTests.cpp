@@ -60,6 +60,36 @@ int main()
     const auto validate=bindingSource.find("physics_ray_stale",interaction);
     check(validate!=std::string::npos&&validate<swing,
           "PRE physics revalidation precedes swing and attack");
+    const auto executionForce=bindingSource.find("if(command.targetFilter==aim::AimTargetFilter::Force) {");
+    const auto executionNormal=bindingSource.find("} else {",executionForce);
+    const auto executionGeometry=bindingSource.find("silent::Vec3 eye{}",executionNormal);
+    const auto executionHealth=bindingSource.find("CallFloatMethod(target,c->getHealth)");
+    check(executionForce!=std::string::npos&&executionNormal!=std::string::npos&&
+          executionGeometry!=std::string::npos&&executionHealth>executionNormal&&
+          executionHealth<executionGeometry&&
+          bindingSource.substr(executionForce,executionNormal-executionForce).find(
+              "aim::validateForcePlayerEntity(env,world,player,target,")!=std::string::npos&&
+          bindingSource.substr(executionForce,executionNormal-executionForce).find("getHealth")==std::string::npos,
+          "execution uses frozen command policy: Force verifies real player identity without health; Normal retains health gate");
+    check(bindingSource.find("physics_ray_occluded",executionGeometry)<swing&&
+          bindingSource.find("readCombatEye(env,player,eye)",executionGeometry)<swing&&
+          bindingSource.find("readCombatBounds(env,target,bounds)",executionGeometry)<swing,
+          "Force execution still validates combat eye, AABB, committed ray and block occlusion before attack");
+    const auto publicationBody=function(logicalSource,"refreshAttackAtPublication");
+    const auto publicationForce=publicationBody.find("if(pending.targetFilter==aim::AimTargetFilter::Force) {");
+    const auto publicationNormal=publicationBody.find("if(pending.targetFilter!=aim::AimTargetFilter::Force&&c->getHealth) {");
+    const auto publicationHealth=publicationBody.find("CallFloatMethod(target,c->getHealth)");
+    const auto publicationGeometry=publicationBody.find("silent::Vec3 eye{}",publicationHealth);
+    check(publicationForce!=std::string::npos&&publicationNormal!=std::string::npos&&
+          publicationHealth>publicationNormal&&publicationHealth<publicationGeometry&&
+          publicationBody.substr(publicationForce,publicationNormal-publicationForce).find(
+              "aim::validateForcePlayerEntity(env,world,player,target,")!=std::string::npos&&
+          publicationBody.substr(publicationForce,publicationNormal-publicationForce).find("getHealth")==std::string::npos,
+          "publication uses frozen pending policy and never calls target health in Force");
+    check(publicationBody.find("outside_preaim_range",publicationGeometry)!=std::string::npos&&
+          publicationBody.find("RayTraceCoordinator::intersect",publicationGeometry)!=std::string::npos&&
+          publicationBody.find("traceLogicalBlock",publicationGeometry)!=std::string::npos,
+          "publication preserves range, true AABB, committed ray and block trace validation for both policies");
     bindingSource=function(gameplaySource,"updateGameplay");
     const auto preparation=bindingSource.find("std::array<silent::TargetCandidate");
     const auto schedule=bindingSource.find("m_logicalController.updateAttackClock",preparation);
@@ -72,6 +102,15 @@ int main()
           geometry.find("readCombatEye")!=std::string::npos&&
           geometry.find("readCombatBounds")!=std::string::npos,
           "combat preparation never uses interpolated render geometry");
+    const auto selectionForce=geometry.find("if(targetFilter==aim::AimTargetFilter::Force&&lookupReady) {");
+    const auto selectionGeometry=geometry.find("const bool boundsReady=",selectionForce);
+    check(selectionForce!=std::string::npos&&selectionGeometry!=std::string::npos&&
+          geometry.substr(selectionForce,selectionGeometry-selectionForce).find(
+              "aim::validateForcePlayerEntity(env,world,player,liveTarget,")!=std::string::npos&&
+          geometry.substr(selectionForce,selectionGeometry-selectionForce).find("getHealth")==std::string::npos,
+          "Force candidate live lookup uses exact player validation without a health getter");
+    check(bindingSource.find("if(targetFilter!=aim::AimTargetFilter::Force&&cache->livingClass&&cache->getHealth&&")!=std::string::npos,
+          "Force diagnostic fallback cannot invoke a throwing target health getter");
 
     const auto scaffold=bindingSource.find("const jint previousSlot=env->GetIntField");
     const auto place=bindingSource.find("cache->onPlayerRightClick, player",scaffold);
@@ -122,7 +161,7 @@ int main()
     check(function(movementSource,"beginLogicalMovement").find(
               "CallVoidMethod(entity,c->setSprinting")==std::string::npos,
         "moveFlying never applies a late sprint-speed patch");
-    check(bindingSource.find("(!snapshot.hypixelServer && entity.player)")!=std::string::npos&&
+    check(bindingSource.find("aim::targetCandidateEligible(targetFilter,entity")!=std::string::npos&&
         function(snapshotSource,"sample").find("IsInstanceOf(entity,cache->playerClass)")!=std::string::npos,
         "offline combat recognizes player class without online TAB membership");
     bindingSource=function(logicalSource,"consumeLogicalInteraction");

@@ -2,6 +2,7 @@
 #include "SmartHotbarPolicy.h"
 #include "TrajectoryMath.h"
 #include "SafeWalkPolicy.h"
+#include "CombatTargetValidation.h"
 
 #include "src/AgentLog.h"
 
@@ -82,6 +83,14 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
     struct Locals {JNIEnv* env;~Locals(){env->PopLocalFrame(nullptr);}} locals{env};
     const auto cancel=[&](const char* const reason) noexcept {
         clearException(env);
+        char detail[256]{};
+        std::snprintf(detail,sizeof(detail),
+            "stage=publication id=%d targetFilter=%s healthIgnored=%d intent=%llu rotationEpoch=%llu reject=%s",
+            pending.entityId,aim::targetFilterName(pending.targetFilter),
+            pending.targetFilter==aim::AimTargetFilter::Force,
+            static_cast<unsigned long long>(pending.intentId),
+            static_cast<unsigned long long>(pending.rotationEpoch),reason);
+        m_logicalController.debug().event("TARGET_DIAG",m_logicalController.latest(),detail,true);
         (void)m_logicalController.cancelPendingAttack(pending,reason);
     };
     jobject mc=c->gameApi().minecraft(env);
@@ -103,7 +112,14 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
     if(env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE||env->ExceptionCheck()) {
         cancel("entity_not_living");return;
     }
-    if(c->getHealth) {
+    if(pending.targetFilter==aim::AimTargetFilter::Force) {
+        const auto validation=aim::validateForcePlayerEntity(env,world,player,target,
+            c->playerClass,c->playerEntities,c->listSize,c->listGet);
+        if(validation!=aim::ForcePlayerValidation::Valid) {
+            cancel(aim::forcePlayerValidationReason(validation));return;
+        }
+    }
+    if(pending.targetFilter!=aim::AimTargetFilter::Force&&c->getHealth) {
         const float health=env->CallFloatMethod(target,c->getHealth);
         if(env->ExceptionCheck()||!std::isfinite(health)||health<=0.0F) {
             cancel("dead");return;
@@ -121,10 +137,13 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
     if(!std::isfinite(preAimDistance)||preAimDistance>pending.preAimReach+1.0e-5) {
         cancel("outside_preaim_range");return;
     }
+    bool rayQueried=false,rayQuerySucceeded=false;
     const auto trace=[&](const silent::Vec3 direction,const double reach) noexcept {
         silent::LogicalFramePlan ray{};
         ray.rayOrigin=eye;ray.rayDirection=direction;ray.rayLimit=reach;
-        return traceLogicalBlock(env,world,ray);
+        const auto hit=traceLogicalBlock(env,world,ray);
+        rayQueried=true;rayQuerySucceeded|=hit.querySucceeded;
+        return hit;
     };
     const auto direction=silent::RayTraceCoordinator::direction(pending.committedRotation);
     const double distance=silent::RayTraceCoordinator::intersect(eye,direction,bounds,pending.reach);
@@ -144,6 +163,15 @@ void GameBindings::refreshAttackAtPublication(JNIEnv* env) noexcept
     const aim::Angles rotation{std::atan2(dz,dx)*degrees-90.0,
         -std::atan2(dy,std::hypot(dx,dz))*degrees};
     (void)m_logicalController.revisePendingAttack(pending,rotation,point.available);
+    if(!point.available) {
+        char detail[256]{};
+        std::snprintf(detail,sizeof(detail),
+            "stage=publication id=%d targetFilter=%s intent=%llu rayQueried=%d rayQuerySucceeded=%d reject=%s",
+            pending.entityId,aim::targetFilterName(pending.targetFilter),
+            static_cast<unsigned long long>(pending.intentId),rayQueried,rayQuerySucceeded,
+            rayQueried&&!rayQuerySucceeded?"ray_query_unavailable":"attack_point_unavailable");
+        m_logicalController.debug().event("TARGET_DIAG",m_logicalController.latest(),detail);
+    }
 }
 
 jobject GameBindings::serializeLogicalPacket(JNIEnv* env,jobject packet) noexcept
@@ -399,6 +427,14 @@ bool GameBindings::executeLogicalInteraction(
             // attackDispatched is the single authoritative completion record;
             // logging here as well used to emit two ATTACK_FAILED rows for one
             // intent and made dispatch counts ambiguous.
+            char detail[256]{};
+            std::snprintf(detail,sizeof(detail),
+                "stage=execute id=%d targetFilter=%s healthIgnored=%d intent=%llu rotationEpoch=%llu reject=%s",
+                command.entityId,aim::targetFilterName(command.targetFilter),
+                command.targetFilter==aim::AimTargetFilter::Force,
+                static_cast<unsigned long long>(command.intentId),
+                static_cast<unsigned long long>(command.rotationEpoch),reason);
+            m_logicalController.debug().event("TARGET_DIAG",m_logicalController.latest(),detail,true);
             m_logicalController.attackDispatched(command,false,reason);
         }
         if(env) clearException(env);
@@ -412,15 +448,24 @@ bool GameBindings::executeLogicalInteraction(
         return fail("interaction_context_unavailable");
     }
     if(command.kind==silent::InteractionCommandKind::AttackEntity) {
+        if(!m_logicalController.validateAttackTransaction(command))
+            return fail("attack_transaction_stale");
         jobject target=env->CallObjectMethod(
             world,c->getEntityById,static_cast<jint>(command.entityId));
         if(!target||env->ExceptionCheck()==JNI_TRUE)
             return fail("logical_target_unavailable");
         if(env->IsInstanceOf(target,c->livingClass)!=JNI_TRUE)
             return fail("logical_target_replaced");
-        const float targetHealth=env->CallFloatMethod(target,c->getHealth);
-        if(env->ExceptionCheck()==JNI_TRUE||!std::isfinite(targetHealth)||targetHealth<=0.0F)
-            return fail("logical_target_dead");
+        if(command.targetFilter==aim::AimTargetFilter::Force) {
+            const auto validation=aim::validateForcePlayerEntity(env,world,player,target,
+                c->playerClass,c->playerEntities,c->listSize,c->listGet);
+            if(validation!=aim::ForcePlayerValidation::Valid)
+                return fail(aim::forcePlayerValidationReason(validation));
+        } else {
+            const float targetHealth=env->CallFloatMethod(target,c->getHealth);
+            if(env->ExceptionCheck()==JNI_TRUE||!std::isfinite(targetHealth)||targetHealth<=0.0F)
+                return fail("logical_target_dead");
+        }
         silent::Vec3 eye{};
         silent::Bounds bounds{};
         if(!readCombatEye(env,player,eye)||!readCombatBounds(env,target,bounds))
@@ -438,17 +483,23 @@ bool GameBindings::executeLogicalInteraction(
             silent::LogicalFramePlan ray{};
             ray.rayOrigin=eye;ray.rayDirection=direction;ray.rayLimit=command.reach;
             const auto block=traceLogicalBlock(env,world,ray);
-            if(!block.querySucceeded||
-               (block.distance>=0.0&&block.distance<=hit+1.0e-5))
+            if(!block.querySucceeded) return fail("physics_ray_unavailable");
+            if(block.distance>=0.0&&block.distance<=hit+1.0e-5)
                 return fail("physics_ray_occluded");
         }
         // Preserve the vanilla 1.8.9 click transaction: the client publishes
         // the arm swing first, then PlayerControllerMP sends the attack.  The
         // PRE dispatch boundary and frozen rotation transaction remain owned
         // by LogicalStateController; only this internal call order is restored.
+        // Geometry JNI may have crossed a policy update. Recheck the frozen
+        // intent/filter/target/publication proof immediately before side effects.
+        if(!m_logicalController.validateAttackTransaction(command))
+            return fail("attack_transaction_stale_after_geometry");
         env->CallVoidMethod(player,c->swingItem);
         if(env->ExceptionCheck()==JNI_TRUE)
             return fail("swing_jni_exception");
+        if(!m_logicalController.validateAttackTransaction(command))
+            return fail("attack_transaction_stale_after_swing");
         g_syntheticLogicalAttack=true;
         env->CallVoidMethod(controller,c->attackEntity,player,target);
         g_syntheticLogicalAttack=false;

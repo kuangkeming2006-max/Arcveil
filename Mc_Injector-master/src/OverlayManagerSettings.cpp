@@ -435,6 +435,13 @@ void OverlayManager::setAimAttackCps(const int cps)
     storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
 }
 
+void OverlayManager::setAimTargetFilter(const int filter)
+{
+    if ((filter != 0 && filter != 1) || m_aimTargetFilter == filter) return;
+    m_aimTargetFilter = filter;
+    storeFeatureSettings(); emit featureSettingsChanged(); sendFeatureSnapshot();
+}
+
 void OverlayManager::setClickGuiWidthPercent(const int percent)
 {
     const int bounded = std::clamp(percent, 40, 150);

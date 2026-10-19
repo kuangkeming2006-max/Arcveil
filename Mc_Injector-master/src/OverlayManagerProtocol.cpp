@@ -89,11 +89,10 @@ void OverlayManager::processAgentLine(const QByteArray &line)
                 {"enabled", fields[1] == "1"}, {"sameLayerOnly", fields[2] == "1"}};
         } else if (type == QByteArrayLiteral("SMART_HOTBAR_APPLIED")) {
             if (fields.size() != 2) return;
-            bool ok = false;
-            const auto value = fields[1].toUInt(&ok);
-            if (!ok || !validSmartHotbarConfig(value)) return;
+            const auto value = fields[1];
+            if (!validSmartHotbarConfig(value)) return;
             diagnostic = {{"kind", "config"}, {"feature", "smart-hotbar"},
-                {"packed", qint64(value)}};
+                {"packed", value.startsWith("v3:") ? QJsonValue(QString::fromLatin1(value)) : QJsonValue(qint64(value.toUInt()))}};
         } else {
             if (fields.size() != 15 || fields[1] != "1") return;
             std::array<quint64, 13> values{};
@@ -251,6 +250,14 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         m_featureHotkeysPackedC=(m_featureHotkeysPackedC&0x1FF00U) |
             static_cast<quint32>(m_velocityHotkey);
         storeFeatureSettings(); emit featureSettingsChanged();
+    } else if(type==QByteArrayLiteral("AIM_TARGET_FILTER_CHANGED")) {
+        if (fields.size() != 2 ||
+            (fields[1] != "0" && fields[1] != "1")) return;
+        const int filter = fields[1] == "1" ? 1 : 0;
+        if (m_aimTargetFilter != filter) {
+            m_aimTargetFilter = filter;
+            storeFeatureSettings(); emit featureSettingsChanged();
+        }
     } else if(type==QByteArrayLiteral("AIM_ATTACK_CPS_CHANGED")) {
         if(fields.size()!=2) return;
         bool ok=false; const int value=fields[1].toInt(&ok);
@@ -259,9 +266,8 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         storeFeatureSettings(); emit featureSettingsChanged();
     } else if(type==QByteArrayLiteral("SMART_HOTBAR_CHANGED")) {
         if(fields.size()!=2) return;
-        bool ok=false;
-        const quint32 value=fields[1].toUInt(&ok);
-        if(!ok||!validSmartHotbarConfig(value)) return;
+        const QByteArray value=fields[1];
+        if(!validSmartHotbarConfig(value)) return;
         if(m_smartHotbarConfig!=value) {
             m_smartHotbarConfig=value;
             storeFeatureSettings();
@@ -987,8 +993,10 @@ void OverlayManager::sendFeatureSnapshot()
         (static_cast<unsigned>(std::clamp(m_velocityHotkey,0,254))<<19U))+'\n');
     writeAgentCommand(QByteArrayLiteral("AIM_ATTACK_CPS ")+
         QByteArray::number(std::clamp(m_aimAttackCps,1,20))+'\n');
+    writeAgentCommand(QByteArrayLiteral("AIM_TARGET_FILTER ")+
+        QByteArray::number(m_aimTargetFilter == 1 ? 1 : 0)+'\n');
     writeAgentCommand(QByteArrayLiteral("SMART_HOTBAR ")+
-        QByteArray::number(m_smartHotbarConfig)+'\n');
+        m_smartHotbarConfig+'\n');
 }
 
 void OverlayManager::sendBindSnapshot()

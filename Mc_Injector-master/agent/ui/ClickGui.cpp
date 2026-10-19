@@ -2,6 +2,7 @@
 #include "AnimatedWidgets.h"
 #include "NavigationLabel.h"
 #include "GuiDrawPolicy.h"
+#include "../bindings/SmartHotbarPolicy.h"
 #include "../UiColors.h"
 #include "../FeatureNavigation.h"
 #include <imgui_internal.h>
@@ -1528,11 +1529,22 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     m_features.aimLockOnMode=true;lockOn=true;changed=true;
                 }
 
-                const char* controlSummary=m_features.silentControlAdaptation?
-                    "Movement adaptation on":"Vanilla local controls";
+                char controlSummary[112]{};
+                std::snprintf(controlSummary,sizeof(controlSummary),"%s targets · %s",
+                    m_features.aimTargetFilter==1?"Force":"Normal",
+                    m_features.silentControlAdaptation?
+                        "Movement adaptation on":"Vanilla local controls");
                 collapsible(1U,"aimSilent","SILENT CONTROL",controlSummary,
-                    216.0F,[&] {
+                    328.0F,[&] {
                     ImGui::BeginDisabled(!m_features.aimSilentLock);
+                    static constexpr const char* targetFilters[]{"Normal","Force"};
+                    ImGui::SetNextItemWidth(240.0F*uiScale);
+                    changed|=widgets::Combo("Target Filter",
+                        &m_features.aimTargetFilter,targetFilters,2);
+                    ImGui::TextDisabled(m_features.aimTargetFilter==1?
+                        "Force uses Player ESP Hitbox eligibility, ignoring player identity and teammate filters.":
+                        "Normal preserves the existing player identity and teammate filters.");
+                    ImGui::TextDisabled("Both modes preserve FOV, distance, block occlusion, ray and attack reach checks.");
                     changed|=animatedToggle("Silent Control Adaptation",
                         m_features.silentControlAdaptation,m_toggleAnimation[55],uiScale);
                     ImGui::TextDisabled("Keeps world movement, jump and sprint aligned with the committed logical yaw.");
@@ -1575,7 +1587,9 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     changed|=widgets::SliderInt("Field of view",
                         &m_features.aimFovDegrees,1,360,"%d deg",
                         ImGuiSliderFlags_AlwaysClamp);
-                    ImGui::TextDisabled("Only validated enemy-player candidates are eligible.");
+                    ImGui::TextDisabled(m_features.aimSilentLock&&m_features.aimTargetFilter==1?
+                        "Force: valid Player ESP Hitboxes are eligible; geometry and attack checks still apply.":
+                        "Normal: only validated enemy-player candidates are eligible.");
                 });
 
                 collapsible(3U,"aimResponse","RESPONSE & DIAGNOSTICS",
@@ -2012,56 +2026,107 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                 ImGui::TextDisabled(
                     "The camera is limited to vanilla pitch bounds. Release the key before rebinding it.");
             } else if(page==23) {
-                sectionTitle("CATEGORY SHORTCUTS");
-                ImGui::TextWrapped(
-                    "Assign a category to each logical hotbar slot. Arcveil reads Minecraft's live Hotbar 1-9 bindings, so a slot rebound to Q or a mouse button follows that binding automatically.");
+                sectionTitle("PRIORITY SHORTCUTS");
+                ImGui::TextWrapped("Build a priority list for each Minecraft hotbar key. The first available item wins, from top to bottom. Rebound keys and mouse buttons follow Minecraft automatically.");
                 ImGui::Spacing();
                 changed |= animatedToggle("Refill depleted blocks",m_features.smartHotbarRefill,
                     m_toggleAnimation[56],uiScale);
-                constexpr std::array<const char*,6U> actionLabels{{
-                    "Normal slot","Sword","Blocks","Shears","Pickaxe","Axe"}};
+                constexpr std::array<const char*,9> labels{{
+                    "Normal slot","Sword","Blocks","Shears","Pickaxe","Axe",
+                    "Ender pearl","Bow","TNT"}};
                 const float available=ImGui::GetContentRegionAvail().x;
-                const float inset=18.0F*uiScale;
-                const bool stacked=available<440.F*uiScale;
-                const float rowHeight=(stacked?126.F:78.F)*uiScale;
-                const float comboWidth=stacked?available-inset*2:std::min(194.0F*uiScale,available*0.43F);
+                const float inset=16.F*uiScale;
+                const bool stacked=available<330.F*uiScale;
+                const float line=(stacked?88.F:48.F)*uiScale;
                 for(std::size_t slot=0;slot<m_features.smartHotbarActions.size();++slot) {
                     ImGui::PushID(static_cast<int>(slot));
-                    const ImVec2 start=ImGui::GetCursorScreenPos();
-                    const ImVec2 end(start.x+available,start.y+rowHeight);
-                    ImDrawList* draw=ImGui::GetWindowDrawList();
-                    draw->AddRectFilled(start,end,fadedGuiColor(mixColor(guiSurface,guiFrame,.52F)),12*uiScale);
-                    draw->AddRect(start,end,fadedGuiColor(mixColor(guiFrame,guiMuted,.15F)),12*uiScale);
-                    const ImVec2 badge(start.x+inset,start.y+23*uiScale);
-                    draw->AddRectFilled(badge,ImVec2(badge.x+32*uiScale,badge.y+32*uiScale),
-                        fadedGuiColor(mixColor(guiFrame,guiAccent,.13F)),8*uiScale);
-                    char number[4]{};
-                    std::snprintf(number,sizeof(number),"%u",static_cast<unsigned>(slot+1U));
-                    const ImVec2 numberSize=ImGui::CalcTextSize(number);
-                    draw->AddText(ImVec2(badge.x+(32*uiScale-numberSize.x)*.5F,
-                        badge.y+(32*uiScale-numberSize.y)*.5F),fadedGuiColor(guiText),number);
-                    const float labelX=badge.x+44*uiScale;
-                    char label[24]{};
-                    std::snprintf(label,sizeof(label),"Hotbar %u",static_cast<unsigned>(slot+1U));
-                    draw->AddText(boldFont,ImGui::GetFontSize(),ImVec2(labelX,start.y+18*uiScale),
-                        fadedGuiColor(guiText),label);
-                    draw->AddText(ImVec2(labelX,start.y+43*uiScale),fadedGuiColor(guiMuted),"Minecraft key");
-                    ImGui::SetCursorScreenPos(ImVec2(end.x-inset-comboWidth,
-                        stacked?start.y+76*uiScale:start.y+(rowHeight-ImGui::GetFrameHeight())*.5F));
                     int& action=m_features.smartHotbarActions[slot];
-                    action=std::clamp(action,0,5);
-                    ImGui::SetNextItemWidth(comboWidth);
-                    if(widgets::Combo("##category",&action,actionLabels.data(),
-                                    static_cast<int>(actionLabels.size()))) changed=true;
+                    if(!hotbar::validPriority(action)) action=0;
+                    std::array<int,8> list{};int count=0;
+                    auto bits=std::bit_cast<std::uint32_t>(action);
+                    while(bits) {list[count++]=static_cast<int>(bits&15U);bits>>=4;}
+                    const auto save=[&]() {
+                        std::uint32_t value=0;
+                        for(int i=0;i<count;++i) value|=static_cast<std::uint32_t>(list[i])<<(i*4);
+                        action=std::bit_cast<int>(value);changed=true;
+                    };
+                    const ImVec2 start=ImGui::GetCursorScreenPos();
+                    const float target=72.F*uiScale+std::max(1,count)*line;
+                    auto& card=widgets::motion(ImGui::GetID("card"),false);
+                    if(!card.initialized) {card.value=target;card.initialized=true;}
+                    card.value=design.reducedMotion?target:approachExponential(card.value,target,18.F,ImGui::GetIO().DeltaTime);
+                    const float height=card.value;
+                    const ImVec2 end(start.x+available,start.y+height);
+                    auto* draw=ImGui::GetWindowDrawList();
+                    draw->AddRectFilled(start,end,fadedGuiColor(mixColor(guiSurface,guiFrame,.52F)),14*uiScale);
+                    draw->AddRect(start,end,fadedGuiColor(mixColor(guiFrame,guiAccent,count?.18F:.03F)),14*uiScale);
+                    draw->AddRectFilled(ImVec2(start.x+inset,start.y+17*uiScale),
+                        ImVec2(start.x+inset+32*uiScale,start.y+49*uiScale),
+                        fadedGuiColor(mixColor(guiFrame,guiAccent,.18F)),9*uiScale);
+                    char key[8]{};std::snprintf(key,sizeof(key),"%u",static_cast<unsigned>(slot+1));
+                    draw->AddText(ImVec2(start.x+inset+10*uiScale,start.y+22*uiScale),fadedGuiColor(guiText),key);
+                    char title[40]{};std::snprintf(title,sizeof(title),"Hotbar %u",static_cast<unsigned>(slot+1));
+                    draw->AddText(boldFont,ImGui::GetFontSize(),ImVec2(start.x+inset+44*uiScale,start.y+20*uiScale),fadedGuiColor(guiText),title);
+                    ImGui::SetCursorScreenPos(ImVec2(end.x-inset-36*uiScale,start.y+16*uiScale));
+                    ImGui::BeginDisabled(count==8);
+                    if(widgets::Button("+##add",ImVec2(36*uiScale,34*uiScale))) ImGui::OpenPopup("add-item");
+                    ImGui::EndDisabled();
+                    if(ImGui::IsItemHovered()) ImGui::SetTooltip("Add an item at the next priority");
+                    if(ImGui::BeginPopup("add-item")) {
+                        ImGui::TextDisabled("ADD TO PRIORITY LIST");
+                        for(int a=1;a<=8;++a) {
+                            bool used=false;for(int i=0;i<count;++i) used|=list[i]==a;
+                            ImGui::BeginDisabled(used);
+                            if(widgets::Selectable(labels[a],false)&&count<8) {list[count++]=a;save();}
+                            ImGui::EndDisabled();
+                        }
+                        ImGui::EndPopup();
+                    }
+                    // Stable item IDs make a reordered item glide to its new rank.
+                    ImGui::PushClipRect(ImVec2(start.x,start.y+60*uiScale),end,true);
+                    if(count==0) {
+                        draw->AddText(ImVec2(start.x+inset,start.y+76*uiScale),fadedGuiColor(guiMuted),"Normal slot / Add an item with +");
+                    }
+                    int moveFrom=-1,moveTo=-1,remove=-1;
+                    for(int rank=0;rank<count;++rank) {
+                        ImGui::PushID(list[rank]);
+                        auto& motion=widgets::motion(ImGui::GetID("priority-position"),false);
+                        const float y=64*uiScale+rank*line;
+                        if(!motion.initialized) {motion.value=y;motion.initialized=true;}
+                        motion.value=design.reducedMotion?y:approachExponential(motion.value,y,20.F,ImGui::GetIO().DeltaTime);
+                        const float rowY=start.y+motion.value;
+                        char badge[8]{};std::snprintf(badge,sizeof(badge),"%02d",rank+1);
+                        draw->AddText(ImVec2(start.x+inset,rowY+8*uiScale),fadedGuiColor(rank==0?guiAccent:guiMuted),badge);
+                        ImGui::SetCursorScreenPos(ImVec2(start.x+inset+32*uiScale,rowY));
+                        const float controls=114*uiScale;
+                        ImGui::SetNextItemWidth(std::max(60*uiScale,available-inset*2-32*uiScale-(stacked?0:controls)));
+                        if(widgets::BeginCombo("##item",labels[list[rank]])) {
+                            for(int a=1;a<=8;++a) {
+                                bool duplicate=false;for(int i=0;i<count;++i) duplicate|=i!=rank&&list[i]==a;
+                                ImGui::BeginDisabled(duplicate);
+                                if(widgets::Selectable(labels[a],list[rank]==a)) {list[rank]=a;save();}
+                                ImGui::EndDisabled();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetCursorScreenPos(ImVec2(end.x-inset-controls+6*uiScale,rowY+(stacked?38*uiScale:0)));
+                        ImGui::BeginDisabled(rank==0);
+                        if(widgets::Button("^##up",ImVec2(30*uiScale,34*uiScale))) {moveFrom=rank;moveTo=rank-1;}
+                        ImGui::EndDisabled();ImGui::SameLine(0,4*uiScale);
+                        ImGui::BeginDisabled(rank==count-1);
+                        if(widgets::Button("v##down",ImVec2(30*uiScale,34*uiScale))) {moveFrom=rank;moveTo=rank+1;}
+                        ImGui::EndDisabled();ImGui::SameLine(0,4*uiScale);
+                        if(widgets::Button("x##remove",ImVec2(30*uiScale,34*uiScale))) remove=rank;
+                        ImGui::PopID();
+                    }
+                    ImGui::PopClipRect();
+                    if(moveFrom>=0) {std::swap(list[moveFrom],list[moveTo]);save();}
+                    if(remove>=0) {for(int i=remove;i+1<count;++i) list[i]=list[i+1];--count;save();}
                     ImGui::SetCursorScreenPos(start);
-                    ImGui::Dummy(ImVec2(available,rowHeight+4*uiScale));
+                    ImGui::Dummy(ImVec2(available,height+10*uiScale));
                     ImGui::PopID();
                 }
-                ImGui::Spacing();
-                ImGui::PushStyleColor(ImGuiCol_TextDisabled,guiMuted);
-                ImGui::TextWrapped(
-                    "If the category is already in the hotbar it is selected directly. Otherwise the first matching main-inventory stack is swapped into the pressed logical slot.");
-                ImGui::PopStyleColor();
+                ImGui::TextWrapped("Priority beats location: a higher-priority item in your inventory wins over a lower-priority held item. Within each category, the held item is preferred, then hotbar, then inventory. Pressure plates are excluded from Blocks and refill.");
             } else {
                 sectionTitle("GUI ELEMENT SIZE");
                 ImGui::SetNextItemWidth(360*uiScale);
