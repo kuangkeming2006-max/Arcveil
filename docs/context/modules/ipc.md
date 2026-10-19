@@ -142,3 +142,16 @@ processes must be upgraded together. Controller persists the validated token in
 the existing smartHotbarConfig QSettings key, including named profiles. Numeric
 legacy config receipts retain numeric JSON packed values; v3 receipts use strings.
 No FEATURE_STATE_V3 positional fields changed; receipts remain diagnostic only.
+
+## Silent Aim target filter
+
+Controller `sendFeatureSnapshot` sends `AIM_TARGET_FILTER <filter>` independently
+of `FEATURE_STATE*` and `AIM_OPTIONS`. The Agent control worker requires exactly
+one literal `0` (Normal) or `1` (Force), rejects any other token/extra field with
+`ERROR BAD_AIM_TARGET_FILTER`, and replies `AIM_TARGET_FILTER_APPLIED <filter>`.
+That acknowledgement confirms accepted configuration only. Renderer settings
+changes travel through the feature revision mailbox to telemetry as
+`AIM_TARGET_FILTER_CHANGED <filter>`; authenticated Controller parsing applies
+the same exact-token validation and persists the Qt property. Old/missing
+configuration fields default to Normal. Existing messages and positional
+schemas retain their field counts and meanings.

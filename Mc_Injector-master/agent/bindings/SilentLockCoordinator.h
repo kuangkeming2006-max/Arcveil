@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AimControl.h"
+#include "AimTargetPolicy.h"
 #include "SilentDebugRecorder.h"
 
 #include <Windows.h>
@@ -45,7 +46,7 @@ struct RuntimeCapabilities final {
 [[nodiscard]] inline constexpr bool isConfirmedCombatTeammate(
     const bool hypixelServer,const bool matchActive,
     const char ownTeam,const char entityTeam) noexcept {
-    return hypixelServer&&matchActive&&ownTeam!='u'&&entityTeam==ownTeam;
+    return aim::confirmedCombatTeammate(hypixelServer,matchActive,ownTeam,entityTeam);
 }
 
 enum class RotationOwner : std::uint8_t { Camera, AimAssist, Restore };
@@ -139,6 +140,7 @@ struct LogicalFrameInput final {
     bool enabled=false;
     bool silent=false;
     aim::Mode mode=aim::Mode::Smooth;
+    aim::AimTargetFilter targetFilter=aim::AimTargetFilter::Normal;
     bool nearestPriority=false;
     bool enforceAttackAvailability=true;
     bool coordinateMovement=true;
@@ -845,6 +847,7 @@ public:
         m_state={}; m_state.camera=camera;
         m_state.logical=camera; m_state.renderDesired=camera;
         m_world=0U; m_localPlayer=-1; m_silent=false;
+        m_targetFilter=aim::AimTargetFilter::Normal;
         m_heldItemPolicy=HeldItemPolicy::Other;
         m_coordinateMovement=true;
         publishLocked();
@@ -917,14 +920,14 @@ private:
         };
         const bool contextChanged=m_world!=input.worldGeneration||
                                    m_localPlayer!=input.localEntityId||
-                                   m_silent!=input.silent;
+                                   m_silent!=input.silent||m_targetFilter!=input.targetFilter;
         const bool movementContextChanged=contextChanged||
             m_coordinateMovement!=input.coordinateMovement;
         if(contextChanged) {
             m_manualBlock=false; m_lastMovementTick=~std::uint64_t{0};
             m_targetGraceActive=false;
-            if(m_world!=input.worldGeneration||m_localPlayer!=input.localEntityId)
-                m_recentAttacks={};
+            if(m_world!=input.worldGeneration||m_localPlayer!=input.localEntityId||
+               m_targetFilter!=input.targetFilter) m_recentAttacks={};
             acceptTransition(m_interaction.cancel(m_interactionTick));
             m_selector.reset(); m_aim.reset(input.camera);
             if(m_world!=input.worldGeneration||m_localPlayer!=input.localEntityId||
@@ -935,6 +938,7 @@ private:
             m_committedMovement={};
         }
         m_world=input.worldGeneration; m_localPlayer=input.localEntityId; m_silent=input.silent;
+        m_targetFilter=input.targetFilter;
         m_heldItemPolicy=input.heldItemPolicy;
         m_coordinateMovement=input.coordinateMovement;
         m_rotation.observeCamera(input.camera);
@@ -1963,6 +1967,7 @@ private:
     std::uint64_t m_world=0U;
     int m_localPlayer=-1;
     bool m_silent=false,m_enforceAttack=true,m_sequentialTargets=false;
+    aim::AimTargetFilter m_targetFilter=aim::AimTargetFilter::Normal;
     double m_attackReach=3.0;
     double m_preAimReach=3.5;
     HeldItemPolicy m_heldItemPolicy=HeldItemPolicy::Other;

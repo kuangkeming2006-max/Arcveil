@@ -281,6 +281,33 @@ struct OverlayRendererTestAccess {
         r.m_features.aimLockOnMode=lock;
         if(!lock) r.m_features.aimSilentLock=false;
     }
+    static void forceTargetPreview(OverlayRenderer& r,bool light,bool silent=true) {
+        prepare(r,8,0,light);
+        layout(r,100,100,100);
+        r.m_features.aimAssistEnabled=true;
+        r.m_features.aimLockOnMode=true;
+        r.m_features.aimSilentLock=silent;
+        r.m_features.aimTargetFilter=1;
+        r.m_aimSectionOpen={false,true,false,false};
+        r.m_aimSectionProgress={0.0F,1.0F,0.0F,0.0F};
+        r.m_aimSectionVelocity.fill(0.0F);
+        r.m_aimSectionBodyHeight.fill(0.0F);
+        r.m_settingsScroll[8]={};
+        // This child was deliberately scrolled to the bottom by the preceding
+        // accordion regression. Seed zero before BeginChild so it does not
+        // initialize from the retained ImGui window's previous Scroll.y.
+        r.m_settingsScroll[8].initialized=true;
+    }
+    static void finishForceTargetPreview(OverlayRenderer& r) {
+        r.m_features.aimAssistEnabled=false;
+        r.m_features.aimSilentLock=false;
+        r.m_features.aimTargetFilter=0;
+        r.m_aimSectionOpen={true,true,true,false};
+        r.m_aimSectionProgress={1.0F,1.0F,1.0F,0.0F};
+        r.m_aimSectionVelocity.fill(0.0F);
+        r.m_aimSectionBodyHeight.fill(0.0F);
+        r.m_settingsScroll[8]={};
+    }
     static void aimSection(OverlayRenderer& r,std::size_t index,bool open,
                            float phase,float bodyHeight) {
         r.m_aimSectionOpen[index]=open;
@@ -309,6 +336,10 @@ struct OverlayRendererTestAccess {
     }
     static float settingsScrollMaximum(OverlayRenderer& r,std::size_t page) {
         return r.m_settingsScroll[page].lastMaximum;
+    }
+    static bool settingsScrollAtTop(OverlayRenderer& r,std::size_t page) {
+        return r.m_settingsScroll[page].current<0.1F&&
+            r.m_settingsScroll[page].target<0.1F;
     }
     static void media(OverlayRenderer& r,const char* title,const char* cover,bool available=true) {
         r.m_mediaSettings.enabled=true; r.m_mediaSettings.opacity=70;
@@ -389,6 +420,25 @@ struct OverlayRendererTestAccess {
               "IME Done publishes the dragged position");
         r.setFeatureSettings(saved);
         check(r.m_features.imePanelX==191,"IME position remains after runtime echo");
+
+        FeatureSettings normalFilter;
+        check(normalFilter.aimTargetFilter==0,
+              "Silent Aim Target Filter defaults to Normal");
+        r.setFeatureSettings(normalFilter);
+        r.m_features.aimTargetFilter=1;
+        r.m_featureSettingsDirty=true;
+        r.setFeatureSettings(normalFilter);
+        check(r.m_features.aimTargetFilter==1,
+              "Force Target edit survives the runtime's stale Normal snapshot");
+        FeatureSettings forceFilter;
+        check(r.consumeFeatureSettings(forceFilter)&&forceFilter.aimTargetFilter==1,
+              "Force Target selection is published through the feature mailbox");
+        r.setFeatureSettings(forceFilter);
+        check(r.m_features.aimTargetFilter==1,
+              "Force Target selection remains after the runtime echo");
+        r.setFeatureSettings(normalFilter);
+        check(r.m_features.aimTargetFilter==0,
+              "Normal Target Filter can be restored through the feature snapshot");
 
         auto old = std::make_unique<BlacklistOverlaySnapshot>();
         r.setBlacklistSnapshot(*old);
@@ -944,6 +994,22 @@ int main(int argc, char** argv)
     check(std::abs(mcoverlay::OverlayRendererTestAccess::aimSectionBodyHeight(
               *renderer,0U)-123.0F)<0.01F,
           "a collapsing Aim Assist section preserves its measured body height");
+    const bool previousSilentAvailable=snapshot->silentAimAvailable;
+    snapshot->silentAimAvailable=true;
+    for(bool light:{false,true}) {
+        mcoverlay::OverlayRendererTestAccess::forceTargetPreview(*renderer,light);
+        frame(true); frame(true); frame(true);
+        check(mcoverlay::OverlayRendererTestAccess::settingsScrollAtTop(*renderer,8U),
+              "Force Target screenshot starts at the control instead of inheriting old scrolling");
+        saveFrame(light?"silent-force-light.png":"silent-force-dark.png");
+    }
+    mcoverlay::OverlayRendererTestAccess::forceTargetPreview(*renderer,false,false);
+    frame(true); frame(true); frame(true);
+    check(mcoverlay::OverlayRendererTestAccess::settingsScrollAtTop(*renderer,8U),
+          "disabled Force Target screenshot keeps the filter control visible");
+    saveFrame("silent-force-disabled.png");
+    mcoverlay::OverlayRendererTestAccess::finishForceTargetPreview(*renderer);
+    snapshot->silentAimAvailable=previousSilentAvailable;
     mcoverlay::OverlayRendererTestAccess::search(*renderer,"silent");
     for(int animationFrame=0;animationFrame<28;++animationFrame) frame(true);
     saveFrame("gui-search-silent.png");

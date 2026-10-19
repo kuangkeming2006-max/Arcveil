@@ -122,7 +122,7 @@ int main()
     check(function(movementSource,"beginLogicalMovement").find(
               "CallVoidMethod(entity,c->setSprinting")==std::string::npos,
         "moveFlying never applies a late sprint-speed patch");
-    check(bindingSource.find("(!snapshot.hypixelServer && entity.player)")!=std::string::npos&&
+    check(bindingSource.find("aim::targetCandidateEligible(targetFilter,entity")!=std::string::npos&&
         function(snapshotSource,"sample").find("IsInstanceOf(entity,cache->playerClass)")!=std::string::npos,
         "offline combat recognizes player class without online TAB membership");
     bindingSource=function(logicalSource,"consumeLogicalInteraction");

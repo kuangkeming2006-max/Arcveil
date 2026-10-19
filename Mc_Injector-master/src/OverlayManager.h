@@ -87,6 +87,7 @@ public:
     Q_PROPERTY(bool aimAssistEnabled READ aimAssistEnabled WRITE setAimAssistEnabled NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool aimLockOnMode READ aimLockOnMode WRITE setAimLockOnMode NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool aimSilentLock READ aimSilentLock WRITE setAimSilentLock NOTIFY featureSettingsChanged)
+    Q_PROPERTY(int aimTargetFilter READ aimTargetFilter WRITE setAimTargetFilter NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool aimScannerEnabled READ aimScannerEnabled WRITE setAimScannerEnabled NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool aimAttackViability READ aimAttackViability WRITE setAimAttackViability NOTIFY featureSettingsChanged)
     Q_PROPERTY(bool silentControlAdaptation READ silentControlAdaptation WRITE setSilentControlAdaptation NOTIFY featureSettingsChanged)
@@ -206,6 +207,7 @@ public:
     [[nodiscard]] bool aimAssistEnabled() const noexcept { return m_aimAssistEnabled; }
     [[nodiscard]] bool aimLockOnMode() const noexcept { return m_aimLockOnMode; }
     [[nodiscard]] bool aimSilentLock() const noexcept { return m_aimSilentLock; }
+    [[nodiscard]] int aimTargetFilter() const noexcept { return m_aimTargetFilter; }
     [[nodiscard]] bool aimScannerEnabled() const noexcept { return m_aimScannerEnabled; }
     [[nodiscard]] bool aimAttackViability() const noexcept { return m_aimAttackViability; }
     [[nodiscard]] bool silentControlAdaptation() const noexcept { return m_silentControlAdaptation; }
@@ -327,6 +329,7 @@ public slots:
     void setAimAssistEnabled(bool enabled);
     void setAimLockOnMode(bool enabled);
     void setAimSilentLock(bool enabled);
+    void setAimTargetFilter(int filter);
     void setAimScannerEnabled(bool enabled);
     void setAimAttackViability(bool enabled);
     void setSilentControlAdaptation(bool enabled);
@@ -590,6 +593,7 @@ private:
     bool m_aimAssistEnabled = false;
     bool m_aimLockOnMode = false;
     bool m_aimSilentLock = false;
+    int m_aimTargetFilter = 0;
     bool m_silentFileDebug = false;
     bool m_silentChatDebug = false;
     bool m_aimScannerEnabled = true;

@@ -89,3 +89,15 @@ Controller logs/signals are diagnostic only and cannot authorize Ready.
 
 已有验证为 Attach、NativeLoader、OpenGL/JVM smoke（含 split threads），以及相邻 renderer/controller 测试。
 没有独立全面的 runtime command codec 测试，协议版本/feature round-trip 是后续验证缺口。2026-09-26 构建、Attach、NativeLoader（含驻留重附加）、OpenGL unified/split smoke 均通过。
+
+## Silent Aim target filter
+
+The control worker accepts the independent `AIM_TARGET_FILTER` command with
+exactly one literal 0/1 token and acknowledges it with `AIM_TARGET_FILTER_APPLIED`.
+An atomic integer defaults to Normal (0). The frame snapshot projects it into
+`FeatureSettings.aimTargetFilter` for ClickGUI and the typed
+`GameplaySettings.aimTargetFilter` policy for bindings. Renderer edits publish
+the validated integer through the existing feature revision mailbox;
+telemetry sends `AIM_TARGET_FILTER_CHANGED` before advancing that revision.
+No IPC writing or formatting is performed in the frame callback and the
+`FEATURE_STATE` positional layouts are unchanged.

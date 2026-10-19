@@ -6,10 +6,110 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QEventLoop>
+#include <QUuid>
 #include <cstdio>
 
 struct ControllerResponsivenessTests {
+    static bool targetFilterChecks() {
+        OverlayManager filter;
+        if (filter.aimTargetFilter() != 0 ||
+            filter.property("aimTargetFilter").toInt() != 0) {
+            std::puts("FAIL missing target filter defaults to Normal"); return false;
+        }
+        int changes = 0;
+        QObject::connect(&filter, &OverlayManager::featureSettingsChanged,
+                         [&] { ++changes; });
+        filter.processAgentLine("AIM_TARGET_FILTER_CHANGED 1");
+        if (filter.aimTargetFilter() != 0 || changes != 0) {
+            std::puts("FAIL unauthenticated target filter accepted"); return false;
+        }
+        filter.m_authenticated = true;
+        filter.processAgentLine("AIM_TARGET_FILTER_CHANGED 1");
+        if (filter.aimTargetFilter() != 1 || changes != 1) {
+            std::puts("FAIL Force target filter IPC change"); return false;
+        }
+        for (const char *invalid : {"AIM_TARGET_FILTER_CHANGED", "AIM_TARGET_FILTER_CHANGED -1",
+             "AIM_TARGET_FILTER_CHANGED 2", "AIM_TARGET_FILTER_CHANGED +1",
+             "AIM_TARGET_FILTER_CHANGED 01", "AIM_TARGET_FILTER_CHANGED 1 extra",
+             "AIM_TARGET_FILTER_CHANGED Normal", "AIM_TARGET_FILTER_CHANGED 1.0"})
+            filter.processAgentLine(invalid);
+        filter.setAimTargetFilter(-1);
+        filter.setAimTargetFilter(2);
+        filter.processAgentLine("AIM_TARGET_FILTER_CHANGED 1");
+        filter.processAgentLine("AIM_TARGET_FILTER_APPLIED 0");
+        if (filter.aimTargetFilter() != 1 || changes != 1) {
+            std::puts("FAIL invalid target filter or APPLIED overwrote settings"); return false;
+        }
+        filter.flushFeatureSettings();
+        {
+            OverlayManager restored;
+            if (restored.aimTargetFilter() != 1) {
+                std::puts("FAIL Force target filter persistence"); return false;
+            }
+        }
+        if (!filter.saveConfig("Force target profile")) return false;
+        filter.setAimTargetFilter(0);
+        if (!filter.applyConfig("Force target profile") || filter.aimTargetFilter() != 1) {
+            std::puts("FAIL named target filter profile restore"); return false;
+        }
+        // A saved pre-extension profile must select Normal even after Force.
+        {
+            QSettings settings;
+            settings.remove("ConfigProfiles/Force target profile/features/aimTargetFilter");
+            settings.sync();
+        }
+        if (!filter.applyConfig("Force target profile") || filter.aimTargetFilter() != 0) {
+            std::puts("FAIL legacy named profile retained Force"); return false;
+        }
+        for (const QVariant &invalid : {QVariant(-1), QVariant(2), QVariant("invalid")}) {
+            QSettings settings;
+            settings.setValue("features/aimTargetFilter", invalid); settings.sync();
+            filter.loadFeatureSettings();
+            if (filter.aimTargetFilter() != 0) {
+                std::puts("FAIL invalid stored target filter enabled Force"); return false;
+            }
+        }
+        // Exercise the production outgoing snapshot through a real local pipe.
+        QLocalServer server;
+        if (!server.listen("ArcveilTargetFilter-" + QUuid::createUuid().toString(QUuid::WithoutBraces)))
+            return false;
+        filter.m_agentSocket = new QLocalSocket(&filter);
+        filter.m_agentSocket->connectToServer(server.serverName());
+        if (!filter.m_agentSocket->waitForConnected(1000) || !server.waitForNewConnection(1000))
+            return false;
+        QLocalSocket *peer = server.nextPendingConnection();
+        if (!peer) return false;
+        for (int value : {0, 1}) {
+            // Consume the preceding snapshot before requesting the next value.
+            // A pipe read can contain only part of the multi-command snapshot.
+            peer->readAll();
+            filter.setProperty("aimTargetFilter", value);
+            // Also covers initial/readiness resync when the value is unchanged.
+            filter.sendFeatureSnapshot();
+            const QByteArray expected = "AIM_TARGET_FILTER " + QByteArray::number(value) + '\n';
+            QByteArray outgoing;
+            QElapsedTimer receiptClock; receiptClock.start();
+            while (!outgoing.contains(expected) && receiptClock.elapsed() < 1500) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+                filter.m_agentSocket->flush();
+                outgoing += peer->readAll();
+                if (!outgoing.contains(expected)) peer->waitForReadyRead(20);
+            }
+            if (!outgoing.contains(expected)) {
+                std::printf("FAIL independent target filter snapshot missing value=%d bytes=%lld\n",
+                            value, static_cast<long long>(outgoing.size()));
+                return false;
+            }
+        }
+        filter.setAimTargetFilter(0);
+        filter.flushFeatureSettings();
+        filter.removeConfig("Force target profile");
+        filter.m_authenticated = false;
+        delete filter.m_agentSocket; filter.m_agentSocket = nullptr;
+        return true;
+    }
     static bool run() {
+        if (!targetFilterChecks()) return false;
         // Renderer readiness alone must never authorize a verified mapping.
         {
             OverlayManager guarded;

@@ -136,6 +136,7 @@ private:
     std::atomic<int> m_aimMaximumDistance{16};
     std::atomic<int> m_aimFovDegrees{90};
     std::atomic<int> m_aimAttackCps{10};
+    std::atomic<int> m_aimTargetFilter{0};
     std::atomic<int> m_clickGuiWidthPercent{100};
     std::atomic<int> m_clickGuiHeightPercent{100};
     std::atomic<int> m_clickGuiOpacity{96};
@@ -266,6 +267,7 @@ private:
     std::atomic<int> m_featureChangedAimMaximumDistance{16};
     std::atomic<int> m_featureChangedAimFovDegrees{90};
     std::atomic<int> m_featureChangedAimAttackCps{10};
+    std::atomic<int> m_featureChangedAimTargetFilter{0};
     std::atomic<int> m_featureChangedClickGuiWidthPercent{100};
     std::atomic<int> m_featureChangedClickGuiHeightPercent{100};
     std::atomic<int> m_featureChangedClickGuiOpacity{96};

@@ -257,3 +257,13 @@ ints, now packed ordered category lists (eight nibbles each). Runtime publishes
 complete hotbar::Config snapshots. Controller <-> runtime uses validated v3 tokens
 through the existing independent SMART_HOTBAR message family and QSettings field.
 Controller continues using only the pure-value policy/codec, never JNI.
+
+## v56.9.5 Silent Aim identity boundary
+
+GameBindingsSnapshot -> EntityMarker.player remains actual class / exact world-player
+object classification. Renderer and game-bindings share AimTargetPolicy's valid
+player Hitbox predicate; presentation switches, teammate visibility and projection
+are not targeting authorization. Both run in the Agent and share GameSnapshot;
+no new entity wire protocol is needed. Controller/runtime add the independent
+AIM_TARGET_FILTER 0|1 message family; GameplaySettings projects the typed policy.
+LogicalFrameInput includes the effective filter in existing context cancellation.

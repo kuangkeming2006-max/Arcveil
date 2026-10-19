@@ -162,3 +162,31 @@ Pearl, Bow and TNT are separate categories. Legacy pressure plates 70/72/147/148
 are excluded from Blocks and refill; TNT is also distinct from general Blocks.
 Legacy inventory APIs supply the item IDs; modern inventory remains unsupported.
 No Java hook signature or mapping symbol changed.
+
+## v56.9.5 Silent Aim target identity policy
+
+Start at `AimTargetPolicy.h`, then `GameBindingsGameplay.cpp::updateGameplay`.
+`AimTargetFilter::{Normal,Force}` is a GameplaySettings value; Force is effective
+only with enabled Silent Aim. Normal retains the exact former identity/team/self/
+health truth table. Force uses `playerEspHitboxEligible(EntityMarker, selfId)`:
+actual snapshot player classification, nonself/nonnegative entity ID, alive and
+finite positions plus a finite positive-volume Hitbox. Renderer uses the same
+predicate for player Hitboxes. TAB/UUID/names/team colours/match recognition never
+authorize Force; `confirmedPlayer` remains a separate Normal/nametag observation.
+Snapshot classification still comes from player class or exact world-player object
+membership, with no new JNI mapping or cross-process entity IPC.
+
+Force live lookup verifies living-class compatibility before calling getHealth,
+nonself/alive and the existing `readCombatBounds`. TargetSelector, combat-eye and
+physics Hitbox aim-point generation, FOV/ranges, block trace and final PRE/packet
+attack revalidation retain their existing implementation and settings.
+`LogicalFrameInput.targetFilter` participates in logical context invalidation, so
+switching filters clears old selection/grace/cooldown/movement and CPS packet proof
+through the existing transaction cancellation path. No second aiming algorithm.
+TARGET_DIAG reports effective targetFilter plus identity/ESP/Force qualification;
+CANDIDATE_SCAN adds bounded per-marker rows every five seconds and an aggregate
+summary, separating identity, invalid-marker/live-bounds, FOV/range and ray/reach
+failures. Existing final selected/ray/attack/commit fields and attack events remain.
+
+`McOverlayAimTargetPolicyTests` covers identity equivalence and Force, geometry and
+active-intent switches; these fixture tests are not real-client validation.

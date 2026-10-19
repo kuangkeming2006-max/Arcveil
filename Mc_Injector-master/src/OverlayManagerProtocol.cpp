@@ -250,6 +250,14 @@ void OverlayManager::processAgentLine(const QByteArray &line)
         m_featureHotkeysPackedC=(m_featureHotkeysPackedC&0x1FF00U) |
             static_cast<quint32>(m_velocityHotkey);
         storeFeatureSettings(); emit featureSettingsChanged();
+    } else if(type==QByteArrayLiteral("AIM_TARGET_FILTER_CHANGED")) {
+        if (fields.size() != 2 ||
+            (fields[1] != "0" && fields[1] != "1")) return;
+        const int filter = fields[1] == "1" ? 1 : 0;
+        if (m_aimTargetFilter != filter) {
+            m_aimTargetFilter = filter;
+            storeFeatureSettings(); emit featureSettingsChanged();
+        }
     } else if(type==QByteArrayLiteral("AIM_ATTACK_CPS_CHANGED")) {
         if(fields.size()!=2) return;
         bool ok=false; const int value=fields[1].toInt(&ok);
@@ -985,6 +993,8 @@ void OverlayManager::sendFeatureSnapshot()
         (static_cast<unsigned>(std::clamp(m_velocityHotkey,0,254))<<19U))+'\n');
     writeAgentCommand(QByteArrayLiteral("AIM_ATTACK_CPS ")+
         QByteArray::number(std::clamp(m_aimAttackCps,1,20))+'\n');
+    writeAgentCommand(QByteArrayLiteral("AIM_TARGET_FILTER ")+
+        QByteArray::number(m_aimTargetFilter == 1 ? 1 : 0)+'\n');
     writeAgentCommand(QByteArrayLiteral("SMART_HOTBAR ")+
         m_smartHotbarConfig+'\n');
 }

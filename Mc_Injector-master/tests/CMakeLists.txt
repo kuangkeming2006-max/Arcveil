@@ -11,6 +11,8 @@ target_link_libraries(McOverlaySkinAndWheelTests PRIVATE
 
 add_executable(McOverlayAimControlTests EXCLUDE_FROM_ALL AimControlTests.cpp)
 target_compile_features(McOverlayAimControlTests PRIVATE cxx_std_20)
+add_executable(McOverlayAimTargetPolicyTests EXCLUDE_FROM_ALL AimTargetPolicyTests.cpp)
+target_compile_features(McOverlayAimTargetPolicyTests PRIVATE cxx_std_20)
 add_executable(McOverlayKnockbackTests EXCLUDE_FROM_ALL KnockbackEvidenceTests.cpp)
 target_compile_features(McOverlayKnockbackTests PRIVATE cxx_std_20)
 

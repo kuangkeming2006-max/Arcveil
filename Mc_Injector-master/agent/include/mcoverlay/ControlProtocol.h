@@ -14,6 +14,8 @@ namespace mcoverlay::protocol {
 //   RENDERER_READY OpenGL\n
 //   STATE_APPLIED <visible:0|1> <interactive:0|1>\n
 //   STATE_CHANGED <visible:0|1> <interactive:0|1>\n
+//   AIM_TARGET_FILTER_CHANGED <filter:0|1>\n
+//   AIM_TARGET_FILTER_APPLIED <filter:0|1>\n
 //   GUI_TYPOGRAPHY_CHANGED <size:14..24> <weight:400|600|700>\n
 //   GUI_TYPOGRAPHY_APPLIED <size:14..24> <weight:400|600|700>\n
 //   GUI_ELEMENT_SCALE_CHANGED <percent:60..150>\n
@@ -30,6 +32,7 @@ namespace mcoverlay::protocol {
 //
 // Controller -> agent:
 //   STATE <visible:0|1> <interactive:0|1>\n
+//   AIM_TARGET_FILTER <filter:0|1>\n
 //   GUI_TYPOGRAPHY <size:14..24> <weight:400|600|700>\n
 //   GUI_ELEMENT_SCALE <percent:60..150>\n
 //   DETACH\n
@@ -40,6 +43,10 @@ inline constexpr unsigned kProtocolVersion = 1U;
 inline constexpr std::string_view kStateCommand = "STATE";
 inline constexpr std::string_view kDetachCommand = "DETACH";
 inline constexpr std::size_t kMaximumLineBytes = 1024;
+
+// Aim target filtering is independent of every FEATURE_STATE positional schema.
+// 0 = Normal (default, including old configs); 1 = Force. Exactly one literal
+// 0/1 token is accepted; unknown values/extra fields produce BAD_AIM_TARGET_FILTER.
 
 } // namespace mcoverlay::protocol
 

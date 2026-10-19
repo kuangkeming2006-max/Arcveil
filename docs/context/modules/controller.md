@@ -149,3 +149,13 @@ allowing ordered per-key categories beyond the old 32-bit config. Existing numer
 QSettings values migrate through the shared policy codec; named profiles use the
 same save/load path. The independent SMART_HOTBAR message carries v3 tokens;
 Qt properties and session/readiness authorization remain unchanged.
+
+## Silent Aim target filter
+
+`OverlayManager.aimTargetFilter` is a writable integer Qt property: 0 Normal,
+1 Force. Its setter and authenticated `AIM_TARGET_FILTER_CHANGED` path reject
+other values. The `features/aimTargetFilter` QSettings field is included in
+named profiles by the existing complete-group save/apply flow; missing or
+invalid values load as Normal. `sendFeatureSnapshot` sends the independent
+`AIM_TARGET_FILTER` command at initial sync, property edits and profile apply.
+No `FEATURE_STATE` positional field, Aim Assist setting or readiness rule changed.

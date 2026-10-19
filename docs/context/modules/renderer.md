@@ -163,3 +163,13 @@ card height and shared button/popup motion respect reduced motion. Narrow layout
 stack controls. FeatureSettings.smartHotbarActions retains nine ints, each now an
 ordered list of up to eight nonzero category nibbles. Dirty/echo ownership stays
 in the existing renderer mailbox.
+
+## Silent Aim Target Filter
+
+ClickGui page 8 exposes Target Filter (Normal/Force) inside SILENT CONTROL,
+enabled only for Silent Lock. `FeatureSettings.aimTargetFilter` defaults to 0
+(Normal); 1 is Force. The selection uses the existing animated combo and feature
+dirty mailbox. Its explanation separates Player ESP Hitbox identity eligibility
+from unchanged FOV, distance, ray, block occlusion and attack reach checks. The
+renderer passes the value through the existing FeatureSettings contract; it does
+not derive target eligibility or perform gameplay selection.

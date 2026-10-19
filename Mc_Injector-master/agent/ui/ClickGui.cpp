@@ -1529,11 +1529,22 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     m_features.aimLockOnMode=true;lockOn=true;changed=true;
                 }
 
-                const char* controlSummary=m_features.silentControlAdaptation?
-                    "Movement adaptation on":"Vanilla local controls";
+                char controlSummary[112]{};
+                std::snprintf(controlSummary,sizeof(controlSummary),"%s targets · %s",
+                    m_features.aimTargetFilter==1?"Force":"Normal",
+                    m_features.silentControlAdaptation?
+                        "Movement adaptation on":"Vanilla local controls");
                 collapsible(1U,"aimSilent","SILENT CONTROL",controlSummary,
-                    216.0F,[&] {
+                    328.0F,[&] {
                     ImGui::BeginDisabled(!m_features.aimSilentLock);
+                    static constexpr const char* targetFilters[]{"Normal","Force"};
+                    ImGui::SetNextItemWidth(240.0F*uiScale);
+                    changed|=widgets::Combo("Target Filter",
+                        &m_features.aimTargetFilter,targetFilters,2);
+                    ImGui::TextDisabled(m_features.aimTargetFilter==1?
+                        "Force uses Player ESP Hitbox eligibility, ignoring player identity and teammate filters.":
+                        "Normal preserves the existing player identity and teammate filters.");
+                    ImGui::TextDisabled("Both modes preserve FOV, distance, block occlusion, ray and attack reach checks.");
                     changed|=animatedToggle("Silent Control Adaptation",
                         m_features.silentControlAdaptation,m_toggleAnimation[55],uiScale);
                     ImGui::TextDisabled("Keeps world movement, jump and sprint aligned with the committed logical yaw.");
@@ -1576,7 +1587,9 @@ void renderClickGui(ClickGuiRefs refs, ClickGuiFrame& frame, const ClickGuiHost&
                     changed|=widgets::SliderInt("Field of view",
                         &m_features.aimFovDegrees,1,360,"%d deg",
                         ImGuiSliderFlags_AlwaysClamp);
-                    ImGui::TextDisabled("Only validated enemy-player candidates are eligible.");
+                    ImGui::TextDisabled(m_features.aimSilentLock&&m_features.aimTargetFilter==1?
+                        "Force: valid Player ESP Hitboxes are eligible; geometry and attack checks still apply.":
+                        "Normal: only validated enemy-player candidates are eligible.");
                 });
 
                 collapsible(3U,"aimResponse","RESPONSE & DIAGNOSTICS",

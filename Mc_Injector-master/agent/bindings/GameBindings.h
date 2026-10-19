@@ -1,5 +1,6 @@
 #pragma once
 #include "SmartHotbarPolicy.h"
+#include "AimTargetPolicy.h"
 
 #include <jni.h>
 #include <jvmti.h>
@@ -80,8 +81,8 @@ struct EntityMarker final {
     std::array<char, 65U> displayName{}; // UTF-8 offline/custom-server nickname.
     std::array<char, 37U> uuid{};
     // True only after this spawned entity was joined to the persistent TAB
-    // roster (UUID first, exact name as a compatibility fallback).  Renderers
-    // use this to exclude shop NPCs and other player-shaped entities.
+    // roster (UUID first, exact name as a compatibility fallback). Nametags
+    // and Normal targeting may use this; Player ESP classification does not.
     bool confirmedPlayer = false;
     bool fireball = false;
     // OpenGL texture name owned by Minecraft's TextureManager in the same
@@ -237,6 +238,7 @@ struct GameplaySettings final {
     bool longJump = false;
     bool aimLockOnMode = false;
     bool aimSilentLock = false;
+    aim::AimTargetFilter aimTargetFilter = aim::AimTargetFilter::Normal;
     bool silentFileDebug = false;
     bool silentChatDebug = false;
     bool aimAttackViability = true;

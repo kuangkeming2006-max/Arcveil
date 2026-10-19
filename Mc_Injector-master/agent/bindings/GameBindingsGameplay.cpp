@@ -540,6 +540,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     const aim::Mode mode = (requested.aimLockOnMode || requested.aimSilentLock)
         ? aim::Mode::LockOn : aim::Mode::Smooth;
     const bool wantsSilent = requested.aimAssist && requested.aimSilentLock;
+    // Stored Force affects Silent Aim only; visible Smooth/Lock On keep Normal.
+    const auto targetFilter=wantsSilent&&requested.aimTargetFilter==aim::AimTargetFilter::Force
+        ?aim::AimTargetFilter::Force:aim::AimTargetFilter::Normal;
     if (wantsSilent || requested.forceSprint || smartHotbarRequested ||
         m_logicalController.debug().enabled()) {
         if (!m_silentRotationHook.ready() &&
@@ -692,6 +695,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     std::uint32_t tabConfirmedMarkers = 0U;
     std::uint32_t colouredPlayerMarkers = 0U;
     std::uint32_t teammateMarkers = 0U;
+    std::uint32_t identityRejected=0U,invalidRejected=0U,boundsRejected=0U,forceAllowedMarkers=0U;
+    const bool candidateScanDue=m_logicalController.debug().enabled()&&
+        tickMilliseconds>=m_nextAimCandidateDebugTick;
     silent::Vec3 combatEye{};
     const bool combatEyeReady=readCombatEye(env,player,combatEye);
     const bool leftHeld=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
@@ -710,7 +716,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         float health=-1.0F;
         bool self=false,teammate=false,lookup=false,boundsReady=false;
         bool candidateAdded=false,withinFov=false,withinPreAim=false;
-        bool attackAvailable=false;
+        bool attackAvailable=false,identityEligible=false,forceAllowed=false;
+        char teamColor='u';
         double aimPointDistance=-1.0,aabbEntryDistance=-1.0,angle=-1.0;
     } targetDiag{};
     targetDiag.id=diagnosticId;
@@ -743,6 +750,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             targetDiag.markerPlayer=entity.player;
             targetDiag.confirmedPlayer=entity.confirmedPlayer;
             targetDiag.health=entity.health;
+            targetDiag.teamColor=entity.teamColor;
             targetDiag.self=entity.entityId==snapshot.entityId;
         }
         if (entity.player) ++playerMarkers;
@@ -752,27 +760,37 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         if (colouredPlayer) ++colouredPlayerMarkers;
         if (colouredPlayer && snapshot.ownTeam != 'u' &&
             entity.teamColor == snapshot.ownTeam) ++teammateMarkers;
-        // Hypixel may expose a nicked player's world-entity alias that differs
-        // from the chosen TAB nickname.  TAB/UUID confirmation remains the
-        // strongest signal, while a real player entity wearing a recognised
-        // Bed Wars team colour is the safe in-match fallback. Shop NPCs and
-        // opening robots have no recognised team colour and stay excluded.
-        const bool validPlayer = entity.confirmedPlayer ||
-            (snapshot.matchActive && colouredPlayer) ||
-            (!snapshot.hypixelServer && entity.player);
-        // Outside Hypixel Bed Wars, scoreboard/text colours are commonly ranks
-        // or chat decoration rather than team identity (especially on
-        // offline-mode servers). Applying the Bed Wars team filter globally
-        // made only same-colour players mysteriously untargetable.
+        // Normal retains its TAB/team/match truth table. Force uses the same
+        // actual player classification and valid Hitbox boundary as Player ESP.
         const bool confirmedTeammate=silent::isConfirmedCombatTeammate(
-            snapshot.hypixelServer,snapshot.matchActive,
-            snapshot.ownTeam,entity.teamColor);
-        if(diagnostic) targetDiag.teammate=confirmedTeammate;
-        const bool eligible = validPlayer && entity.entityId != snapshot.entityId &&
-            std::isfinite(entity.health) && entity.health > 0.0F &&
-            !confirmedTeammate;
-        if (!eligible || candidateCount >= candidates.size()) continue;
-        if(!combatEyeReady||!cache->getEntityById) continue;
+            snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam,entity.teamColor);
+        const bool identityEligible=aim::targetIdentityEligible(targetFilter,entity,
+            snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam);
+        const bool forceAllowed=aim::playerEspHitboxEligible(entity,snapshot.entityId);
+        const bool eligible=aim::targetCandidateEligible(targetFilter,entity,snapshot.entityId,
+            snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam);
+        if(forceAllowed) ++forceAllowedMarkers;
+        if(diagnostic) {
+            targetDiag.teammate=confirmedTeammate;
+            targetDiag.identityEligible=identityEligible;
+            targetDiag.forceAllowed=forceAllowed;
+        }
+        const auto scanRecord=[&](const char* reject,bool added=false,bool fov=false,
+            bool range=false,bool attack=false) noexcept {
+            if(!candidateScanDue) return;
+            char detail[640]{};
+            std::snprintf(detail,sizeof(detail),
+                "scope=entity id=%d targetFilter=%s markerPlayer=%d confirmedPlayer=%d matchActive=%d teamColor=%c teammate=%d espHitboxEligible=%d forceAllowed=%d identityEligible=%d candidateAdded=%d withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s",
+                entity.entityId,aim::targetFilterName(targetFilter),entity.player,
+                entity.confirmedPlayer,snapshot.matchActive,entity.teamColor?entity.teamColor:'u',
+                confirmedTeammate,forceAllowed,forceAllowed,identityEligible,added,fov,range,attack,reject);
+            m_logicalController.debug().event("CANDIDATE_SCAN",previousCombat,detail);
+        };
+        if(!identityEligible) {++identityRejected;scanRecord(confirmedTeammate?"identity_teammate":"identity_not_confirmed");continue;}
+        if(!eligible) {++invalidRejected;scanRecord("invalid_entity_or_hitbox");continue;}
+        if(candidateCount>=candidates.size()) {scanRecord("candidate_capacity");continue;}
+        if(!combatEyeReady||!cache->getEntityById) {scanRecord("combat_lookup_unavailable");continue;}
+
         jobject liveTarget=env->CallObjectMethod(world,cache->getEntityById,
                                                 entity.entityId);
         if(diagnostic) {
@@ -781,12 +799,23 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 env->IsInstanceOf(liveTarget,cache->playerClass)==JNI_TRUE;
         }
         silent::Bounds bounds{};
-        const bool boundsReady=liveTarget&&env->ExceptionCheck()==JNI_FALSE&&
+        bool liveValid=true;
+        if(targetFilter==aim::AimTargetFilter::Force&&liveTarget&&env->ExceptionCheck()==JNI_FALSE) {
+            // An entity ID can be recycled since sampling. Never invoke a
+            // living method on a replacement of a different Java class.
+            liveValid=cache->livingClass&&cache->getHealth&&
+                env->IsInstanceOf(liveTarget,cache->livingClass)==JNI_TRUE&&
+                env->ExceptionCheck()==JNI_FALSE;
+            const float health=liveValid?env->CallFloatMethod(liveTarget,cache->getHealth):0.F;
+            liveValid=liveValid&&env->ExceptionCheck()==JNI_FALSE&&std::isfinite(health)&&health>0.F&&
+                env->IsSameObject(liveTarget,player)!=JNI_TRUE;
+        }
+        const bool boundsReady=liveValid&&liveTarget&&env->ExceptionCheck()==JNI_FALSE&&
             readCombatBounds(env,liveTarget,bounds);
         if(diagnostic) targetDiag.boundsReady=boundsReady;
         if(liveTarget) env->DeleteLocalRef(liveTarget);
         if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
-        if(!boundsReady) continue;
+        if(!boundsReady) {++boundsRejected;scanRecord(liveValid?"bounds_unavailable":"live_entity_invalid");continue;}
         const auto reference=previousCombat.candidateTargetId==entity.entityId
             ? previousCombat.logical : aim::Angles{yaw,pitch};
         const auto aimPoint=silent::chooseCombatAimPoint(combatEye,bounds,
@@ -796,30 +825,35 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 ray.rayOrigin=combatEye;ray.rayDirection=direction;ray.rayLimit=limit;
                 return traceLogicalBlock(env,world,ray);
             });
-        if(diagnostic) {
-            const double dx=aimPoint.point.x-combatEye.x;
-            const double dy=aimPoint.point.y-combatEye.y;
-            const double dz=aimPoint.point.z-combatEye.z;
-            const double horizontal=std::hypot(dx,dz);
-            targetDiag.aimPointDistance=std::hypot(horizontal,dy);
-            if(targetDiag.aimPointDistance>1.0e-6&&
-               std::isfinite(targetDiag.aimPointDistance)) {
-                const silent::Vec3 direction{dx/targetDiag.aimPointDistance,
-                    dy/targetDiag.aimPointDistance,dz/targetDiag.aimPointDistance};
-                targetDiag.aabbEntryDistance=silent::RayTraceCoordinator::intersect(
-                    combatEye,direction,bounds,std::max(preAimRange,attackReach));
+        if(diagnostic||candidateScanDue) {
+            const double dx=aimPoint.point.x-combatEye.x,dy=aimPoint.point.y-combatEye.y,
+                dz=aimPoint.point.z-combatEye.z;
+            const double distance=std::hypot(std::hypot(dx,dz),dy);
+            double entry=-1.0,angle=-1.0;
+            bool withinFov=false,withinRange=false;
+            if(distance>1.0e-6&&std::isfinite(distance)) {
+                const silent::Vec3 direction{dx/distance,dy/distance,dz/distance};
+                entry=silent::RayTraceCoordinator::intersect(combatEye,direction,bounds,
+                    std::max(preAimRange,attackReach));
                 constexpr double degrees=180.0/3.14159265358979323846;
                 const aim::Angles desired{std::atan2(dz,dx)*degrees-90.0,
-                    -std::atan2(dy,horizontal)*degrees};
-                targetDiag.angle=std::hypot(aim::wrap(desired.yaw-yaw),desired.pitch-pitch);
-                targetDiag.withinFov=targetDiag.angle<=
-                    std::clamp(requested.aimFovDegrees,1,360)*0.5+1.0e-5;
-                const silent::TargetCandidate distanceCandidate{entity.entityId,0,aimPoint.point,bounds};
-                targetDiag.withinPreAim=silent::targetSelectionDistance(
-                    distanceCandidate,combatEye,requested.aimAttackViability)<=preAimRange+1.0e-5;
+                    -std::atan2(dy,std::hypot(dx,dz))*degrees};
+                angle=std::hypot(aim::wrap(desired.yaw-yaw),desired.pitch-pitch);
+                withinFov=angle<=std::clamp(requested.aimFovDegrees,1,360)*.5+1.0e-5;
+                const silent::TargetCandidate d{entity.entityId,0,aimPoint.point,bounds};
+                const double selectionDistance=silent::targetSelectionDistance(d,combatEye,requested.aimAttackViability);
+                withinRange=selectionDistance>=std::clamp(requested.aimMinimumDistance,0,64)-1.0e-5&&
+                    selectionDistance<=preAimRange+1.0e-5;
             }
-            targetDiag.attackAvailable=!requested.aimAttackViability||aimPoint.available;
-            targetDiag.candidateAdded=true;
+            const bool available=!requested.aimAttackViability||aimPoint.available;
+            const char* reason=!withinRange?"outside_selection_range":!withinFov?"outside_fov":
+                !available?(entry<0.0||entry>attackReach+1.0e-5?"outside_attack_reach":"occluded"):"none";
+            scanRecord(reason,true,withinFov,withinRange,available);
+            if(diagnostic) {
+                targetDiag.aimPointDistance=distance;targetDiag.aabbEntryDistance=entry;
+                targetDiag.angle=angle;targetDiag.withinFov=withinFov;targetDiag.withinPreAim=withinRange;
+                targetDiag.attackAvailable=available;targetDiag.candidateAdded=true;
+            }
         }
         candidates[candidateCount++] = {
             entity.entityId,identityHash(entity),aimPoint.point,bounds,true,
@@ -877,6 +911,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         silentCapabilities.attackSchedulerReady());
     logicalInput.silent = wantsSilent;
     logicalInput.mode = mode;
+    logicalInput.targetFilter = targetFilter;
     logicalInput.nearestPriority = requested.aimNearestPriority;
     logicalInput.enforceAttackAvailability = requested.aimAttackViability;
     // Movement ownership is an explicit user policy. It is deliberately
@@ -937,11 +972,13 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             else if(targetDiag.self) reject="self";
             else if(!std::isfinite(targetDiag.health)||targetDiag.health<=0.0F)
                 reject="dead";
-            else if(targetDiag.teammate) reject="teammate";
+            else if(!targetDiag.identityEligible) reject=targetDiag.teammate?"identity_teammate":"identity_not_confirmed";
+            else if(targetFilter==aim::AimTargetFilter::Force&&!targetDiag.forceAllowed)
+                reject="invalid_entity_or_hitbox";
             else if(!targetDiag.lookup) reject="entity_lookup_failed";
             else if(!targetDiag.boundsReady) reject="bounds_unavailable";
             else if(!targetDiag.markerFound) reject="selector_not_chosen";
-            else if(!targetDiag.withinPreAim) reject="outside_preaim_range";
+            else if(!targetDiag.withinPreAim) reject="outside_selection_range";
             else if(!targetDiag.withinFov) reject="outside_fov";
             else if(requested.aimAttackViability&&!targetDiag.attackAvailable)
                 reject=targetDiag.aabbEntryDistance<0.0||
@@ -951,7 +988,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 reject="selector_not_chosen";
             char detail[1024]{};
             std::snprintf(detail,sizeof(detail),
-                "id=%d markerFound=%d markerPlayer=%d livePlayer=%d confirmedPlayer=%d health=%.2f self=%d teammate=%d getEntityById=%d boundsReady=%d candidateAdded=%d aimPointDistance=%.3f aabbEntryDistance=%.3f angle=%.2f withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s players=%u candidateCount=%zu cameraEntity=%d selectedCandidate=%d",
+                "targetFilter=%s matchActive=%d teamColor=%c identityEligible=%d forceAllowed=%d id=%d markerFound=%d markerPlayer=%d livePlayer=%d confirmedPlayer=%d health=%.2f self=%d teammate=%d getEntityById=%d boundsReady=%d candidateAdded=%d aimPointDistance=%.3f aabbEntryDistance=%.3f angle=%.2f withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s players=%u candidateCount=%zu cameraEntity=%d selectedCandidate=%d",
+                aim::targetFilterName(targetFilter),snapshot.matchActive,
+                targetDiag.teamColor?targetDiag.teamColor:'u',targetDiag.identityEligible,targetDiag.forceAllowed,
                 diagnosticId,targetDiag.markerFound?1:0,targetDiag.markerPlayer?1:0,
                 targetDiag.livePlayer?1:0,targetDiag.confirmedPlayer?1:0,targetDiag.health,
                 targetDiag.self?1:0,targetDiag.teammate?1:0,
@@ -969,9 +1008,10 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
     if (m_logicalController.debug().enabled() &&
         tickMilliseconds >= m_nextAimCandidateDebugTick) {
         m_nextAimCandidateDebugTick = tickMilliseconds + 5000U;
-        char detail[320]{};
+        char detail[640]{};
         std::snprintf(detail, sizeof(detail),
-            "markers=%u players=%u tabConfirmed=%u coloured=%u teammates=%u eligible=%zu match=%d own=%c packetReady=%d movementReady=%d interactionReady=%d requestedMode=%s effectiveMode=%s",
+            "scope=summary targetFilter=%s identityRejected=%u invalidRejected=%u boundsRejected=%u forceAllowed=%u markers=%u players=%u tabConfirmed=%u coloured=%u teammates=%u eligible=%zu matchActive=%d own=%c packetReady=%d movementReady=%d interactionReady=%d requestedMode=%s effectiveMode=%s",
+            aim::targetFilterName(targetFilter),identityRejected,invalidRejected,boundsRejected,forceAllowedMarkers,
             snapshot.entityMarkerCount, playerMarkers, tabConfirmedMarkers,
             colouredPlayerMarkers, teammateMarkers, candidateCount,
             snapshot.matchActive ? 1 : 0,
