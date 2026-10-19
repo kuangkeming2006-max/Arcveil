@@ -13,10 +13,13 @@ enum class AimTargetFilter { Normal=0, Force=1 };
     bool hypixel,bool match,char ownTeam,char entityTeam) noexcept {
     return hypixel&&match&&ownTeam!='u'&&entityTeam==ownTeam;
 }
-// Classification is authored by the snapshot's actual player class / exact
-// world-player object membership, never inferred from names, colours or TAB.
+// Silent Aim only: the old Renderer player path supplies the identity boundary
+// (player, not fireball). Self/alive/position/bounds checks below are attack
+// safety checks, not Player ESP visibility rules. Never use this to gate ESP.
+// The snapshot authors player from class / exact world-player membership,
+// never from names, colours or TAB.
 template<class Marker>
-[[nodiscard]] inline bool playerEspHitboxEligible(const Marker& marker,int selfId) noexcept {
+[[nodiscard]] inline bool forceTargetCandidateEligible(const Marker& marker,int selfId) noexcept {
     const auto& b=marker.bounds;
     return marker.player&&!marker.fireball&&marker.entityId>=0&&marker.entityId!=selfId&&
         std::isfinite(marker.health)&&marker.health>0.F&&
@@ -29,6 +32,8 @@ template<class Marker>
 template<class Marker>
 [[nodiscard]] inline bool targetIdentityEligible(AimTargetFilter filter,const Marker& marker,
     bool hypixel,bool match,char ownTeam) noexcept {
+    // One-way expansion from the pre-Force Renderer player classification.
+    // Renderer keeps its own original display settings and drawing behavior.
     if(filter==AimTargetFilter::Force) return marker.player&&!marker.fireball;
     const bool coloured=marker.player&&marker.teamColor!='u'&&marker.teamColor!='\0';
     // Keep Normal's exact prior truth table, including its confirmed TAB path.
@@ -38,7 +43,7 @@ template<class Marker>
 template<class Marker>
 [[nodiscard]] inline bool targetCandidateEligible(AimTargetFilter filter,const Marker& marker,
     int selfId,bool hypixel,bool match,char ownTeam) noexcept {
-    if(filter==AimTargetFilter::Force) return playerEspHitboxEligible(marker,selfId);
+    if(filter==AimTargetFilter::Force) return forceTargetCandidateEligible(marker,selfId);
     return targetIdentityEligible(filter,marker,hypixel,match,ownTeam)&&marker.entityId!=selfId&&
         std::isfinite(marker.health)&&marker.health>0.F;
 }

@@ -38,6 +38,15 @@ bool forceEligible(const Marker& marker) {
         AimTargetFilter::Force,marker,1,true,false,'c');
 }
 
+// Independent identity oracle copied from the pre-Force Renderer branch order
+// (863b92b): fireballs leave the entity loop first; player Hitboxes use player.
+// This is classification only, not a substitute for actual Renderer draw tests.
+// In particular, the old Renderer did not add aim's self/alive/bounds gate here.
+bool legacyRendererUsesPlayerHitboxPath(const Marker& marker) {
+    if(marker.fireball) return false;
+    return marker.player;
+}
+
 TargetCandidate forcedCandidate(const Marker& marker) {
     return {marker.entityId,static_cast<std::uint64_t>(marker.entityId),
         {marker.currentX,1.62,marker.currentZ},marker.bounds,
@@ -86,19 +95,35 @@ void normalCompatibility() {
     check(targetCandidateEligible(AimTargetFilter::Normal,marker,1,true,false,'u'),
         "Normal leaves live combat-bounds validation in its existing stage");
     check(!forceEligible(marker),"Force requires an effective collision box");
+
+    // Normal's pre-Force candidate expression had only the self/health checks
+    // at this stage. Malformed marker positions/bounds still reach its existing
+    // live-bounds validation; the Force-only safety gate cannot change Normal.
+    for(int id:{-1,1,42}) for(float health:{-1.F,0.F,20.F,
+        std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        marker=Marker{};marker.confirmedPlayer=true;
+        marker.entityId=id;marker.health=health;
+        marker.currentX=std::numeric_limits<double>::quiet_NaN();
+        marker.bounds.maxY=marker.bounds.minY;
+        const bool expected=id!=1&&std::isfinite(health)&&health>0.F;
+        check(targetCandidateEligible(AimTargetFilter::Normal,marker,1,true,false,'c')==expected,
+            "Normal preserves its historical self/health gate without adding Force geometry checks");
+    }
 }
 
 void forceIdentityAndHitboxes() {
     using namespace mcoverlay::aim;
     for(bool hypixel:{false,true}) for(bool match:{false,true})
+    for(bool player:{false,true}) for(bool fireball:{false,true})
     for(bool confirmed:{false,true}) for(char team:{'u','\0','c','9'})
     for(char own:{'u','\0','c','9'}) {
-        Marker marker{};marker.confirmedPlayer=confirmed;marker.teamColor=team;
-        check(playerEspHitboxEligible(marker,1),"fixture has a displayable player Hitbox");
-        check(targetIdentityEligible(AimTargetFilter::Force,marker,hypixel,match,own),
-            "Force ignores TAB confirmation, match recognition and team metadata");
-        check(targetCandidateEligible(AimTargetFilter::Force,marker,1,hypixel,match,own),
-            "every valid Player ESP Hitbox has Force candidate qualification");
+        Marker marker{};marker.player=player;marker.fireball=fireball;
+        marker.confirmedPlayer=confirmed;marker.teamColor=team;
+        const bool expected=legacyRendererUsesPlayerHitboxPath(marker);
+        check(targetIdentityEligible(AimTargetFilter::Force,marker,hypixel,match,own)==expected,
+            "Force identity follows the independent old Renderer player branch despite TAB/match/team metadata");
+        check(targetCandidateEligible(AimTargetFilter::Force,marker,1,hypixel,match,own)==expected,
+            "every valid fixture in the old Renderer player branch has Force candidate qualification");
     }
 
     Marker nickname{};
@@ -119,15 +144,19 @@ void forceIdentityAndHitboxes() {
 
     Marker mob{};mob.player=false;mob.confirmedPlayer=true;mob.teamColor='c';
     mob.playerName={'P','l','a','y','e','r'};
-    check(!playerEspHitboxEligible(mob,1)&&!forceEligible(mob),
+    check(!legacyRendererUsesPlayerHitboxPath(mob)&&!forceEligible(mob),
         "a living mob cannot gain player eligibility from a name, colour or roster metadata");
     Marker projectile{};projectile.fireball=true;
     check(!forceEligible(projectile),"projectile Hitboxes never qualify as Player ESP Hitboxes");
 
     Marker invalid{};
-    invalid.entityId=1;check(!forceEligible(invalid),"Force excludes the local entity");
+    invalid.entityId=1;
+    check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
+        "aim's self exclusion does not redefine the legacy Renderer player branch");
     invalid.entityId=-1;check(!forceEligible(invalid),"Force excludes an invalid entity ID");
-    invalid=Marker{};invalid.health=0;check(!forceEligible(invalid),"Force excludes dead entities");
+    invalid=Marker{};invalid.health=0;
+    check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
+        "Force excludes dead entities without claiming old ESP also excluded them");
     invalid.health=-1;check(!forceEligible(invalid),"Force excludes invalid negative health");
     invalid.health=std::numeric_limits<float>::quiet_NaN();
     check(!forceEligible(invalid),"Force excludes unreadable health");
@@ -150,7 +179,8 @@ void forceIdentityAndHitboxes() {
     for(unsigned axis=0;axis<3;++axis) for(bool inverted:{false,true}) {
         invalid=Marker{};
         invalid.bounds.*coordinates[axis+3]=invalid.bounds.*coordinates[axis]-(inverted?1:0);
-        check(!forceEligible(invalid),"Force excludes collapsed and inverted collision boxes on every axis");
+        check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
+            "Force rejects invalid aim bounds without changing the old Renderer player classification");
     }
 }
 

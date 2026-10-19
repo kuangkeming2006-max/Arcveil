@@ -760,13 +760,14 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         if (colouredPlayer) ++colouredPlayerMarkers;
         if (colouredPlayer && snapshot.ownTeam != 'u' &&
             entity.teamColor == snapshot.ownTeam) ++teammateMarkers;
-        // Normal retains its TAB/team/match truth table. Force uses the same
-        // actual player classification and valid Hitbox boundary as Player ESP.
+        // Normal retains its TAB/team/match truth table. Force expands identity
+        // to the pre-Force Renderer player path, then applies aim-only safety
+        // checks. These checks never define Player ESP visibility.
         const bool confirmedTeammate=silent::isConfirmedCombatTeammate(
             snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam,entity.teamColor);
         const bool identityEligible=aim::targetIdentityEligible(targetFilter,entity,
             snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam);
-        const bool forceAllowed=aim::playerEspHitboxEligible(entity,snapshot.entityId);
+        const bool forceAllowed=aim::forceTargetCandidateEligible(entity,snapshot.entityId);
         const bool eligible=aim::targetCandidateEligible(targetFilter,entity,snapshot.entityId,
             snapshot.hypixelServer,snapshot.matchActive,snapshot.ownTeam);
         if(forceAllowed) ++forceAllowedMarkers;
@@ -780,13 +781,18 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             if(!candidateScanDue) return;
             char detail[640]{};
             std::snprintf(detail,sizeof(detail),
-                "scope=entity id=%d targetFilter=%s markerPlayer=%d confirmedPlayer=%d matchActive=%d teamColor=%c teammate=%d espHitboxEligible=%d forceAllowed=%d identityEligible=%d candidateAdded=%d withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s",
+                "scope=entity id=%d targetFilter=%s markerPlayer=%d confirmedPlayer=%d matchActive=%d teamColor=%c teammate=%d forceAllowed=%d identityEligible=%d candidateAdded=%d withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s",
                 entity.entityId,aim::targetFilterName(targetFilter),entity.player,
                 entity.confirmedPlayer,snapshot.matchActive,entity.teamColor?entity.teamColor:'u',
-                confirmedTeammate,forceAllowed,forceAllowed,identityEligible,added,fov,range,attack,reject);
+                confirmedTeammate,forceAllowed,identityEligible,added,fov,range,attack,reject);
             m_logicalController.debug().event("CANDIDATE_SCAN",previousCombat,detail);
         };
-        if(!identityEligible) {++identityRejected;scanRecord(confirmedTeammate?"identity_teammate":"identity_not_confirmed");continue;}
+        if(!identityEligible) {
+            ++identityRejected;
+            scanRecord(targetFilter==aim::AimTargetFilter::Force?"identity_not_player":
+                confirmedTeammate?"identity_teammate":"identity_not_confirmed");
+            continue;
+        }
         if(!eligible) {++invalidRejected;scanRecord("invalid_entity_or_hitbox");continue;}
         if(candidateCount>=candidates.size()) {scanRecord("candidate_capacity");continue;}
         if(!combatEyeReady||!cache->getEntityById) {scanRecord("combat_lookup_unavailable");continue;}
@@ -972,7 +978,9 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             else if(targetDiag.self) reject="self";
             else if(!std::isfinite(targetDiag.health)||targetDiag.health<=0.0F)
                 reject="dead";
-            else if(!targetDiag.identityEligible) reject=targetDiag.teammate?"identity_teammate":"identity_not_confirmed";
+            else if(!targetDiag.identityEligible)
+                reject=targetFilter==aim::AimTargetFilter::Force?"identity_not_player":
+                    targetDiag.teammate?"identity_teammate":"identity_not_confirmed";
             else if(targetFilter==aim::AimTargetFilter::Force&&!targetDiag.forceAllowed)
                 reject="invalid_entity_or_hitbox";
             else if(!targetDiag.lookup) reject="entity_lookup_failed";

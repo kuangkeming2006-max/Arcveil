@@ -163,16 +163,18 @@ are excluded from Blocks and refill; TNT is also distinct from general Blocks.
 Legacy inventory APIs supply the item IDs; modern inventory remains unsupported.
 No Java hook signature or mapping symbol changed.
 
-## v56.9.5 Silent Aim target identity policy
+## v56.9.6 Silent Aim target identity policy (corrected ESP boundary)
 
 Start at `AimTargetPolicy.h`, then `GameBindingsGameplay.cpp::updateGameplay`.
 `AimTargetFilter::{Normal,Force}` is a GameplaySettings value; Force is effective
 only with enabled Silent Aim. Normal retains the exact former identity/team/self/
-health truth table. Force uses `playerEspHitboxEligible(EntityMarker, selfId)`:
-actual snapshot player classification, nonself/nonnegative entity ID, alive and
-finite positions plus a finite positive-volume Hitbox. Renderer uses the same
-predicate for player Hitboxes. TAB/UUID/names/team colours/match recognition never
-authorize Force; `confirmedPlayer` remains a separate Normal/nametag observation.
+health truth table. Force uses the existing snapshot player classification to
+broaden identity qualification without TAB/UUID/names/team/match restrictions.
+Its nonself/nonnegative entity ID, live health, finite position and positive-volume
+Hitbox checks belong ONLY to aiming. Player ESP never calls this aim-eligibility
+predicate: v56.9.5 incorrectly added such a renderer guard; v56.9.6 removes it and
+restores the complete pre-Force renderWorldOverlay source from PR11 commit863b92b.
+`confirmedPlayer` remains a separate Normal/nametag observation.
 Snapshot classification still comes from player class or exact world-player object
 membership, with no new JNI mapping or cross-process entity IPC.
 
@@ -183,7 +185,7 @@ attack revalidation retain their existing implementation and settings.
 `LogicalFrameInput.targetFilter` participates in logical context invalidation, so
 switching filters clears old selection/grace/cooldown/movement and CPS packet proof
 through the existing transaction cancellation path. No second aiming algorithm.
-TARGET_DIAG reports effective targetFilter plus identity/ESP/Force qualification;
+TARGET_DIAG reports effective targetFilter plus player classification and Force qualification;
 CANDIDATE_SCAN adds bounded per-marker rows every five seconds and an aggregate
 summary, separating identity, invalid-marker/live-bounds, FOV/range and ray/reach
 failures. Existing final selected/ray/attack/commit fields and attack events remain.

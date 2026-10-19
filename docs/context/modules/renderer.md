@@ -173,3 +173,18 @@ dirty mailbox. Its explanation separates Player ESP Hitbox identity eligibility
 from unchanged FOV, distance, ray, block occlusion and attack reach checks. The
 renderer passes the value through the existing FeatureSettings contract; it does
 not derive target eligibility or perform gameplay selection.
+
+## v56.9.6 Player ESP regression correction
+
+The Player ESP rendering baseline is PR11 pre-Force commit863b92b. The v56.9.5
+`playerEspHitboxEligible` global guard was incorrect: targeting validity must not
+shrink the pre-existing renderer's entity set, including what it draws during
+transitional/dead or otherwise aim-ineligible snapshots. That guard is removed;
+`overlay_renderer_world.cpp` is byte-for-byte identical in Git to863b92b.
+Entity collection, Nametag, team-box/arrow rules and render settings are unchanged.
+Normal/Force is a one-way aim policy and is never consulted when drawing ESP.
+Only the existing EntityMarker classification and geometry data are shared.
+Regression validation compiles the historical world renderer and repaired world
+renderer against identical fixture inputs, then compares actual WGL draw results
+with Force off/on. Expected visibility is produced by the historical renderer,
+not derived from an aim policy helper. See V56_9_6_VALIDATION.md for results/limits.

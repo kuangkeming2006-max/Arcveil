@@ -253,9 +253,6 @@ void OverlayRenderer::renderWorldOverlay(RenderFrameContext& frame) noexcept
                     }
                     continue;
                 }
-                // Shared entity validity/type boundary for Player ESP and Force.
-                // Team visibility and screen projection remain presentation only.
-                if(entity.player&&!aim::playerEspHitboxEligible(entity,snapshot.entityId)) continue;
                 if (m_features.entityEspPlayersOnly && !entity.player) continue;
                 const double renderX = entity.previousX +
                     (entity.currentX - entity.previousX) * renderTick;

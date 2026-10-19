@@ -261,8 +261,10 @@ Controller continues using only the pure-value policy/codec, never JNI.
 ## v56.9.5 Silent Aim identity boundary
 
 GameBindingsSnapshot -> EntityMarker.player remains actual class / exact world-player
-object classification. Renderer and game-bindings share AimTargetPolicy's valid
-player Hitbox predicate; presentation switches, teammate visibility and projection
+object classification. Correction in v56.9.6: Renderer and game-bindings share only
+existing classification/geometry data, never a target eligibility predicate. ESP
+keeps its pre-Force863b92b rendering behavior; only Silent Force broadens aim
+identity qualification. Presentation switches, teammate visibility and projection
 are not targeting authorization. Both run in the Agent and share GameSnapshot;
 no new entity wire protocol is needed. Controller/runtime add the independent
 AIM_TARGET_FILTER 0|1 message family; GameplaySettings projects the typed policy.

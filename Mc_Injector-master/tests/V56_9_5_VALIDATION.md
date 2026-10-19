@@ -1,5 +1,10 @@
 # v56.9.5 — Silent Aim Force Target
 
+> Superseded for ESP behavior: this version incorrectly narrowed Player ESP through
+> a new aiming-validity guard. Its prior policy/UI tests did not establish parity
+> with pre-Force ESP. v56.9.6 removes that guard and adds actual historical-renderer
+> comparisons; see V56_9_6_VALIDATION.md. The original record below is historical.
+
 ## Before / after
 
 | Policy | Player identity qualification | Team exclusion | Geometry and attack |
