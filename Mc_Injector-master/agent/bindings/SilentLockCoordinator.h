@@ -173,6 +173,9 @@ struct InteractionCommand final {
     std::uint64_t logicalTick=0U;
     std::uint64_t intentId=0U;
     std::uint64_t rotationEpoch=0U;
+    // Bound with the target/rotation requirement, never inferred from a later
+    // settings sample while this attack is being published or executed.
+    aim::AimTargetFilter targetFilter=aim::AimTargetFilter::Normal;
     aim::Angles committedRotation{};
     double reach=3.0;
     double preAimReach=3.5;
@@ -1170,6 +1173,7 @@ private:
            m_attackRequiredIntentId!=pendingIntent) {
             m_attackRequiredIntentId=pendingIntent;
             m_attackRequiredTargetId=m_state.candidateTargetId;
+            m_attackRequiredTargetFilter=m_targetFilter;
             m_attackRequiredRotation=m_state.networkRotation;
             m_attackRequiredRotationEpoch=m_rotationEpoch;
             m_attackRequiredAvailable=attack>=0;
@@ -1388,7 +1392,7 @@ private:
         const std::uint64_t eventId=m_attackClock.pending();
         if(!eventId) return {};
         const bool requirementReady=m_attackRequiredIntentId==eventId&&
-            m_attackRequiredTargetId>=0;
+            m_attackRequiredTargetId>=0&&m_attackRequiredTargetFilter==m_targetFilter;
         if(requirementReady&&!m_attackRequiredAvailable) {
             if(m_lastWaitAvailabilityIntent!=eventId) {
                 m_lastWaitAvailabilityIntent=eventId;
@@ -1430,6 +1434,7 @@ private:
         if(command.kind==InteractionCommandKind::AttackEntity) {
             command.intentId=eventId;
             command.rotationEpoch=m_attackRequiredRotationEpoch;
+            command.targetFilter=m_attackRequiredTargetFilter;
             command.committedRotation=m_attackRequiredRotation;
             command.reach=m_enforceAttack?std::min(3.0,m_attackReach):m_attackReach;
             command.enforceAvailability=m_enforceAttack;
@@ -1448,10 +1453,41 @@ private:
         updateInteractionStateLocked(); return command;
     }
 public:
+    // A retained JNI command can outlive a render/settings sample. Recheck its
+    // immutable transaction immediately before execution so cancelled policy,
+    // target or rotation proof cannot be revived by switching settings back.
+    [[nodiscard]] bool validateAttackTransaction(
+        const InteractionCommand& command) const noexcept {
+        AcquireSRWLockShared(&m_lock);
+        const bool valid=command.kind==InteractionCommandKind::AttackEntity&&
+            matchesAttackRequirementLocked(command)&&m_attackDispatchInFlight&&
+            m_silent&&m_state.leftMouseDown&&m_rotation.active()&&
+            m_attackRequiredAvailable&&
+            m_state.committedAttackTargetId==command.entityId&&
+            m_state.candidateTargetId==command.entityId&&
+            m_publishedRotationEpoch>=command.rotationEpoch&&
+            m_rotation.lastReportedValid()&&
+            std::abs(aim::wrap(m_rotation.lastReported().yaw-
+                command.committedRotation.yaw))<0.0005&&
+            std::abs(m_rotation.lastReported().pitch-
+                command.committedRotation.pitch)<0.0005&&
+            std::abs(aim::wrap(m_attackRequiredRotation.yaw-
+                command.committedRotation.yaw))<0.0005&&
+            std::abs(m_attackRequiredRotation.pitch-
+                command.committedRotation.pitch)<0.0005;
+        ReleaseSRWLockShared(&m_lock);
+        return valid;
+    }
     void attackDispatched(const InteractionCommand& command,const bool succeeded,
                           const char* const failureReason=nullptr) noexcept {
         if(command.kind!=InteractionCommandKind::AttackEntity) return;
         AcquireSRWLockExclusive(&m_lock);
+        if(!m_attackDispatchInFlight||!matchesAttackRequirementLocked(command)) {
+            m_debug.event("ATTACK_STALE_COMPLETION",m_state,
+                "reason=transaction_or_target_filter_changed",true);
+            ReleaseSRWLockExclusive(&m_lock);
+            return;
+        }
         if(succeeded) ++m_state.attackDispatchCount;
         if(m_state.attackIntentId==command.intentId)
             m_state.committedAttackTargetId=-1;
@@ -1504,6 +1540,7 @@ public:
             result.entityId=m_attackRequiredTargetId;
             result.intentId=m_attackRequiredIntentId;
             result.rotationEpoch=m_attackRequiredRotationEpoch;
+            result.targetFilter=m_attackRequiredTargetFilter;
             result.committedRotation=m_attackRequiredRotation;
             result.reach=m_enforceAttack?std::min(3.0,m_attackReach):m_attackReach;
             result.preAimReach=m_preAimReach;
@@ -1518,10 +1555,7 @@ public:
     bool revisePendingAttack(const InteractionCommand& expected,
                              const aim::Angles rotation,const bool available) noexcept {
         AcquireSRWLockExclusive(&m_lock);
-        bool matches=expected.intentId!=0U&&
-            m_attackRequiredIntentId==expected.intentId&&
-            m_attackRequiredRotationEpoch==expected.rotationEpoch&&
-            m_attackRequiredTargetId==expected.entityId&&
+        bool matches=matchesAttackRequirementLocked(expected)&&
             !m_attackDispatchInFlight&&m_state.leftMouseDown&&m_rotation.active();
         if(matches) {
             const bool frozenMovement=!m_interactionPreOpen&&m_coordinateMovement&&
@@ -1575,10 +1609,8 @@ public:
     bool cancelPendingAttack(const InteractionCommand& expected,
                              const char* const reason="target_invalid") noexcept {
         AcquireSRWLockExclusive(&m_lock);
-        const bool matches=expected.intentId!=0U&&
-            m_attackRequiredIntentId==expected.intentId&&
-            m_attackRequiredRotationEpoch==expected.rotationEpoch&&
-            m_attackRequiredTargetId==expected.entityId&&!m_attackDispatchInFlight;
+        const bool matches=matchesAttackRequirementLocked(expected)&&
+            !m_attackDispatchInFlight;
         if(matches) {
             (void)m_attackClock.consume();
             char detail[160]{};
@@ -1751,6 +1783,15 @@ public:
 private:
     struct RecentAttack final { int entityId=-1; std::uint64_t readyAt=0U; };
     static constexpr std::uint64_t TargetLossGraceMilliseconds=50U;
+    [[nodiscard]] bool matchesAttackRequirementLocked(
+        const InteractionCommand& expected) const noexcept {
+        return expected.intentId!=0U&&
+            m_attackRequiredIntentId==expected.intentId&&
+            m_attackRequiredRotationEpoch==expected.rotationEpoch&&
+            m_attackRequiredTargetId==expected.entityId&&
+            m_attackRequiredTargetFilter==expected.targetFilter&&
+            m_targetFilter==expected.targetFilter;
+    }
     [[nodiscard]] bool attackTransactionActiveLocked() const noexcept {
         return m_attackRequiredIntentId!=0U&&
             (m_attackRequiredIntentId==m_attackClock.pending()||
@@ -1762,6 +1803,7 @@ private:
         if(intentId&&m_attackRequiredIntentId!=intentId) return;
         m_attackRequiredIntentId=0U;
         m_attackRequiredTargetId=-1;
+        m_attackRequiredTargetFilter=aim::AimTargetFilter::Normal;
         m_attackRequiredRotation={};
         m_attackRequiredRotationEpoch=0U;
         m_attackRequiredAvailable=false;
@@ -1959,6 +2001,7 @@ private:
     std::uint64_t m_lastWaitAvailabilityIntent=0U;
     std::uint64_t m_lastWaitPreIntent=0U;
     int m_attackRequiredTargetId=-1;
+    aim::AimTargetFilter m_attackRequiredTargetFilter=aim::AimTargetFilter::Normal;
     aim::Angles m_attackRequiredRotation{};
     MovementCommand m_movementCommand{};
     LogicalMovementState m_committedMovement{};

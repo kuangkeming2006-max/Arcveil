@@ -41,7 +41,7 @@ bool forceEligible(const Marker& marker) {
 // Independent identity oracle copied from the pre-Force Renderer branch order
 // (863b92b): fireballs leave the entity loop first; player Hitboxes use player.
 // This is classification only, not a substitute for actual Renderer draw tests.
-// In particular, the old Renderer did not add aim's self/alive/bounds gate here.
+// In particular, the old Renderer did not add aim's self/position/bounds gate here.
 bool legacyRendererUsesPlayerHitboxPath(const Marker& marker) {
     if(marker.fireball) return false;
     return marker.player;
@@ -100,7 +100,8 @@ void normalCompatibility() {
     // at this stage. Malformed marker positions/bounds still reach its existing
     // live-bounds validation; the Force-only safety gate cannot change Normal.
     for(int id:{-1,1,42}) for(float health:{-1.F,0.F,20.F,
-        std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity()}) {
         marker=Marker{};marker.confirmedPlayer=true;
         marker.entityId=id;marker.health=health;
         marker.currentX=std::numeric_limits<double>::quiet_NaN();
@@ -154,14 +155,12 @@ void forceIdentityAndHitboxes() {
     check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
         "aim's self exclusion does not redefine the legacy Renderer player branch");
     invalid.entityId=-1;check(!forceEligible(invalid),"Force excludes an invalid entity ID");
-    invalid=Marker{};invalid.health=0;
-    check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
-        "Force excludes dead entities without claiming old ESP also excluded them");
-    invalid.health=-1;check(!forceEligible(invalid),"Force excludes invalid negative health");
-    invalid.health=std::numeric_limits<float>::quiet_NaN();
-    check(!forceEligible(invalid),"Force excludes unreadable health");
-    invalid.health=std::numeric_limits<float>::infinity();
-    check(!forceEligible(invalid),"Force excludes non-finite health");
+    for(float health:{-1.F,0.F,20.F,std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()}) {
+        invalid=Marker{};invalid.health=health;
+        check(legacyRendererUsesPlayerHitboxPath(invalid)&&forceEligible(invalid),
+            "Force never uses marker health to exclude a legacy Player ESP Hitbox");
+    }
 
     constexpr double Marker::* positions[]={&Marker::currentX,&Marker::currentY,
         &Marker::currentZ,&Marker::previousX,&Marker::previousY,&Marker::previousZ};
@@ -181,6 +180,67 @@ void forceIdentityAndHitboxes() {
         invalid.bounds.*coordinates[axis+3]=invalid.bounds.*coordinates[axis]-(inverted?1:0);
         check(legacyRendererUsesPlayerHitboxPath(invalid)&&!forceEligible(invalid),
             "Force rejects invalid aim bounds without changing the old Renderer player classification");
+    }
+}
+
+void forceHealthUpdatesAndReacquisition() {
+    using namespace mcoverlay::aim;
+    // A synthetic sequence models a minigame updating health after every hit,
+    // including unknown values. Actual entity/bounds and interaction validation
+    // remain separate: this test proves health cannot poison candidate state or
+    // prevent the same entity from entering a fresh attack transaction.
+    const std::array<float,10> updates={20.F,std::numeric_limits<float>::quiet_NaN(),
+        0.F,std::numeric_limits<float>::infinity(),12.F,-1.F,
+        -std::numeric_limits<float>::infinity(),0.F,
+        std::numeric_limits<float>::quiet_NaN(),20.F};
+    Marker marker{};marker.confirmedPlayer=true;
+    TargetCandidate candidate=forcedCandidate(marker);
+    LogicalStateController controller;controller.reset({0,0});
+    auto input=forceInput(candidate);
+    std::uint64_t lastIntent=0;
+    std::uint64_t clock=1000000;
+    std::size_t updateIndex=0;
+    for(float health:updates) {
+        marker.health=health;
+        check(forceEligible(marker),"post-attack health updates cannot remove the Force candidate");
+        const bool normalExpected=std::isfinite(health)&&health>0.F;
+        check(targetCandidateEligible(AimTargetFilter::Normal,marker,1,true,false,'c')==normalExpected,
+            "the same health updates retain Normal's finite positive health requirement");
+        candidate=forcedCandidate(marker);
+        ++input.tick;++input.physicsTick;
+        input.leftMouseDown=true;
+        auto plan=controller.advance(input,clearTrace);
+        check(plan.candidateTargetId==marker.entityId&&controller.attackTargetId()==marker.entityId,
+            "the same valid Force player reacquires despite changed or unknown health");
+        controller.updateAttackClock(true,true,clock,10);
+        (void)controller.advance(input,clearTrace);
+        const auto pending=controller.pendingAttack();
+        check(pending.intentId!=0&&pending.intentId!=lastIntent&&pending.entityId==marker.entityId&&
+            pending.targetFilter==AimTargetFilter::Force,
+            "each reacquisition can arm a fresh attack for the same Force player");
+        const auto publication=controller.packetPlan(true,false);
+        controller.acknowledgePacket(publication.rotation,PacketKind::Position,
+            PacketKind::PositionLook,true,true);
+        controller.beginInteractionPre(input.physicsTick);
+        const auto attack=controller.clickAtInteractionPre(input.physicsTick);
+        check(attack.kind==InteractionCommandKind::AttackEntity&&attack.entityId==marker.entityId&&
+            attack.targetFilter==AimTargetFilter::Force&&controller.validateAttackTransaction(attack),
+            "health changes do not prevent a published Force transaction from dispatching");
+        controller.attackDispatched(attack,true);
+        check(controller.pendingAttack().intentId==0,
+            "each completed Force attack releases the old pending intent");
+        lastIntent=pending.intentId;
+
+        // Cover both continuous held attacks across a health update and an
+        // explicit release/reacquire after the previous successful attack.
+        if((updateIndex++%2)==0) {
+            input.leftMouseDown=false;++input.tick;++input.physicsTick;
+            (void)controller.advance(input,clearTrace);
+            controller.updateAttackClock(false,true,clock+1,10);
+        }
+        check(!controller.revisePendingAttack(pending,pending.committedRotation,true),
+            "a completed Force attack cannot be restored during target reacquisition");
+        clock+=200000;
     }
 }
 
@@ -304,6 +364,7 @@ int main() {
         !validTargetFilter(2),"only the two documented target filter values are valid");
     normalCompatibility();
     forceIdentityAndHitboxes();
+    forceHealthUpdatesAndReacquisition();
     unchangedGeometryAndInteraction();
     filterChangeReleasesTransactions();
     std::printf("%d checks, %d failures\n",checks,failures);

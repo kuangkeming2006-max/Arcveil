@@ -2,6 +2,7 @@
 #include "SmartHotbarPolicy.h"
 #include "TrajectoryMath.h"
 #include "SafeWalkPolicy.h"
+#include "CombatTargetValidation.h"
 
 #include "src/AgentLog.h"
 
@@ -713,10 +714,12 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
         int id=-1;
         bool markerFound=false,markerPlayer=false,confirmedPlayer=false;
         bool livePlayer=false;
+        const char* liveReject="not_checked";
         float health=-1.0F;
         bool self=false,teammate=false,lookup=false,boundsReady=false;
         bool candidateAdded=false,withinFov=false,withinPreAim=false;
         bool attackAvailable=false,identityEligible=false,forceAllowed=false;
+        bool rayQueried=false,rayQuerySucceeded=false;
         char teamColor='u';
         double aimPointDistance=-1.0,aabbEntryDistance=-1.0,angle=-1.0;
     } targetDiag{};
@@ -805,31 +808,36 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 env->IsInstanceOf(liveTarget,cache->playerClass)==JNI_TRUE;
         }
         silent::Bounds bounds{};
-        bool liveValid=true;
-        if(targetFilter==aim::AimTargetFilter::Force&&liveTarget&&env->ExceptionCheck()==JNI_FALSE) {
-            // An entity ID can be recycled since sampling. Never invoke a
-            // living method on a replacement of a different Java class.
-            liveValid=cache->livingClass&&cache->getHealth&&
-                env->IsInstanceOf(liveTarget,cache->livingClass)==JNI_TRUE&&
-                env->ExceptionCheck()==JNI_FALSE;
-            const float health=liveValid?env->CallFloatMethod(liveTarget,cache->getHealth):0.F;
-            liveValid=liveValid&&env->ExceptionCheck()==JNI_FALSE&&std::isfinite(health)&&health>0.F&&
-                env->IsSameObject(liveTarget,player)!=JNI_TRUE;
+        const bool lookupReady=liveTarget&&env->ExceptionCheck()==JNI_FALSE;
+        const char* liveReject=lookupReady?nullptr:"entity_lookup_failed";
+        if(targetFilter==aim::AimTargetFilter::Force&&lookupReady) {
+            const auto validation=aim::validateForcePlayerEntity(env,world,player,liveTarget,
+                cache->playerClass,cache->playerEntities,cache->listSize,cache->listGet);
+            if(validation!=aim::ForcePlayerValidation::Valid)
+                liveReject=aim::forcePlayerValidationReason(validation);
         }
+        const bool liveValid=liveReject==nullptr;
         const bool boundsReady=liveValid&&liveTarget&&env->ExceptionCheck()==JNI_FALSE&&
             readCombatBounds(env,liveTarget,bounds);
-        if(diagnostic) targetDiag.boundsReady=boundsReady;
+        if(diagnostic) {
+            targetDiag.boundsReady=boundsReady;
+            targetDiag.liveReject=liveReject?liveReject:"none";
+            if(targetFilter==aim::AimTargetFilter::Force) targetDiag.livePlayer=liveValid;
+        }
         if(liveTarget) env->DeleteLocalRef(liveTarget);
         if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
-        if(!boundsReady) {++boundsRejected;scanRecord(liveValid?"bounds_unavailable":"live_entity_invalid");continue;}
+        if(!boundsReady) {++boundsRejected;scanRecord(liveReject?liveReject:"bounds_unavailable");continue;}
         const auto reference=previousCombat.candidateTargetId==entity.entityId
             ? previousCombat.logical : aim::Angles{yaw,pitch};
+        bool rayQueried=false,rayQuerySucceeded=false;
         const auto aimPoint=silent::chooseCombatAimPoint(combatEye,bounds,
             reference,attackReach,requested.aimAttackViability,
             [&](const silent::Vec3 direction,const double limit) noexcept {
                 silent::LogicalFramePlan ray{};
                 ray.rayOrigin=combatEye;ray.rayDirection=direction;ray.rayLimit=limit;
-                return traceLogicalBlock(env,world,ray);
+                const auto hit=traceLogicalBlock(env,world,ray);
+                rayQueried=true;rayQuerySucceeded|=hit.querySucceeded;
+                return hit;
             });
         if(diagnostic||candidateScanDue) {
             const double dx=aimPoint.point.x-combatEye.x,dy=aimPoint.point.y-combatEye.y,
@@ -853,12 +861,14 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             }
             const bool available=!requested.aimAttackViability||aimPoint.available;
             const char* reason=!withinRange?"outside_selection_range":!withinFov?"outside_fov":
-                !available?(entry<0.0||entry>attackReach+1.0e-5?"outside_attack_reach":"occluded"):"none";
+                !available?(rayQueried&&!rayQuerySucceeded?"ray_query_unavailable":
+                    entry<0.0||entry>attackReach+1.0e-5?"outside_attack_reach":"occluded"):"none";
             scanRecord(reason,true,withinFov,withinRange,available);
             if(diagnostic) {
                 targetDiag.aimPointDistance=distance;targetDiag.aabbEntryDistance=entry;
                 targetDiag.angle=angle;targetDiag.withinFov=withinFov;targetDiag.withinPreAim=withinRange;
                 targetDiag.attackAvailable=available;targetDiag.candidateAdded=true;
+                targetDiag.rayQueried=rayQueried;targetDiag.rayQuerySucceeded=rayQuerySucceeded;
             }
         }
         candidates[candidateCount++] = {
@@ -879,7 +889,7 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 env->IsInstanceOf(entity,cache->playerClass)==JNI_TRUE;
             silent::Bounds bounds{};
             targetDiag.boundsReady=readCombatBounds(env,entity,bounds);
-            if(cache->livingClass&&cache->getHealth&&
+            if(targetFilter!=aim::AimTargetFilter::Force&&cache->livingClass&&cache->getHealth&&
                env->IsInstanceOf(entity,cache->livingClass)==JNI_TRUE) {
                 targetDiag.health=env->CallFloatMethod(entity,cache->getHealth);
                 if(env->ExceptionCheck()==JNI_TRUE) clearException(env);
@@ -976,7 +986,8 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
                 reject="marker_missing";
             else if(!targetDiag.markerPlayer) reject="not_player";
             else if(targetDiag.self) reject="self";
-            else if(!std::isfinite(targetDiag.health)||targetDiag.health<=0.0F)
+            else if(targetFilter!=aim::AimTargetFilter::Force&&
+                    (!std::isfinite(targetDiag.health)||targetDiag.health<=0.0F))
                 reject="dead";
             else if(!targetDiag.identityEligible)
                 reject=targetFilter==aim::AimTargetFilter::Force?"identity_not_player":
@@ -984,20 +995,26 @@ bool GameBindings::updateGameplay(JNIEnv* const env,
             else if(targetFilter==aim::AimTargetFilter::Force&&!targetDiag.forceAllowed)
                 reject="invalid_entity_or_hitbox";
             else if(!targetDiag.lookup) reject="entity_lookup_failed";
+            else if(std::strcmp(targetDiag.liveReject,"none")!=0&&
+                    std::strcmp(targetDiag.liveReject,"not_checked")!=0) reject=targetDiag.liveReject;
             else if(!targetDiag.boundsReady) reject="bounds_unavailable";
             else if(!targetDiag.markerFound) reject="selector_not_chosen";
             else if(!targetDiag.withinPreAim) reject="outside_selection_range";
             else if(!targetDiag.withinFov) reject="outside_fov";
             else if(requested.aimAttackViability&&!targetDiag.attackAvailable)
-                reject=targetDiag.aabbEntryDistance<0.0||
-                    targetDiag.aabbEntryDistance>attackReach+1.0e-5
+                reject=targetDiag.rayQueried&&!targetDiag.rayQuerySucceeded?"ray_query_unavailable":
+                    targetDiag.aabbEntryDistance<0.0||targetDiag.aabbEntryDistance>attackReach+1.0e-5
                     ?"outside_attack_reach":"occluded";
             else if(logicalPlan.candidateTargetId!=diagnosticId)
                 reject="selector_not_chosen";
-            char detail[1024]{};
+            const auto pendingDiagnostic=m_logicalController.pendingAttack();
+            char detail[1400]{};
             std::snprintf(detail,sizeof(detail),
-                "targetFilter=%s matchActive=%d teamColor=%c identityEligible=%d forceAllowed=%d id=%d markerFound=%d markerPlayer=%d livePlayer=%d confirmedPlayer=%d health=%.2f self=%d teammate=%d getEntityById=%d boundsReady=%d candidateAdded=%d aimPointDistance=%.3f aabbEntryDistance=%.3f angle=%.2f withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s players=%u candidateCount=%zu cameraEntity=%d selectedCandidate=%d",
-                aim::targetFilterName(targetFilter),snapshot.matchActive,
+                "stage=selection targetFilter=%s healthIgnored=%d liveReject=%s rayQueried=%d rayQuerySucceeded=%d pendingIntent=%llu pendingFilter=%s matchActive=%d teamColor=%c identityEligible=%d forceAllowed=%d id=%d markerFound=%d markerPlayer=%d livePlayer=%d confirmedPlayer=%d health=%.2f self=%d teammate=%d getEntityById=%d boundsReady=%d candidateAdded=%d aimPointDistance=%.3f aabbEntryDistance=%.3f angle=%.2f withinFov=%d withinPreAimRange=%d attackAvailable=%d reject=%s players=%u candidateCount=%zu cameraEntity=%d selectedCandidate=%d",
+                aim::targetFilterName(targetFilter),targetFilter==aim::AimTargetFilter::Force,
+                targetDiag.liveReject,targetDiag.rayQueried,targetDiag.rayQuerySucceeded,
+                static_cast<unsigned long long>(pendingDiagnostic.intentId),
+                aim::targetFilterName(pendingDiagnostic.targetFilter),snapshot.matchActive,
                 targetDiag.teamColor?targetDiag.teamColor:'u',targetDiag.identityEligible,targetDiag.forceAllowed,
                 diagnosticId,targetDiag.markerFound?1:0,targetDiag.markerPlayer?1:0,
                 targetDiag.livePlayer?1:0,targetDiag.confirmedPlayer?1:0,targetDiag.health,

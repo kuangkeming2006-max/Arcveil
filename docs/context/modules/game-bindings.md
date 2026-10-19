@@ -163,32 +163,47 @@ are excluded from Blocks and refill; TNT is also distinct from general Blocks.
 Legacy inventory APIs supply the item IDs; modern inventory remains unsupported.
 No Java hook signature or mapping symbol changed.
 
-## v56.9.6 Silent Aim target identity policy (corrected ESP boundary)
+## v56.9.7 Silent Aim target identity policy (health-independent Force)
 
 Start at `AimTargetPolicy.h`, then `GameBindingsGameplay.cpp::updateGameplay`.
 `AimTargetFilter::{Normal,Force}` is a GameplaySettings value; Force is effective
 only with enabled Silent Aim. Normal retains the exact former identity/team/self/
 health truth table. Force uses the existing snapshot player classification to
 broaden identity qualification without TAB/UUID/names/team/match restrictions.
-Its nonself/nonnegative entity ID, live health, finite position and positive-volume
-Hitbox checks belong ONLY to aiming. Player ESP never calls this aim-eligibility
+Its nonself/nonnegative entity ID, finite position and positive-volume Hitbox
+checks belong ONLY to aiming. Force never reads or gates on target health;
+unknown/NaN/infinite/zero/negative values cannot remove player eligibility. Player ESP never calls this aim-eligibility
 predicate: v56.9.5 incorrectly added such a renderer guard; v56.9.6 removes it and
 restores the complete pre-Force renderWorldOverlay source from PR11 commit863b92b.
 `confirmedPlayer` remains a separate Normal/nametag observation.
 Snapshot classification still comes from player class or exact world-player object
 membership, with no new JNI mapping or cross-process entity IPC.
 
-Force live lookup verifies living-class compatibility before calling getHealth,
-nonself/alive and the existing `readCombatBounds`. TargetSelector, combat-eye and
-physics Hitbox aim-point generation, FOV/ranges, block trace and final PRE/packet
-attack revalidation retain their existing implementation and settings.
+Force revalidates fresh current-world targets with `CombatTargetValidation.h`:
+nonself and cached player-class OR exact current world-player-list object identity,
+never TAB/name/team or health. It owns only scoped JNI local refs and bounds fallback
+list work. Normal's snapshot/publication/execution health expressions remain.
+`InteractionCommand.targetFilter` is frozen with target/intent/rotation proof and
+is propagated through pending, revise, publish, click and execution. Matching also
+checks current effective policy; switching away/back cannot revive stale commands
+or completion callbacks. Execution validates the frozen transaction before JNI,
+after geometry, and again after swing. No controller/IPC setting format changes.
+Existing combat-eye/AABB, FOV/ranges, block/ray/reach and published-target geometry
+checks remain; Force publication/execution skip only target getHealth, not validity.
 `LogicalFrameInput.targetFilter` participates in logical context invalidation, so
 switching filters clears old selection/grace/cooldown/movement and CPS packet proof
 through the existing transaction cancellation path. No second aiming algorithm.
 TARGET_DIAG reports effective targetFilter plus player classification and Force qualification;
 CANDIDATE_SCAN adds bounded per-marker rows every five seconds and an aggregate
 summary, separating identity, invalid-marker/live-bounds, FOV/range and ray/reach
-failures. Existing final selected/ray/attack/commit fields and attack events remain.
+failures. `stage=selection|publication|execute`, healthIgnored, liveReject, rayQueried/
+rayQuerySucceeded, frozen intent/filter and actual rejection reasons distinguish
+health-independent eligibility, player lookup, AABB, FOV/range, query failure versus
+occlusion and stale transactions. Existing final selected/ray/attack/commit fields
+and attack events remain. Local player health/movement features are unchanged.
 
 `McOverlayAimTargetPolicyTests` covers identity equivalence and Force, geometry and
-active-intent switches; these fixture tests are not real-client validation.
+active-intent switches. `McOverlayAttackPolicyTransactionTests` tests immutable
+policy and stale completion isolation; `McOverlayCombatTargetValidationTests` calls
+the production validator through JNI function-table doubles and checks that no
+Force health getter is invoked. These are not live-client integration tests.

@@ -14,15 +14,15 @@ enum class AimTargetFilter { Normal=0, Force=1 };
     return hypixel&&match&&ownTeam!='u'&&entityTeam==ownTeam;
 }
 // Silent Aim only: the old Renderer player path supplies the identity boundary
-// (player, not fireball). Self/alive/position/bounds checks below are attack
+// (player, not fireball). Self/position/bounds checks below are attack
 // safety checks, not Player ESP visibility rules. Never use this to gate ESP.
 // The snapshot authors player from class / exact world-player membership,
-// never from names, colours or TAB.
+// never from names, colours or TAB. Force deliberately never consumes health:
+// some minigames publish unknown or zero health for otherwise valid players.
 template<class Marker>
 [[nodiscard]] inline bool forceTargetCandidateEligible(const Marker& marker,int selfId) noexcept {
     const auto& b=marker.bounds;
     return marker.player&&!marker.fireball&&marker.entityId>=0&&marker.entityId!=selfId&&
-        std::isfinite(marker.health)&&marker.health>0.F&&
         std::isfinite(marker.currentX)&&std::isfinite(marker.currentY)&&std::isfinite(marker.currentZ)&&
         std::isfinite(marker.previousX)&&std::isfinite(marker.previousY)&&std::isfinite(marker.previousZ)&&
         std::isfinite(b.minX)&&std::isfinite(b.minY)&&std::isfinite(b.minZ)&&

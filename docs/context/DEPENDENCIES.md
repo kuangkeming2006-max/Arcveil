@@ -269,3 +269,14 @@ are not targeting authorization. Both run in the Agent and share GameSnapshot;
 no new entity wire protocol is needed. Controller/runtime add the independent
 AIM_TARGET_FILTER 0|1 message family; GameplaySettings projects the typed policy.
 LogicalFrameInput includes the effective filter in existing context cancellation.
+
+## v56.9.7 Force transaction health boundary
+
+AimTargetPolicy removes only Force's target-health requirement. Gameplay and final
+JNI stages share CombatTargetValidation's current-world player classification;
+Normal retains its old health gates. InteractionCommand carries frozen targetFilter
+with intent/target/rotation proof inside the Agent. LogicalStateController checks
+that policy when revising, executing or completing a command; this adds no wire
+fields and does not change ESP or Smart Hotbar. Health-independent target validity
+is never a rendering predicate. New JNI validator tests use function-table doubles;
+historical/current production WGL parity still guards original ESP output.

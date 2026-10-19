@@ -13,6 +13,11 @@ add_executable(McOverlayAimControlTests EXCLUDE_FROM_ALL AimControlTests.cpp)
 target_compile_features(McOverlayAimControlTests PRIVATE cxx_std_20)
 add_executable(McOverlayAimTargetPolicyTests EXCLUDE_FROM_ALL AimTargetPolicyTests.cpp)
 target_compile_features(McOverlayAimTargetPolicyTests PRIVATE cxx_std_20)
+add_executable(McOverlayAttackPolicyTransactionTests EXCLUDE_FROM_ALL AttackPolicyTransactionTests.cpp)
+target_compile_features(McOverlayAttackPolicyTransactionTests PRIVATE cxx_std_20)
+if(WIN32)
+    target_compile_definitions(McOverlayAttackPolicyTransactionTests PRIVATE _WIN32_WINNT=0x0601)
+endif()
 add_executable(McOverlayKnockbackTests EXCLUDE_FROM_ALL KnockbackEvidenceTests.cpp)
 target_compile_features(McOverlayKnockbackTests PRIVATE cxx_std_20)
 
@@ -29,6 +34,12 @@ endif()
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "McOverlayOpenGlJvmSmoke requires a Windows x64 build.")
 endif()
+
+add_executable(McOverlayCombatTargetValidationTests EXCLUDE_FROM_ALL CombatTargetValidationTests.cpp)
+target_compile_features(McOverlayCombatTargetValidationTests PRIVATE cxx_std_20)
+target_include_directories(McOverlayCombatTargetValidationTests PRIVATE
+    "${MC_AGENT_JNI_INCLUDE_DIR}" "${MC_AGENT_JNI_PLATFORM_INCLUDE_DIR}")
+set_target_properties(McOverlayCombatTargetValidationTests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 
 add_executable(McOverlayLogicalPipelineHookTests EXCLUDE_FROM_ALL
     LogicalPipelineHookTests.cpp)
@@ -154,6 +165,33 @@ if(MC_BUILD_ESP_RENDERER_PARITY_TESTS)
         message(FATAL_ERROR "Cannot obtain v56.9.5 regression control: ${_esp_regressed_error}")
     endif()
     file(SHA256 "${_esp_regressed_world}" _esp_regressed_sha256)
+    # Freeze the negative control's historical predicate as well as its world
+    # renderer. The current Force policy may evolve without changing this oracle.
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}" show
+            "86ab03a:Mc_Injector-master/agent/bindings/AimTargetPolicy.h"
+        OUTPUT_VARIABLE _esp_regressed_policy
+        ERROR_VARIABLE _esp_regressed_policy_error RESULT_VARIABLE _esp_regressed_policy_result)
+    if(NOT _esp_regressed_policy_result EQUAL 0)
+        message(FATAL_ERROR "Cannot obtain v56.9.5 predicate: ${_esp_regressed_policy_error}")
+    endif()
+    string(FIND "${_esp_regressed_policy}"
+        "template<class Marker>\n[[nodiscard]] inline bool playerEspHitboxEligible(" _esp_helper_begin)
+    if(_esp_helper_begin LESS 0)
+        message(FATAL_ERROR "Cannot locate historical Player ESP predicate")
+    endif()
+    string(SUBSTRING "${_esp_regressed_policy}" ${_esp_helper_begin} -1 _esp_helper_tail)
+    string(FIND "${_esp_helper_tail}" "\n}\n" _esp_helper_end)
+    if(_esp_helper_end LESS 0)
+        message(FATAL_ERROR "Cannot locate historical Player ESP predicate boundary")
+    endif()
+    math(EXPR _esp_helper_length "${_esp_helper_end}+2")
+    string(SUBSTRING "${_esp_helper_tail}" 0 ${_esp_helper_length} _esp_helper_body)
+    string(REPLACE "playerEspHitboxEligible" "historicalPlayerEspHitboxEligible"
+        _esp_helper_body "${_esp_helper_body}")
+    set(_esp_regressed_helper "${_esp_baseline_directory}/historical_player_esp_predicate.h")
+    file(WRITE "${_esp_regressed_helper}"
+        "#pragma once\n#include <cmath>\nnamespace mcoverlay::aim {\n${_esp_helper_body}\n}\n")
 
     # Compile all other real renderer components only once for the two binaries.
     set(_esp_shared_sources ${mc_core_renderer_sources})
@@ -172,8 +210,8 @@ if(MC_BUILD_ESP_RENDERER_PARITY_TESTS)
     add_executable(McOverlayEspRendererParityTests EXCLUDE_FROM_ALL
         EspRendererParityTests.cpp ../agent/overlay_renderer_world.cpp)
     # Negative control: this exact historical renderer MUST fail against the
-    # pre-Force output. The test-only spelling alias connects the unchanged old
-    # helper body to its corrected aim-only name; it does not alter semantics.
+    # pre-Force output. Its predicate comes from the same historical commit;
+    # only its symbol is renamed to avoid colliding with current aim policies.
     add_executable(McOverlayEspRendererRegressedTests EXCLUDE_FROM_ALL
         EspRendererParityTests.cpp "${_esp_regressed_world}")
     foreach(_esp_target McOverlayEspRendererBaselineTests McOverlayEspRendererParityTests McOverlayEspRendererRegressedTests)
@@ -191,7 +229,12 @@ if(MC_BUILD_ESP_RENDERER_PARITY_TESTS)
     target_compile_definitions(McOverlayEspRendererRegressedTests PRIVATE
         MC_ESP_PARITY_SIDE="known-regression-v56.9.5"
         MC_ESP_PARITY_WORLD_SHA256="${_esp_regressed_sha256}"
-        playerEspHitboxEligible=forceTargetCandidateEligible)
+        playerEspHitboxEligible=historicalPlayerEspHitboxEligible)
+    if(MSVC)
+        target_compile_options(McOverlayEspRendererRegressedTests PRIVATE "/FI${_esp_regressed_helper}")
+    else()
+        target_compile_options(McOverlayEspRendererRegressedTests PRIVATE -include "${_esp_regressed_helper}")
+    endif()
     add_custom_target(McOverlayEspRendererHistoricalParity
         COMMAND "$<TARGET_FILE:McOverlayEspRendererBaselineTests>"
             "${CMAKE_CURRENT_BINARY_DIR}/esp-renderer-parity/baseline"
